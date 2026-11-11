@@ -1,3 +1,4 @@
+import * as api from './api.js';
 import { hasRichContent, imageToken, mathSpans, mathToken, parseContent, speechText } from './content.js';
 import { DAY, MINUTE, Rating, State, dayStart } from './fsrs.js';
 import { parseSpreadsheet } from './importer.js';
@@ -8,6 +9,10 @@ const toasts = document.getElementById('toasts');
 
 // The card currently on screen in study mode.
 const session = { deckId: null, cardId: null, revealed: false, done: 0, spoken: null };
+// Who is signed in ({ id, username, name, role }), or null.
+let account = null;
+// Set when the server could not be reached as the app started.
+let offline = false;
 let query = '';
 
 // Filters on a deck's card list, reset whenever a different deck is opened.
@@ -62,8 +67,6 @@ const ICONS = {
   upload: '<path d="M12 16V5M7 9l5-5 5 5M5 20h14"/>',
   search: '<circle cx="11" cy="11" r="6.5"/><path d="M20 20l-4-4"/>',
   check: '<path d="M5 12.5l4.5 4.5L19 7.5"/>',
-  disk: '<path d="M5 4h11l3 3v13H5z"/><path d="M8 4v5h7V4M8 20v-6h8v6"/>',
-  browser: '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 9h18"/>',
   alert: '<path d="M12 4l9 16H3z"/><path d="M12 10v4M12 17v.5"/>',
   speaker: '<path d="M4 9.5v5h3.5L12 18V6L7.5 9.5H4z"/><path d="M15.5 9a4 4 0 0 1 0 6M18 6.5a7.5 7.5 0 0 1 0 11"/>',
   play: '<path d="M7 5l12 7-12 7V5z"/>',
@@ -78,6 +81,9 @@ const ICONS = {
   sigma: '<path d="M18 5H6l6 7-6 7h12"/>',
   more: '<path d="M6 12h.01M12 12h.01M18 12h.01"/>',
   image: '<rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="9" cy="10" r="1.5"/><path d="M21 15l-5-5-9 9"/>',
+  user: '<circle cx="12" cy="8" r="4"/><path d="M4.5 20a7.5 7.5 0 0 1 15 0"/>',
+  logout: '<path d="M14 4h4a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-4M10 16l-4-4 4-4M6 12h10"/>',
+  shield: '<path d="M12 3l7 3v5c0 4.5-3 8-7 10-4-2-7-5.5-7-10V6z"/>',
 };
 
 function icon(name) {
@@ -1074,35 +1080,6 @@ function exportBackup() {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
-function importBackup() {
-  const input = h('input', {
-    type: 'file',
-    accept: 'application/json,.json',
-    onchange: async () => {
-      const file = input.files[0];
-      if (!file) return;
-      const text = await file.text();
-      if (store.decks().length) {
-        const ok = await confirmDialog({
-          title: 'Replace all data?',
-          message: 'Importing a backup replaces every deck and card currently in Recall.',
-          confirmLabel: 'Replace',
-        });
-        if (!ok) return;
-      }
-      try {
-        store.importData(text);
-        applyTheme();
-        toast('Backup imported');
-      } catch {
-        toast('That file is not a valid Recall backup');
-      }
-      render();
-    },
-  });
-  input.click();
-}
-
 function loadSampleDeck() {
   const deck = store.createDeck({ name: 'How memory works' });
   const cards = [
@@ -1120,14 +1097,47 @@ function loadSampleDeck() {
 // ---- Views ----------------------------------------------------------------
 
 function storageChip() {
-  const { available, ok, file } = store.storageInfo();
-  if (!available) {
-    return h('span', { class: 'save-chip', title: 'Saved in this browser only. Start the app with "npm start" to save to a file on your computer.' }, icon('browser'), h('span', null, 'Browser only'));
+  if (store.storageInfo().ok) return h('span', { class: 'save-chip', title: 'Your changes are saved' }, icon('check'), h('span', null, 'Saved'));
+  return h(
+    'span',
+    { class: 'save-chip error', title: 'Cannot reach Recall. Your changes are kept on this device and are sent when the connection is back.' },
+    icon('alert'),
+    h('span', null, 'Not saved, retrying'),
+  );
+}
+
+/** Log out after sending what is left; with no connection, stay signed in and say so. */
+async function logOut() {
+  try {
+    await store.logOut();
+  } catch (error) {
+    // The session had already ended: start again at the login screen, keeping unsent changes.
+    if (error.message === 'signed-out') return location.reload();
+    toast('Could not log out without a connection. Try again when you are online.');
+    return;
   }
-  if (!ok) {
-    return h('span', { class: 'save-chip error', title: `Cannot reach the Recall server, so changes are not reaching ${file}. They are kept in this browser and will be saved once the server is running again.` }, icon('alert'), h('span', null, 'Not saved to disk'));
-  }
-  return h('span', { class: 'save-chip', title: `Saved to ${file}` }, icon('disk'), h('span', null, 'Saved on this computer'));
+  account = null;
+  history.replaceState(null, '', location.pathname + location.search);
+  render();
+}
+
+/** The signed-in user's name, opening Admin (for admins), Export backup on phones, and Log out. */
+function accountMenu() {
+  const name = account?.name ?? 'Account';
+  const el = h(
+    'details',
+    { class: 'menu account' },
+    h('summary', { title: name, 'aria-label': `Account: ${name}` }, icon('user'), h('span', { class: 'account-name' }, name)),
+    h(
+      'div',
+      { class: 'menu-items', onclick: () => el.removeAttribute('open') },
+      account?.username && h('div', { class: 'menu-who' }, h('b', null, account.name), h('span', null, account.username)),
+      account?.role === 'admin' && h('a', { href: '#/admin' }, icon('shield'), 'Admin'),
+      h('button', { class: 'phone-only', type: 'button', onclick: exportBackup }, icon('download'), 'Export backup'),
+      h('button', { type: 'button', onclick: logOut }, icon('logout'), 'Log out'),
+    ),
+  );
+  return el;
 }
 
 function topbar() {
@@ -1143,9 +1153,10 @@ function topbar() {
     h('nav', { class: 'nav', 'aria-label': 'Main' }, tab('', 'Decks', 'decks'), tab('upcoming', 'Upcoming', 'calendar'), tab('stats', 'Statistics', 'chart')),
     h('span', { class: 'spacer' }),
     storageChip(),
-    iconButton('upload', 'Import backup', importBackup),
-    iconButton('download', 'Export backup', exportBackup),
+    // On a phone, Export backup moves into the account menu so the bar fits.
+    iconButton('download', 'Export backup', exportBackup, 'wide-only'),
     iconButton(dark ? 'sun' : 'moon', dark ? 'Light theme' : 'Dark theme', toggleTheme),
+    accountMenu(),
   );
 }
 
@@ -2311,6 +2322,104 @@ function renderUpcoming(deck) {
   );
 }
 
+// ---- Signing in -----------------------------------------------------------
+
+const AUTH_ERRORS = {
+  'bad-invite': 'That invite code doesn’t work. Check it with whoever sent it.',
+  'username-taken': 'That username is taken.',
+  'weak-password': 'Use at least 8 characters.',
+  'bad-username': 'Use 3–32 letters, numbers, dots, dashes or underscores.',
+  'bad-login': 'Wrong username or password.',
+  'rate-limited': 'Too many attempts. Try again in a few minutes.',
+};
+
+/** What to say when logging in or signing up fails with `error`. */
+function authMessage(error) {
+  if (error instanceof TypeError) return 'Can’t reach Recall. Check your connection.';
+  return AUTH_ERRORS[error.message] ?? 'Something went wrong. Try again.';
+}
+
+/** A labelled, required input. `plain` fields (usernames, codes) are not capitalised or corrected. */
+function authField(label, attrs, plain = false) {
+  const input = h('input', { required: true, ...attrs, ...(plain && { autocapitalize: 'none' }) });
+  if (plain) {
+    input.setAttribute('autocorrect', 'off');
+    input.setAttribute('spellcheck', 'false');
+  }
+  return h('label', { class: 'field' }, h('span', null, label), input);
+}
+
+/** The login form, or with `mode` 'signup' the form that creates an account from an invite code. */
+function renderAuth(mode) {
+  const signup = mode === 'signup';
+  const fields = signup
+    ? [
+        authField('Invite code', { name: 'code', autocomplete: 'off' }, true),
+        authField('Your name', { name: 'name', autocomplete: 'name', maxlength: 60 }),
+        authField('Username', { name: 'username', autocomplete: 'username' }, true),
+        authField('Password', { name: 'password', type: 'password', autocomplete: 'new-password' }),
+      ]
+    : [
+        authField('Username', { name: 'username', autocomplete: 'username' }, true),
+        authField('Password', { name: 'password', type: 'password', autocomplete: 'current-password' }),
+      ];
+  const error = h('p', { class: 'auth-error', role: 'alert' });
+  const submit = h('button', { class: 'btn primary', type: 'submit' }, signup ? 'Create account' : 'Log in');
+  const form = h(
+    'form',
+    {
+      onsubmit: async (e) => {
+        e.preventDefault();
+        const values = Object.fromEntries(new FormData(form));
+        submit.disabled = true;
+        error.textContent = '';
+        try {
+          if (signup) await api.signUp(values);
+          else await api.logIn(values.username, values.password);
+          // A new account starts at home; logging in again stays where the session ended.
+          if (signup) history.replaceState(null, '', location.pathname + location.search);
+          location.reload();
+        } catch (err) {
+          error.textContent = authMessage(err);
+          submit.disabled = false;
+        }
+      },
+    },
+    fields,
+    error,
+    submit,
+  );
+  const sub = signup
+    ? 'You need an invite code from whoever runs this Recall.'
+    : store.storageInfo().signedOut
+      ? 'Your session ended. Log in again and nothing you did here is lost.'
+      : 'Pick up where you left off.';
+  app.replaceChildren(
+    h(
+      'main',
+      { class: 'auth', 'data-mode': mode },
+      h('p', { class: 'brand' }, 'Recall'),
+      h('h1', null, signup ? 'Create your account' : 'Log in'),
+      h('p', { class: 'sub' }, sub),
+      form,
+      h('p', { class: 'auth-switch' }, signup ? h('a', { href: '#/' }, 'Have an account? Log in') : h('a', { href: '#/signup' }, 'Have an invite code? Sign up')),
+    ),
+  );
+}
+
+/** Shown when the server cannot be reached at all as the app starts. */
+function renderOffline() {
+  app.replaceChildren(
+    h(
+      'main',
+      { class: 'auth offline' },
+      h('p', { class: 'brand' }, 'Recall'),
+      h('h1', null, 'Can’t reach Recall. Check your connection.'),
+      h('button', { class: 'btn primary', type: 'button', onclick: () => location.reload() }, 'Try again'),
+    ),
+  );
+}
+
 // ---- Routing and shortcuts ------------------------------------------------
 
 function route() {
@@ -2320,6 +2429,15 @@ function route() {
 
 function render() {
   const { view, deck } = route();
+  if (offline) return;
+  if (!account || store.storageInfo().signedOut) {
+    session.deckId = session.cardId = null;
+    stopSpeaking();
+    const mode = view === 'signup' ? 'signup' : 'login';
+    // Leave a form being filled in alone when nothing about it changed.
+    if (app.querySelector(`.auth[data-mode="${mode}"]`)) return;
+    return renderAuth(mode);
+  }
   if (view !== 'study' && session.deckId) {
     session.deckId = null;
     stopSpeaking();
@@ -2373,10 +2491,18 @@ document.addEventListener('visibilitychange', () => {
   if (!document.querySelector('dialog[open]')) store.refresh();
 });
 
-await store.load();
-store.onStorageChange((message) => {
-  render();
-  if (message) toast(message);
-});
 applyTheme();
-render();
+try {
+  const [{ signedIn }, me] = await Promise.all([store.load(), api.me().catch(() => null)]);
+  // Signed in even if the name did not come back; the menu then just says "Account".
+  if (signedIn) account = me?.user ?? {};
+  store.onStorageChange((message) => {
+    render();
+    if (message) toast(message);
+  });
+  applyTheme();
+  render();
+} catch {
+  offline = true;
+  renderOffline();
+}

@@ -2075,6 +2075,106 @@ table.upcoming {
 
 /* ---- Small screens ----------------------------------------------------- */
 
+/* ---- Signing in ---------------------------------------------------------- */
+
+.auth {
+  max-width: 380px;
+  margin: 0 auto;
+  padding: 40px 16px calc(48px + env(safe-area-inset-bottom));
+}
+.auth .brand {
+  margin: 0 0 56px;
+}
+.auth h1 {
+  font-size: 30px;
+  line-height: 1.15;
+  letter-spacing: -0.025em;
+  font-weight: 650;
+  text-wrap: balance;
+}
+.auth .sub {
+  color: var(--muted);
+  margin: 8px 0 28px;
+}
+/* 16px or more, so phones do not zoom in on a field when it is tapped. */
+.auth .field input {
+  height: 44px;
+  font-size: 16px;
+}
+.auth .btn.primary {
+  width: 100%;
+  height: 44px;
+  margin-top: 8px;
+  font-size: 15px;
+}
+.auth-error {
+  color: var(--danger);
+  font-weight: 500;
+}
+.auth-error:empty {
+  display: none;
+}
+.auth-switch {
+  margin-top: 20px;
+  text-align: center;
+}
+.auth-switch a {
+  display: inline-block;
+  padding: 10px 4px;
+  color: var(--link);
+  font-weight: 550;
+}
+.auth-switch a:hover {
+  text-decoration: underline;
+}
+.auth.offline h1 {
+  margin-bottom: 28px;
+}
+
+/* The account menu: the user's name in the top bar, opening Admin and Log out. */
+.account summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 34px;
+  max-width: 200px;
+  margin-left: 4px;
+  padding: 0 10px;
+  border-radius: var(--radius-sm);
+  color: var(--muted);
+  font-weight: 550;
+  cursor: pointer;
+}
+.account summary:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+.account-name {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.menu-items > .menu-who {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0;
+  margin-bottom: 6px;
+  padding-bottom: 9px;
+  border-bottom: 1px solid var(--border);
+  border-radius: 0;
+  cursor: default;
+}
+.menu-items > .menu-who:hover {
+  background: none;
+}
+.menu-who span {
+  color: var(--muted);
+  font-size: 13.5px;
+}
+.phone-only {
+  display: none !important;
+}
+
 @media (max-width: 760px) {
   .today {
     grid-template-columns: minmax(0, 1fr);
@@ -2291,6 +2391,31 @@ table.upcoming {
   .save-chip:not(.error) {
     display: none;
   }
+  .save-chip {
+    margin-right: 0;
+  }
+  /* The account menu stays in the top bar: just its icon, the name shown inside. */
+  .account summary {
+    width: 34px;
+    padding: 0;
+    justify-content: center;
+  }
+  .account-name,
+  .wide-only {
+    display: none;
+  }
+  .phone-only {
+    display: flex !important;
+  }
+  .auth {
+    padding-top: 24px;
+  }
+  .auth .brand {
+    margin-bottom: 40px;
+  }
+  .auth h1 {
+    font-size: 26px;
+  }
   .page-head .actions {
     flex-wrap: wrap;
     margin-left: 0;
@@ -2351,6 +2476,10 @@ table.upcoming {
   }
   .menu-items > * {
     min-height: 44px;
+  }
+  .account summary {
+    min-width: 44px;
+    height: 44px;
   }
 }
 
