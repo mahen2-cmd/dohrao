@@ -8,3 +8,5 @@ decks/
 .impeccable/mocks/
 .impeccable/review/
 .impeccable/scratch/
+# Databases from running the app locally (data/ above covers them; named for clarity)
+data/*.db*

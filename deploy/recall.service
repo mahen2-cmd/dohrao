@@ -1,0 +1,26 @@
+# Recall's systemd unit. setup.sh installs it as /etc/systemd/system/recall.service with the
+# domain filled in for RECALL_ORIGIN.
+[Unit]
+Description=Recall flashcards
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=recall
+Group=recall
+WorkingDirectory=/opt/recall
+Environment=NODE_ENV=production PORT=5173 RECALL_DATA=/var/lib/recall RECALL_ORIGIN=https://RECALL_DOMAIN
+ExecStart=/usr/bin/node /opt/recall/server.js
+Restart=always
+RestartSec=2
+
+# The app can write only its data folder; the code and the rest of the system are read-only.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/recall
+
+[Install]
+WantedBy=multi-user.target

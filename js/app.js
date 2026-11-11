@@ -314,7 +314,6 @@ async function openMathDialog({ math = '', display = false, editing = false }, o
 
 /** Keep an image on the server, returning the name a card refers to it by. */
 async function uploadImage(blob) {
-  if (!store.storageInfo().available) throw new Error('Images are kept by the Recall server. Start it with "npm start".');
   const res = await fetch('api/media', { method: 'POST', body: blob });
   if (!res.ok) throw new Error(await res.text());
   return (await res.json()).name;
@@ -870,7 +869,7 @@ function planImport(rows, { front, back, header, skipExisting, existing }) {
 async function storeSheetImages(rows, images) {
   const stored = new Map();
   for (const [path, bytes] of images) {
-    stored.set(path, store.storageInfo().available ? await uploadImage(new Blob([bytes])).catch(() => null) : null);
+    stored.set(path, await uploadImage(new Blob([bytes])).catch(() => null));
   }
   const cells = rows.map((row) =>
     row.map((cell) =>
@@ -896,8 +895,7 @@ function pickImportFile(deck, toReserve = false) {
         if (images.size) {
           const result = await storeSheetImages(rows, images);
           rows = result.rows;
-          if (!store.storageInfo().available) toast('Pictures are kept by the Recall server, so they will be left out. Start it with "npm start" to import them.');
-          else if (result.skipped) toast(`${plural(result.skipped, 'picture')} in a format Recall cannot show will be left out`);
+          if (result.skipped) toast(`${plural(result.skipped, 'picture')} in a format Recall cannot show will be left out`);
         }
         openImportDialog(deck, file.name, rows, toReserve);
       } catch (error) {
@@ -1003,10 +1001,6 @@ function openImportDialog(deck, fileName, rows, toReserve = false) {
 // ---- Import decks from Anki ---------------------------------------------------
 
 function pickAnkiFile() {
-  if (!store.storageInfo().available) {
-    toast('Importing from Anki needs the Recall server. Start it with "npm start".');
-    return;
-  }
   const input = h('input', {
     type: 'file',
     accept: '.apkg,.colpkg',

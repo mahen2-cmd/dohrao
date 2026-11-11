@@ -1,6 +1,6 @@
 # Recall
 
-A small, fast flashcard app with Anki's scheduling and a cleaner interface. It runs on your own computer, keeps your cards in a plain file you own, and reads cards aloud: English on one side, European Portuguese on the other.
+A small, fast flashcard app with Anki's scheduling and a cleaner interface, hosted on one small server for a group of friends and family. Each person has their own account, decks and progress; the admin makes decks and gives them to people. Cards are read aloud: English on one side, European Portuguese on the other.
 
 ![The home page in dark mode: "Five cards, then you're done." in a large serif with a Start review button, today's figures and a seven-day streak strip beside it, and the decks below as blocks with their new, learning and due counts](docs/decks.png)
 
@@ -8,6 +8,8 @@ A small, fast flashcard app with Anki's scheduling and a cleaner interface. It r
 
 ## Features
 
+- **Accounts.** Each person signs up with an invite code and logs in with a username and password, on a phone or a laptop. Their decks, progress, statistics and settings are their own.
+- **Given decks.** The admin gives a deck to the people who should study it. It arrives on their reserve, and they pull cards in at their own pace. When the admin edits, adds or deletes cards, everyone who has the deck sees the change, and nobody's progress is lost.
 - **Decks and cards.** Create as many decks as you like; add, edit, move, search and delete cards.
 - **Filters.** Narrow a deck's card list to new, learning, due, not-yet-due or reserve cards, by when the next review falls, when a card was added or how often it was forgotten, and sort it. Tick cards, or everything the filters show, to delete them together.
 - **Maths and images.** Build equations in a visual editor, or write them in LaTeX, and they are typeset on the card. Paste a screenshot, drop a picture or pick a file to put it on either side.
@@ -19,21 +21,54 @@ A small, fast flashcard app with Anki's scheduling and a cleaner interface. It r
 - **Upcoming cards.** How many cards come up on each day of the next week, month or three months, new, learning and due, for one deck or all of them.
 - **Statistics.** A forecast of upcoming reviews, a year-long activity calendar, how many cards are new, learning, young and mature, and how often you press each answer button.
 - **Read aloud.** A speaker button on each side of a card, a language for each side, optional auto-play, and an adjustable speaking speed. Maths and images are skipped. Audio is generated once per sentence and cached, unless a deck is set not to keep it.
-- **Your data in a file.** Everything is saved to `data/recall.json`, with a dated backup each day, and images to `data/media/`.
+- **Saved on the server.** Only what changed is sent, so a phone and a laptop used on the same day do not overwrite each other. Answers given with no signal are kept in the browser and sent when the connection is back. The server keeps a dated backup each day.
 - **Keyboard-first studying**, light and dark themes, and a layout that works on a phone.
-- **No dependencies to install.** The app is plain HTML, CSS and JavaScript; the server is one Node file. [KaTeX](https://katex.org), which typesets the maths, and [MathLive](https://mathlive.io), the equation editor, are included in `vendor/`, so maths works offline.
+- **No dependencies to install.** The app is plain HTML, CSS and JavaScript; the server is plain Node with its built-in SQLite. [KaTeX](https://katex.org), which typesets the maths, and [MathLive](https://mathlive.io), the equation editor, are included in `vendor/`, so maths works offline.
 
-## Quick start
+## Accounts, invites and the admin
 
-You need [Node.js](https://nodejs.org) 20 or newer. Importing from Anki needs 22.15 or newer.
+- **Signing up needs an invite code.** There is no public sign-up. The admin makes codes on the Admin screen and sends them; each can be used by one or more people (up to 20).
+- **The admin** is the owner's account, made when the owner's existing data is moved in (see the [runbook](deploy/RUNBOOK.md)). The account menu, under the name at the top right, has **Admin**, which lists the people, the invite codes and the admin's decks.
+- **Giving decks.** On the Admin screen, **Give to…** on a deck chooses who has it. The whole deck lands on each person's reserve, in the admin's order: the cards the admin has studied first, then the admin's reserve. Cards added to the deck later join the end of everyone's reserve.
+- **What is shared and what is not.** The cards' text and the deck's name and languages come from the admin and follow the admin's changes. Everything else is each person's own: their schedule on every card, the reserve order, new cards per day, the scheduler, retention and the voice settings. A given deck cannot be edited by the person it was given to, but they can study it and use its reserve.
+- **Taking a deck back** hides it from that person and keeps their progress, so giving it again picks up where they left off. **Deleting** a deck the admin has given removes it, and everyone's progress on it, after a warning that says how many people have it.
+- **Forgotten passwords.** There is no reset email. The admin sets a new password with **Reset password** on the Admin screen.
+- Everyone can still make their own decks and import from Excel or Anki; those stay private to them.
+
+## Hosting it
+
+Recall runs on one small server (a VPS of about €4–6 a month) behind [Caddy](https://caddyserver.com), which provides HTTPS. The [runbook](deploy/RUNBOOK.md) goes through it step by step: buying the server and a domain, setting the server up with `deploy/setup.sh`, moving the owner's data in, deploying with `deploy/deploy.sh`, inviting people, and copying and restoring backups.
+
+## Running it locally for development
+
+You need [Node.js](https://nodejs.org) 22.15 or newer.
 
 ```bash
 git clone https://github.com/mahen2-cmd/recall.git
 cd recall
-npm start
+RECALL_DATA=./data node server.js
 ```
 
-Open **http://localhost:5173**. That's all that is needed to make decks and study.
+Open **http://localhost:5173**. The first account has to be an admin, and there are two ways to make one:
+
+- **From an old `data/recall.json`**, the file the earlier single-person version kept. This moves every deck, card and statistic into `data/recall.db` under a new admin account, and checks that nothing changed on the way:
+
+  ```bash
+  node scripts/migrate-json.js --data ./data --username admin --name "Your name"
+  ```
+
+  It asks for the password, or takes it from `RECALL_ADMIN_PASSWORD`.
+- **From nothing**, by putting an empty `{"decks":[],"cards":[]}` in `data/recall.json` and running the same command.
+
+Then log in, make an invite code on the Admin screen, and sign up a second person in a private window to see the app as they do.
+
+The server reads these settings from the environment:
+
+| Variable | Default | What it is |
+|---|---|---|
+| `PORT` | `5173` | The port it listens on, on 127.0.0.1 only |
+| `RECALL_DATA` | `./data` | The data folder |
+| `RECALL_ORIGIN` | none | The public address, such as `https://recall.example.com`, when it is behind a proxy. Requests for that host are accepted, and the login cookie is marked secure for HTTPS |
 
 For the full set of voices, run this once (needs Python 3; `ffmpeg` is optional):
 
@@ -122,7 +157,7 @@ In the card editor, put an image on a side in any of these ways:
 - **Drop** an image file onto the text box.
 - Press **Add image** above the text box and choose one or more files.
 
-PNG, JPEG, GIF, WebP and SVG images up to 20 MB are accepted. Each is kept in `data/media/` and appears in the text box as `[image:...]`, which you can move about like any other text or delete to take the image off the card. The same picture added twice is only kept once. Images are kept by the server, so they need the app to be started with `npm start`.
+PNG, JPEG, GIF, WebP and SVG images up to 20 MB are accepted. Each is kept on the server in the data folder's `media/` and appears in the text box as `[image:...]`, which you can move about like any other text or delete to take the image off the card. The same picture added twice is only kept once.
 
 ### Reading aloud
 
@@ -189,7 +224,7 @@ Each Anki deck becomes a Recall deck, and each card arrives exactly where it was
 
 Some things do not come across:
 
-- Cards become plain text with their images and maths. Formatting and audio are dropped, and suspended cards are left out. Maths written for Anki's MathJax (`\(...\)` and `\[...\]`) is kept as it is, and Anki's `[$]...[/$]` and `[$$]...[/$$]` become the same. Images are copied into `data/media/` as soon as the file is read, before the import is confirmed.
+- Cards become plain text with their images and maths. Formatting and audio are dropped, and suspended cards are left out. Maths written for Anki's MathJax (`\(...\)` and `\[...\]`) is kept as it is, and Anki's `[$]...[/$]` and `[$$]...[/$$]` become the same. Images are copied into the data folder's `media/` as soon as the file is read, before the import is confirmed.
 - Recall has no setting for custom learning steps, starting ease, easy bonus and the like. If a deck changes these in Anki, the dialog says which, and Recall uses Anki's defaults for them.
 - The review history itself is not kept, only the schedule it led to.
 
@@ -204,15 +239,17 @@ The speaker reads each side of a card in the language set for it in the deck's s
 | Engine | Needs | Notes |
 |---|---|---|
 | Azure neural voices | An Azure Speech key | Official and supported |
-| Google Translate | Nothing | The default. Unofficial |
+| Google Translate | Nothing | The default, and first on the hosted server. Unofficial |
 | Microsoft Edge voices | `npm run setup-voice` | Unofficial |
 | Piper | `npm run setup-voice` | Fully offline; the fallback when nothing else is reachable. Portuguese only |
 
 The Google Translate and Edge engines use addresses those companies do not publish for this purpose, so either could stop working without notice. When one fails, the next engine takes over. If the Edge voice breaks, running `npm run setup-voice` again updates it.
 
-To have every card ready to be read aloud, reserve included, run `npm run cache-voice`. Decks set not to keep their audio are left out. It saves the audio for both sides of each card ahead of time, so studying never waits on the voice engine or needs the internet. Clips already saved are skipped, so it can be stopped at any time and run again to carry on, or to fetch the cards added since. It pauses after each new clip to go easy on the engine (`npm run cache-voice -- --delay=1500` to pause longer), and stops if the first-choice engine stops answering rather than filling in with a fallback voice.
+To have every card ready to be read aloud, reserve included, run `npm run cache-voice`. Decks set not to keep their audio are left out. It saves the audio for both sides of each card ahead of time, so studying never waits on the voice engine or needs the internet. Clips already saved are skipped, so it can be stopped at any time and run again to carry on, or to fetch the cards added since. It pauses after each new clip to go easy on the engine (`npm run cache-voice -- --delay=1500` to pause longer), and stops if the first-choice engine stops answering rather than filling in with a fallback voice. For now it reads the cards from `recall.json` in the data folder, the file from before accounts, so it covers the decks as they were at the move and not those added since.
 
-To change the engine or voice, create `data/tts.json`. Every field is optional:
+Audio is made on the server and shared by everyone, so a sentence is fetched from the engine only once, and phones keep the clips they have played.
+
+To change the engine or voice, create `tts.json` in the data folder (`/var/lib/recall/tts.json` on the server, where `setup.sh` writes `{"engine":"google"}`). Every field is optional:
 
 ```json
 {
@@ -231,23 +268,24 @@ Changes take effect on the next sentence played; no restart is needed.
 
 ## Your data
 
+Everything lives in one data folder: `RECALL_DATA`, which is `./data` when running locally and `/var/lib/recall` on the server, outside the code folder.
+
 | Path | Contents |
 |---|---|
-| `data/recall.json` | Every deck, card and its learning progress |
-| `data/backups/` | A copy from the start of each day you used the app; the last 30 are kept |
-| `data/audio/` | Cached audio, one file per sentence per voice |
-| `data/media/` | The images on cards, named by their contents |
-| `data/tts.json` | Voice settings and keys, if you created it |
+| `recall.db` | The SQLite database: accounts, sessions, invite codes, every deck and card, and each person's progress, statistics and settings |
+| `backups/` | A copy of the database from each day, `recall-YYYY-MM-DD.db`; the last 30 are kept |
+| `audio/` | Cached audio, one file per sentence per voice, shared by everyone |
+| `media/` | The images on cards, named by their contents |
+| `tts.json` | Voice settings and keys, if there is one |
 
-The `data/` folder is git-ignored, so none of it is ever committed.
+The local `data/` folder is git-ignored, so none of it is ever committed.
 
-- To keep the data somewhere else, such as a synced folder, start with `RECALL_DATA=/path/to/folder npm start`.
-- The download and upload buttons in the top bar export and import everything as one JSON file. Images are not in that file; copy `data/media/` with it.
-- Deleting a card or deck leaves its images in `data/media/`, as other cards may show the same ones.
-- The top bar shows where data is going. If the server stops while the tab is open, it warns you; changes are held in the browser and written to the file when the server is back.
-- Use one tab at a time. Two open tabs overwrite each other's changes.
+- The download button in the top bar (or **Export backup** in the account menu on a phone) saves your own decks, cards and progress as one JSON file. Images are not in it.
+- Deleting a card or deck leaves its images in `media/`, as other cards may show the same ones.
+- The top bar shows whether your changes are saved. If the connection drops, it says so; your changes are held in the browser and sent when it is back.
+- Copying backups off the server, and restoring one, is in the [runbook](deploy/RUNBOOK.md#7-backups).
 
-The server listens only on your own machine and rejects requests from other websites.
+The server listens only on 127.0.0.1, so it is reached through Caddy. It accepts requests only for its own address, refuses API calls made from other websites, and limits how often anyone can try to log in or sign up.
 
 ## How it works
 
@@ -255,16 +293,27 @@ The server listens only on your own machine and rejects requests from other webs
 index.html          the page
 css/styles.css      all styling, light and dark
 js/fsrs.js          the scheduler: Anki's SM-2 and FSRS-6 modes, with no browser code
-js/store.js         decks, cards, the study queue and saving
+js/store.js         decks, cards, the study queue, and syncing changes with the server
+js/api.js           the calls to the server: log in, sign up, sync and the admin screen
 js/content.js       finds the maths and images in a card's text, and the words to read aloud
+js/mathspeech.js    turns maths into words to read aloud
+js/counts.js        merges the day's answer counts from two devices
 js/importer.js      reads .xlsx and CSV files into rows, with their pictures
 js/app.js           the interface
-server.js           serves the app, reads and writes data/recall.json, and keeps images
+server.js           serves the app and the API: sessions, sync, admin, images and speech
+server/db.js        the SQLite schema
+server/auth.js      accounts, password hashing, sessions and invite codes
+server/sync.js      each person's view of the data, and applying their changes to it
+server/fields.js    which deck and card fields are shared and which are each person's own
+server/admin.js     listing people, and giving decks and taking them back
+server/backup.js    the daily copy of the database
 anki.js             reads an Anki package into decks and cards, with their images
 vendor/katex/       KaTeX 0.18.11, which typesets maths (MIT licence)
 vendor/mathlive/    MathLive 0.111.1, the equation editor, which uses KaTeX's fonts (MIT licence)
 tts.js              the voice engines and the audio cache
-tests/              unit tests for the scheduler, the store and the importers
+scripts/            the voice setup, the audio pre-cacher, and the one-off move from recall.json
+deploy/             the server setup, deploy script, systemd unit, Caddyfile and runbook
+tests/              tests for the scheduler, the store, the importers and the server
 ```
 
 The scheduler follows two sources: the memory model from [fsrs-rs](https://github.com/open-spaced-repetition/fsrs-rs), which Anki uses, and the learning, review and fuzz rules from [Anki's scheduler](https://github.com/ankitects/anki/tree/main/rslib/src/scheduler/states).
