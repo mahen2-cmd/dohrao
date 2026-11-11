@@ -233,6 +233,28 @@ test('reserve cards stay out of study until they are pulled', () => {
   assert.equal(store.counts(deck.id, T0).reserve, 1);
 });
 
+test('chosen cards can be pulled from the reserve, in reserve order', () => {
+  const deck = setup();
+  store.addCards(deck.id, [['a', '-'], ['b', '-'], ['c', '-'], ['d', '-']], T0, { reserved: true });
+  const studying = store.addCard(deck.id, 'studying', '-', T0 + 10);
+  const id = Object.fromEntries(store.cardsIn(deck.id).map((c) => [c.front, c.id]));
+
+  // Only reserve cards count; the rest are skipped. Pulled in reserve order, not the order given.
+  assert.equal(store.pullCards([id.d, id.b, studying.id, 'no-such-card'], T0 + 100), 2);
+  assert.deepEqual(store.reserveIn(deck.id).map((c) => c.front), ['a', 'c']);
+  assert.ok(store.card(id.b).pulled < store.card(id.d).pulled);
+  assert.equal(store.counts(deck.id, T0 + 100).new, 3);
+
+  // They come up after the new card already waiting.
+  const order = [];
+  for (let card; (card = store.nextCard(deck.id, T0 + 200)); ) {
+    order.push(card.front);
+    store.deleteCard(card.id);
+  }
+  assert.deepEqual(order, ['studying', 'b', 'd']);
+  assert.equal(store.pullCards([]), 0);
+});
+
 test('the reserve can be rearranged, and is pulled and studied in that order', () => {
   const deck = setup();
   store.addCards(deck.id, [['a', '-'], ['b', '-'], ['c', '-'], ['d', '-'], ['e', '-']], T0, { reserved: true });
@@ -270,6 +292,33 @@ test('the reserve can be rearranged, and is pulled and studied in that order', (
   store.updateCard(id.b, { reserved: undefined });
   store.updateCard(id.b, { reserved: true });
   assert.equal(order(), 'dcfb');
+});
+
+test('the whole reserve can be reversed, and reversed back', () => {
+  const deck = setup();
+  store.addCards(deck.id, [['a', '-'], ['b', '-'], ['c', '-'], ['d', '-']], T0, { reserved: true });
+  store.addCards(deck.id, [['studying', '-']], T0);
+  const id = Object.fromEntries(store.cardsIn(deck.id).map((c) => [c.front, c.id]));
+  const order = () => store.reserveIn(deck.id).map((c) => c.front).join('');
+
+  // A hand-arranged sequence flips as it stands, and cards not on reserve are left alone.
+  store.moveInReserve(deck.id, [id.d], { before: id.b });
+  assert.equal(order(), 'adbc');
+  assert.equal(store.reverseReserve(deck.id), 4);
+  assert.equal(order(), 'cbda');
+  assert.equal(store.card(id.studying).reserved, undefined);
+  assert.equal(store.card(id.studying).order, undefined);
+
+  // Cards added afterwards still join the end.
+  store.addCards(deck.id, [['e', '-']], T0 + 500, { reserved: true });
+  assert.equal(order(), 'cbdae');
+
+  store.reverseReserve(deck.id);
+  assert.equal(order(), 'eadbc');
+
+  // It is what gets pulled in first.
+  store.pullFromReserve(deck.id, 1, T0 + 600);
+  assert.equal(order(), 'adbc');
 });
 
 test('new, learning and due cards can go back on the reserve, starting over', () => {

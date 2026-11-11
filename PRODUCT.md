@@ -38,7 +38,7 @@ Recall uses Anki's own scheduler (SM-2 by default, FSRS-6 per deck), ported from
 
 - Decks and cards: create, edit, move, search, filter, sort, select and delete in bulk.
 - Per-deck settings: new cards per day, easy interval, scheduler (Anki default or FSRS), FSRS retention, auto-play audio, front and back language, speaking speed, keeping generated audio.
-- Reserve: import into it, pull in N or all, reorder by drag or by Up/Down/To top/To bottom, add reversed copies, send cards back.
+- Reserve: import into it, pull in N or all, reorder by drag or by Up/Down/To top/To bottom, reverse the whole order, add reversed copies, send cards back.
 - Must work fully offline: KaTeX and MathLive are vendored in `vendor/`, and any fonts or assets must be bundled locally, with nothing loaded from a CDN.
 - The current stack is plain HTML, CSS and JavaScript with no build step, served by a single Node file (`server.js`). Avoiding new dependencies was not made a hard rule.
 - Light and dark themes are both first-class.

@@ -1301,7 +1301,7 @@ function reserveBar(deck, n) {
   // Shown as buttons on a wide screen, and folded into a menu on a phone.
   const more = [
     n > 1 && ['Pull all', `Pull all ${n.toLocaleString()}`, null, () => pull(n), null],
-    n > 1 && ['Reorder', 'Reorder', 'up', reorder, 'List the reserve in the order it is pulled in, to rearrange it'],
+    n > 1 && ['Choose cards', 'Choose cards', 'check', reorder, 'List the reserve in the order it is pulled in, to tick cards to pull in or to rearrange it'],
     ['Import to reserve', 'Import to reserve', 'upload', () => pickImportFile(deck, true), 'Import cards from a CSV or Excel file straight into the reserve'],
   ].filter(Boolean);
   return h(
@@ -1416,6 +1416,8 @@ function renderDeck(deck) {
     const movable = picked.length > 0 && picked.length === selected.size;
     // Ticked cards not on reserve, which can be put back on it.
     const unreserved = matches.filter((card) => selected.has(card.id) && !card.reserved).map((card) => card.id);
+    // Ticked cards on reserve, which can be pulled in.
+    const reserved = matches.filter((card) => selected.has(card.id) && card.reserved).map((card) => card.id);
     const move = (ids, where) => {
       dragged = null;
       store.moveInReserve(deck.id, ids, where);
@@ -1452,6 +1454,14 @@ function renderDeck(deck) {
             selected.size ? `${selected.size.toLocaleString()} selected` : matches.length === cards.length ? 'Select all' : `Select all ${matches.length.toLocaleString()} shown`,
           ),
           line.length > 1 && !selected.size && h('span', { class: 'hint' }, 'Drag cards to reorder them, or tick several to move them together.'),
+          // Only with the whole reserve in view, so nothing out of sight moves.
+          line.length > 1 &&
+            !selected.size &&
+            line.length === store.reserveIn(deck.id).length &&
+            moveButton('Reverse order', 'Turn the whole reserve around, so the last card is pulled in first', () => {
+              store.reverseReserve(deck.id);
+              drawList();
+            }, 'swap'),
           movable &&
             line.length > 1 && [
               moveButton('Up', 'Move up one place', () => step(false), 'up'),
@@ -1463,6 +1473,22 @@ function renderDeck(deck) {
               moveButton('To bottom', 'Move to the end of the reserve, to be pulled in last', () => move([...selected])),
             ],
           selected.size > 0 && [
+            reserved.length > 0 &&
+              h(
+                'button',
+                {
+                  class: 'btn primary',
+                  type: 'button',
+                  title: 'Pull the ticked reserve cards in as new cards, in their reserve order',
+                  onclick: () => {
+                    const pulled = store.pullCards(reserved);
+                    toast(`${plural(pulled, 'card')} pulled in as new ${pulled === 1 ? 'card' : 'cards'}`);
+                    render();
+                  },
+                },
+                icon('box'),
+                reserved.length === selected.size ? 'Pull in' : `Pull in ${reserved.length.toLocaleString()}`,
+              ),
             unreserved.length > 0 &&
               h(
                 'button',

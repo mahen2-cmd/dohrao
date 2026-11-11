@@ -300,12 +300,35 @@ export function moveInReserve(deckId, ids, { before, after } = {}) {
   return moved.length;
 }
 
+/** Turn a deck's whole reserve around, so the last card is pulled in first. Returns how many cards it holds. */
+export function reverseReserve(deckId) {
+  const all = reserveIn(deckId).reverse();
+  all.forEach((c, i) => {
+    c.order = i;
+  });
+  save();
+  return all.length;
+}
+
 /**
  * Move up to `n` cards from the front of a deck's reserve in with its new cards, where
  * they wait behind the new cards already there, in the order they had. Returns how many moved.
  */
 export function pullFromReserve(deckId, n = Infinity, now = Date.now()) {
-  const pulled = reserveIn(deckId).slice(0, Math.max(0, n));
+  return pullIn(reserveIn(deckId).slice(0, Math.max(0, n)), now);
+}
+
+/**
+ * Move the reserve cards named in with their decks' new cards, in the order they had on the
+ * reserve, behind the new cards already there. Cards not on reserve are skipped. Returns how many moved.
+ */
+export function pullCards(ids, now = Date.now()) {
+  const named = new Set(ids);
+  const deckIds = [...new Set(ids.map(card).filter((c) => c?.reserved).map((c) => c.deckId))];
+  return pullIn(deckIds.flatMap((deckId) => reserveIn(deckId).filter((c) => named.has(c.id))), now);
+}
+
+function pullIn(pulled, now) {
   pulled.forEach((c, i) => {
     delete c.reserved;
     delete c.order;
