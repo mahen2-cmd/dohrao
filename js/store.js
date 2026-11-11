@@ -1,5 +1,7 @@
 // App state: decks, cards, saving to the server and the study queue.
 
+import * as api from './api.js';
+import { mergeCounts } from './counts.js';
 import { DAY, State, dayStart, newSchedule, nextDayAt, preview, schedule } from './fsrs.js';
 
 // Per-deck settings.
@@ -36,11 +38,14 @@ let state = emptyState();
 // The state lives on the server, which keeps each user's own. It is loaded from `api/state`,
 // and each change sends `api/sync` only the decks, cards and figures that differ from what
 // the server last took, so a phone and a laptop used on the same day do not overwrite each
-// other's work. Nothing is kept in the browser, so a shared phone holds nothing after logout.
+// other's work. Until the server has them, those changes are also kept in the browser under
+// the user's id, so answers given with no signal survive the page being closed. Nothing else is
+// kept there, and logging out clears it.
 
 const server = { available: false, ok: true, signedOut: false, voice: null };
 // What the server holds, as last loaded or saved.
 let snapshot = snapshotOf(emptyState());
+let userId = null;
 let writing = false;
 let dirty = false;
 let retry = null;
@@ -51,7 +56,7 @@ export const storageInfo = () => ({ ...server });
 
 /**
  * Call `listener` whenever saving starts failing or recovers, the session ends, or the state is
- * reloaded from the server. A reload passes the message to show.
+ * reloaded from the server. A reload after refused changes passes the message to show.
  */
 export function onStorageChange(listener) {
   notify = listener;
@@ -94,6 +99,71 @@ function changesBetween(before, after, savedAt) {
  */
 export const diffState = (snap, s) => changesBetween(snap, snapshotOf(s), s.savedAt);
 
+/** What the server has not taken yet, or null. */
+const unsent = () => changesBetween(snapshot, snapshotOf(state), state.savedAt);
+
+/** The ids of every deck and card a set of changes touches. */
+const idsOf = (changes) => [
+  ...(changes.decks ?? []).map((d) => d.id),
+  ...(changes.cards ?? []).map((c) => c.id),
+  ...(changes.deletedDecks ?? []),
+  ...(changes.deletedCards ?? []),
+];
+
+// ---- Changes not yet sent, kept in the browser
+
+const pendingKey = () => `recall.pending.${userId}`;
+
+function readPending() {
+  try {
+    const raw = userId && globalThis.localStorage?.getItem(pendingKey());
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
+
+function writePending(changes) {
+  try {
+    const storage = globalThis.localStorage;
+    if (!storage || !userId) return;
+    if (changes) storage.setItem(pendingKey(), JSON.stringify(changes));
+    else storage.removeItem(pendingKey());
+  } catch {
+    // Browser storage full or blocked; the changes still go to the server when it can be reached.
+  }
+}
+
+/** Keep what the server has not taken yet, so closing the page does not lose it. */
+const keepPending = () => writePending(unsent());
+
+/**
+ * Lay changes made here over the state, leaving out those to the ids in `skip`. Answer counts
+ * are merged, keeping the larger count, as the server does.
+ */
+function applyLocal(changes, skip = new Set()) {
+  const put = (list, items) => {
+    const at = new Map(list.map((x, i) => [x.id, i]));
+    for (const item of items ?? []) {
+      if (skip.has(item.id)) continue;
+      if (at.has(item.id)) list[at.get(item.id)] = item;
+      else list.push(item);
+    }
+  };
+  const gone = (ids) => new Set((ids ?? []).filter((id) => !skip.has(id)));
+  const deletedDecks = gone(changes.deletedDecks);
+  const deletedCards = gone(changes.deletedCards);
+  state.decks = state.decks.filter((d) => !deletedDecks.has(d.id));
+  state.cards = state.cards.filter((c) => !deletedCards.has(c.id) && !deletedDecks.has(c.deckId));
+  put(state.decks, changes.decks);
+  put(state.cards, changes.cards);
+  if (changes.daily) state.daily = mergeCounts(state.daily, changes.daily);
+  if (changes.log) state.log = mergeCounts(state.log, changes.log);
+  if (changes.settings) state.settings = changes.settings;
+}
+
+// ---- Talking to the server
+
 /** Fetch this user's state; null when signed out. Throws when the server cannot be reached. */
 async function fetchState() {
   const res = await fetch('api/state', { cache: 'no-store' });
@@ -110,15 +180,69 @@ function useState(data) {
   snapshot = snapshotOf(state);
 }
 
-/** Load the signed-in user's state from the server. Throws when the server cannot be reached. */
+/** Who is signed in, or null. */
+async function whoAmI() {
+  try {
+    return (await api.me()).user;
+  } catch (error) {
+    if (error.message === 'signed-out') return null;
+    throw error;
+  }
+}
+
+/**
+ * Load the signed-in user's state from the server, then lay over it any changes this browser
+ * made for the same user that never reached the server, and send them. Throws when the server
+ * cannot be reached.
+ */
 export async function load() {
-  const data = await fetchState();
-  if (!data) return { signedIn: false };
+  const [user, data] = await Promise.all([whoAmI(), fetchState()]);
+  if (!user || !data) return { signedIn: false };
+  userId = user.id;
   useState(data);
   server.available = true;
   server.signedOut = false;
   server.ok = true;
+  const pending = readPending();
+  if (pending) {
+    applyLocal(pending);
+    flush();
+  }
   return { signedIn: true };
+}
+
+/**
+ * Take the state from the server again, as another device may have changed it, unless changes
+ * made here are still on their way. Tells the listener when it did.
+ */
+export async function refresh() {
+  if (!server.available || server.signedOut || writing || unsent()) return false;
+  const before = snapshot;
+  let data;
+  try {
+    data = await fetchState();
+  } catch {
+    return false;
+  }
+  if (!data) {
+    signOut();
+    return false;
+  }
+  // Something was changed or saved while it loaded; that is newer than what came back.
+  if (writing || snapshot !== before || unsent()) return false;
+  useState(data);
+  notify();
+  return true;
+}
+
+/** Send what is left, log out, and forget this user's changes kept in the browser. */
+export async function logOut() {
+  await flush();
+  await api.logOut();
+  writePending(null);
+  userId = null;
+  server.available = false;
+  useState(emptyState());
 }
 
 function setOk(ok) {
@@ -132,22 +256,33 @@ function signOut() {
   notify();
 }
 
-/** Some changes were refused: start again from what the server holds. */
-async function reload() {
+/**
+ * Some changes were refused: start again from what the server holds, then lay over it the
+ * changes made since `sent` was sent, except those to the ids in `refused`. Returns whether
+ * the state was reloaded.
+ */
+async function reload(sent, refused) {
+  let data;
   try {
-    const data = await fetchState();
-    if (!data) return signOut();
-    useState(data);
+    data = await fetchState();
   } catch {
-    // The server is out of reach again; keep what is here.
+    return false;
   }
+  if (!data) {
+    signOut();
+    return false;
+  }
+  const later = changesBetween(sent, snapshotOf(state), state.savedAt);
+  useState(data);
+  if (later) applyLocal(later, refused);
   notify('Some changes could not be saved');
+  return true;
 }
 
 /**
  * Send the server what changed since it last saved. Each change is read when it is sent, and
  * only what was sent counts as saved, so edits made meanwhile go in the next request.
- * A failure is retried every 5 seconds.
+ * A failure to reach the server is retried every 5 seconds.
  */
 export async function flush() {
   if (!server.available || server.signedOut) return;
@@ -172,22 +307,32 @@ export async function flush() {
         signOut();
         break;
       }
-      if (!res.ok) throw new Error(`save failed: ${res.status}`);
-      const { rejected } = await res.json();
-      snapshot = next;
+      // Any other refusal of the whole request would only be refused again: start over.
+      const refusedAll = res.status >= 400 && res.status < 500 && res.status !== 429;
+      if (!res.ok && !refusedAll) throw new Error(`save failed: ${res.status}`);
+      const { rejected = [] } = refusedAll ? { rejected: idsOf(changes) } : await res.json();
+      if (!refusedAll) snapshot = next;
       setOk(true);
-      if (rejected?.length) await reload();
+      if (refusedAll || rejected.length) {
+        if (!(await reload(next, new Set(rejected)))) {
+          if (server.signedOut) break;
+          throw new Error('reload failed');
+        }
+        dirty = true;
+      }
     } catch {
       setOk(false);
       retry = setTimeout(flush, 5000);
       break;
     }
-  } while (dirty);
+  } while (dirty && !server.signedOut);
   writing = false;
+  keepPending();
 }
 
 function save() {
   state.savedAt = Date.now();
+  keepPending();
   flush();
 }
 

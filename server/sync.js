@@ -1,6 +1,7 @@
 // Each user's view of the store, and applying their changes under ownership rules.
 import { DECK_SHARED, CARD_CONTENT, split } from './fields.js';
 import { newSchedule } from '../js/fsrs.js';
+import { mergeCounts } from '../js/counts.js';
 
 // Keys the view adds to given decks; never stored.
 const VIEW_ONLY = ['assigned', 'from'];
@@ -120,10 +121,12 @@ function applyCard(db, userId, card) {
 function applyState(db, userId, changes) {
   const s = db.prepare('SELECT daily, log, settings, saved_at FROM user_state WHERE user_id = ?').get(userId);
   const pick = (key, column) => (changes[key] !== undefined ? JSON.stringify(changes[key]) : (s?.[column] ?? '{}'));
+  // Answer counts from two devices are merged; neither one's count for a day is lost.
+  const merge = (key) => (changes[key] !== undefined ? JSON.stringify(mergeCounts(parse(s?.[key]), changes[key])) : (s?.[key] ?? '{}'));
   db.prepare(`INSERT INTO user_state (user_id, daily, log, settings, saved_at) VALUES (?, ?, ?, ?, ?)
     ON CONFLICT (user_id) DO UPDATE SET daily = excluded.daily, log = excluded.log,
       settings = excluded.settings, saved_at = excluded.saved_at`)
-    .run(userId, pick('daily', 'daily'), pick('log', 'log'), pick('settings', 'settings'),
+    .run(userId, merge('daily'), merge('log'), pick('settings', 'settings'),
       changes.savedAt !== undefined ? changes.savedAt : (s?.saved_at ?? 0));
 }
 

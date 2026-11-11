@@ -194,3 +194,13 @@ test('daily, log and settings are per user', async () => {
   assert.deepEqual([a.daily, a.log, a.settings, a.savedAt], [{ a: 1 }, { x: [1, 2] }, { theme: 'dark' }, NOW]);
   assert.deepEqual([b.daily, b.log, b.settings, b.savedAt], [{}, {}, { theme: 'light' }, 0]);
 });
+
+test('daily and log from two devices are merged, keeping the larger count', async () => {
+  const { db, ana } = await seed();
+  applyChanges(db, ana.id, { daily: { '2026-01-01': 5, '2026-01-02': 3 }, log: { '2026-01-02': { d1: [3, 0, 0, 0] } } }, NOW);
+  // The laptop answered twice on the 2nd, and once on the 3rd, without knowing the phone's counts.
+  applyChanges(db, ana.id, { daily: { '2026-01-02': 2, '2026-01-03': 1 }, log: { '2026-01-02': { d1: [0, 2, 0, 0], d2: [1] } } }, NOW);
+  const view = buildView(db, ana.id, NOW);
+  assert.deepEqual(view.daily, { '2026-01-01': 5, '2026-01-02': 3, '2026-01-03': 1 });
+  assert.deepEqual(view.log, { '2026-01-02': { d1: [3, 2, 0, 0], d2: [1] } });
+});

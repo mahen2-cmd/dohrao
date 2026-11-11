@@ -2365,9 +2365,12 @@ window.addEventListener('hashchange', () => {
   render();
 });
 
-// Counts change as the day rolls over and learning steps come due.
+// Counts change as the day rolls over and learning steps come due. Another device may also have
+// changed the state meanwhile; when it is reloaded, the listener below renders it.
 document.addEventListener('visibilitychange', () => {
-  if (!document.hidden && !document.querySelector('dialog[open]') && route().view !== 'study') render();
+  if (document.hidden) return;
+  if (!document.querySelector('dialog[open]') && route().view !== 'study') render();
+  if (!document.querySelector('dialog[open]')) store.refresh();
 });
 
 await store.load();

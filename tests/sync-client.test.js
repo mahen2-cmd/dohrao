@@ -23,14 +23,37 @@ const view = () => ({
   savedAt: 0,
 });
 
+/** A browser storage kept in memory. */
+class MemoryStorage {
+  #items = new Map();
+  getItem(key) { return this.#items.has(key) ? this.#items.get(key) : null; }
+  setItem(key, value) { this.#items.set(key, String(value)); }
+  removeItem(key) { this.#items.delete(key); }
+  keys() { return [...this.#items.keys()]; }
+}
+
+const realFetch = globalThis.fetch;
+const realStorage = Object.getOwnPropertyDescriptor(globalThis, 'localStorage');
+let storage;
+test.beforeEach(() => {
+  storage = new MemoryStorage();
+  Object.defineProperty(globalThis, 'localStorage', { value: storage, configurable: true, writable: true });
+});
+test.after(() => {
+  globalThis.fetch = realFetch;
+  if (realStorage) Object.defineProperty(globalThis, 'localStorage', realStorage);
+  else delete globalThis.localStorage;
+});
+
 /**
- * Stand in for the server: `answer(url, options)` gives each response. Records every request,
- * with its parsed body, in `calls`.
+ * Stand in for the server: `answer(url, options)` gives each response, and `api/me` answers as
+ * user `me` (signed out when null). Records every request, with its parsed body, in `calls`.
  */
-function serve(answer) {
+function serve(answer, { me = 'u1' } = {}) {
   const calls = [];
   globalThis.fetch = async (url, options = {}) => {
     calls.push({ url, method: options.method ?? 'GET', body: options.body && JSON.parse(options.body) });
+    if (url === 'api/me') return me ? json(200, { user: { id: me, name: me } }) : json(401, { error: 'signed-out' });
     return answer(url, options);
   };
   return calls;
@@ -40,7 +63,7 @@ const syncs = (calls) => calls.filter((c) => c.url === 'api/sync');
 const settle = () => new Promise((resolve) => setTimeout(resolve, 10));
 
 test('load reports signed out on 401', async () => {
-  serve(() => json(401, { error: 'signed-out' }));
+  serve(() => json(401, { error: 'signed-out' }), { me: null });
   assert.deepEqual(await store.load(), { signedIn: false });
 });
 
@@ -136,15 +159,143 @@ test('a failed save is kept and retried', async () => {
   assert.deepEqual(last, ['c1', 'c2']);
 });
 
+test('changes not yet sent are kept in the browser under the user, until the server has them', async () => {
+  let online = false;
+  serve((url) => {
+    if (url === 'api/state') return json(200, view());
+    if (!online) throw new TypeError('network down');
+    return json(200, { rejected: [] });
+  });
+  await store.load();
+  store.answerCard('c1', Rating.Good, T0);
+  await settle();
+  assert.deepEqual(storage.keys(), ['recall.pending.u1']);
+  const kept = JSON.parse(storage.getItem('recall.pending.u1'));
+  assert.deepEqual(kept.cards.map((c) => c.id), ['c1']);
+  assert.ok(kept.daily);
+
+  online = true;
+  await store.flush();
+  assert.deepEqual(storage.keys(), []);
+});
+
+test("load lays the user's unsent changes over the server's state and sends them", async () => {
+  const unsent = { cards: [{ ...view().cards[0], front: 'offline edit' }], daily: { '2026-01-01': 2 }, savedAt: T0 };
+  storage.setItem('recall.pending.u1', JSON.stringify(unsent));
+  storage.setItem('recall.pending.u2', JSON.stringify({ cards: [{ ...view().cards[1], front: 'not yours' }] }));
+  const calls = serve((url) => {
+    if (url === 'api/state') return json(200, { ...view(), daily: { '2026-01-01': 5, '2025-12-31': 1 } });
+    return json(200, { rejected: [] });
+  });
+  await store.load();
+  assert.equal(store.card('c1').front, 'offline edit');
+  assert.equal(store.card('c2').front, 'dois');
+  // Counts from the server and from here are merged, keeping the larger.
+  assert.equal(store.stats(new Date(2026, 0, 1, 12).getTime()).reviewedToday, 5);
+  await settle();
+  const [sent] = syncs(calls);
+  assert.deepEqual(sent.body.cards.map((c) => `${c.id}:${c.front}`), ['c1:offline edit']);
+  assert.equal(storage.getItem('recall.pending.u1'), null);
+  assert.ok(storage.getItem('recall.pending.u2'));
+});
+
+test('logging out sends what is left and forgets it', async () => {
+  const calls = serve((url) => (url === 'api/state' ? json(200, view()) : url === 'api/logout' ? new Response(null, { status: 204 }) : json(200, { rejected: [] })));
+  await store.load();
+  storage.setItem('recall.pending.u1', '{"cards":[]}');
+  await store.logOut();
+  assert.ok(calls.some((c) => c.url === 'api/logout' && c.method === 'POST'));
+  assert.deepEqual(storage.keys(), []);
+  assert.equal(store.decks().length, 0);
+  assert.equal(store.storageInfo().available, false);
+});
+
+test('refresh takes newer state from the server only when nothing is waiting to be sent', async () => {
+  let notified = 0;
+  store.onStorageChange(() => notified++);
+  let latest = view();
+  let online = true;
+  serve((url) => {
+    if (url === 'api/state') return json(200, latest);
+    if (!online) throw new TypeError('network down');
+    return json(200, { rejected: [] });
+  });
+  await store.load();
+
+  latest = { ...view(), cards: [{ ...view().cards[0], reps: 3, state: 2, due: T0 + 86400000 }, view().cards[1]] };
+  assert.equal(await store.refresh(), true);
+  assert.equal(store.card('c1').reps, 3);
+  assert.equal(notified, 1);
+
+  online = false;
+  store.updateCard('c2', { front: 'unsent' });
+  await settle();
+  latest = view();
+  assert.equal(await store.refresh(), false);
+  assert.equal(store.card('c2').front, 'unsent');
+  assert.equal(store.card('c1').reps, 3);
+  online = true;
+  await store.flush();
+});
+
+test('edits made while a refused save is on its way survive the reload', async () => {
+  const messages = [];
+  store.onStorageChange((message) => message && messages.push(message));
+  let release;
+  const calls = serve(async (url) => {
+    if (url === 'api/state') return json(200, view());
+    if (syncs(calls).length === 1) {
+      await new Promise((resolve) => (release = resolve));
+      return json(200, { rejected: ['c1'] });
+    }
+    return json(200, { rejected: [] });
+  });
+  await store.load();
+  store.updateCard('c1', { front: 'refused' });
+  await settle();
+  store.answerCard('c2', Rating.Good, T0);
+  release();
+  await settle();
+  assert.deepEqual(messages, ['Some changes could not be saved']);
+  assert.equal(store.card('c1').front, 'um');
+  assert.equal(store.card('c2').reps, 1);
+  const last = syncs(calls).at(-1).body;
+  assert.deepEqual(last.cards.map((c) => c.id), ['c2']);
+  assert.ok(last.daily);
+});
+
+test('a save the server will never take is dropped, not retried', async () => {
+  const messages = [];
+  store.onStorageChange((message) => message && messages.push(message));
+  let bad = true;
+  const calls = serve((url) => {
+    if (url === 'api/state') return json(200, view());
+    return bad ? json(400, { error: 'bad-request' }) : json(200, { rejected: [] });
+  });
+  await store.load();
+  store.updateCard('c1', { front: 'malformed' });
+  await settle();
+  assert.equal(syncs(calls).length, 1);
+  assert.deepEqual(messages, ['Some changes could not be saved']);
+  assert.equal(store.card('c1').front, 'um');
+  assert.equal(store.storageInfo().ok, true);
+  assert.deepEqual(storage.keys(), []);
+
+  // Later changes are saved as usual.
+  bad = false;
+  store.updateCard('c2', { front: 'fine' });
+  await settle();
+  assert.deepEqual(syncs(calls).at(-1).body.cards.map((c) => c.id), ['c2']);
+});
+
 test('api calls resolve to the JSON answer and throw the error code', async () => {
   const calls = serve((url) => {
-    if (url === 'api/me') return json(200, { user: { name: 'Ana' } });
     if (url === 'api/login') return json(401, { error: 'bad-login' });
     if (url === 'api/signup') return json(429, { error: 'rate-limited' });
     if (url === 'api/admin/invites/abc') return new Response(null, { status: 204 });
     return json(500, {});
   });
-  assert.deepEqual(await api.me(), { user: { name: 'Ana' } });
+  assert.deepEqual(await api.me(), { user: { id: 'u1', name: 'u1' } });
   await assert.rejects(api.logIn('ana', 'wrong'), { message: 'bad-login' });
   await assert.rejects(api.signUp({ code: 'x', username: 'ana', name: 'Ana', password: 'pw' }), { message: 'rate-limited' });
   await assert.rejects(api.admin.users(), { message: '500' });
