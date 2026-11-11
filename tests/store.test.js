@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 
 import { DAY, MINUTE, Rating, State } from '../js/fsrs.js';
 import * as store from '../js/store.js';
+import { DECK_SHARED } from '../server/fields.js';
 
 const T0 = new Date(2026, 0, 1, 9, 0, 0).getTime();
 
@@ -436,4 +437,101 @@ test('addCards adds many cards in file order as new cards', () => {
   assert.equal(store.counts(deck.id, T0).new, 3);
   assert.equal(store.nextCard(deck.id, T0).front, 'um');
   assert.deepEqual(store.cardsIn(deck.id).map((c) => c.back), ['one', 'two', 'three']);
+});
+
+// ---- Saving only what changed ---------------------------------------------
+
+/** A copy of the current state, as it would be saved. */
+const current = () => JSON.parse(store.exportData());
+
+test('diffState finds changed, new and deleted cards and decks only', () => {
+  const deck = setup();
+  const [a, b, c] = ['a', 'b', 'c'].map((text, i) => store.addCard(deck.id, text, text, T0 + i));
+  const snapshot = store.snapshotOf(current());
+
+  store.answerCard(a.id, Rating.Good, T0);
+  const answered = store.diffState(snapshot, current());
+  assert.deepEqual(answered.cards.map((card) => card.id), [a.id]);
+  assert.equal(answered.cards[0].reps, 1);
+  assert.equal(answered.decks, undefined);
+  assert.equal(answered.deletedCards, undefined);
+  assert.equal(answered.deletedDecks, undefined);
+  assert.equal(answered.settings, undefined);
+  assert.equal(typeof answered.savedAt, 'number');
+
+  store.deleteCard(b.id);
+  const other = store.createDeck({ name: 'Other' });
+  store.updateDeck(deck.id, { newPerDay: 5 });
+  const changes = store.diffState(snapshot, current());
+  assert.deepEqual(changes.deletedCards, [b.id]);
+  assert.deepEqual(changes.decks.map((d) => d.id).sort(), [deck.id, other.id].sort());
+  assert.ok(!changes.cards.some((card) => card.id === c.id));
+
+  store.deleteDeck(deck.id);
+  assert.deepEqual(store.diffState(snapshot, current()).deletedDecks, [deck.id]);
+});
+
+test('diffState is null when nothing changed', () => {
+  const deck = setup();
+  store.addCard(deck.id, 'q', 'a', T0);
+  assert.equal(store.diffState(store.snapshotOf(current()), current()), null);
+});
+
+test('daily and log are sent only when they change', () => {
+  const deck = setup();
+  const card = store.addCard(deck.id, 'q', 'a', T0);
+  const snapshot = store.snapshotOf(current());
+
+  store.updateCard(card.id, { front: 'changed' });
+  const edited = store.diffState(snapshot, current());
+  assert.equal(edited.daily, undefined);
+  assert.equal(edited.log, undefined);
+
+  store.answerCard(card.id, Rating.Good, T0);
+  const answered = store.diffState(snapshot, current());
+  assert.deepEqual(answered.daily, { [store.dayKey(T0)]: 1 });
+  assert.ok(answered.log[store.dayKey(T0)][deck.id]);
+
+  store.setSetting('theme', 'dark');
+  assert.deepEqual(store.diffState(snapshot, current()).settings, { theme: 'dark' });
+});
+
+test("a given deck's content cannot be edited, but it can be studied and its reserve used", () => {
+  store.importData(JSON.stringify({
+    decks: [{ id: 'given', name: 'Words', assigned: true, from: 'Ana', newPerDay: 20 }],
+    cards: ['one', 'two', 'three'].map((front, i) => ({ id: `g${i}`, deckId: 'given', front, back: '-', created: T0 + i, reserved: true, order: i })),
+  }));
+  const own = store.createDeck({ name: 'Mine' });
+  assert.equal(store.editable('given'), false);
+  assert.equal(store.editable(own.id), true);
+
+  const readOnly = { message: 'read-only deck' };
+  assert.throws(() => store.addCard('given', 'q', 'a', T0), readOnly);
+  assert.throws(() => store.addCards('given', [['q', 'a']], T0), readOnly);
+  assert.throws(() => store.updateCard('g0', { front: 'changed' }), readOnly);
+  assert.throws(() => store.updateCard('g0', { deckId: own.id }), readOnly);
+  assert.throws(() => store.deleteCard('g0'), readOnly);
+  assert.throws(() => store.deleteCards(['g0']), readOnly);
+  assert.throws(() => store.addReversed(['g0'], T0), readOnly);
+  assert.throws(() => store.deleteDeck('given'), readOnly);
+  for (const key of DECK_SHARED) assert.throws(() => store.updateDeck('given', { [key]: 'x' }), readOnly);
+  assert.equal(store.card('g0').front, 'one');
+  assert.equal(store.cardsIn('given').length, 3);
+  assert.equal(store.decks().length, 2);
+
+  // Moving one of your own cards into a given deck is refused too.
+  const mine = store.addCard(own.id, 'q', 'a', T0);
+  assert.throws(() => store.updateCard(mine.id, { deckId: 'given' }), readOnly);
+
+  // Personal settings, the reserve and study all still work.
+  store.updateDeck('given', { newPerDay: 5, speak: 'front' });
+  assert.equal(store.deck('given').newPerDay, 5);
+  store.reverseReserve('given');
+  assert.deepEqual(store.reserveIn('given').map((c) => c.id), ['g2', 'g1', 'g0']);
+  store.moveInReserve('given', ['g0'], { before: 'g2' });
+  assert.equal(store.pullFromReserve('given', 1, T0), 1);
+  assert.equal(store.pullCards(['g2'], T0 + 1), 1);
+  assert.equal(store.returnToReserve(['g2'], T0 + 2), 1);
+  store.answerCard(store.nextCard('given', T0 + 3).id, Rating.Good, T0 + 3);
+  assert.equal(store.card('g0').reps, 1);
 });

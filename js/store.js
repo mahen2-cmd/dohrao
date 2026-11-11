@@ -1,8 +1,6 @@
-// App state: decks, cards, persistence and the study queue.
+// App state: decks, cards, saving to the server and the study queue.
 
 import { DAY, State, dayStart, newSchedule, nextDayAt, preview, schedule } from './fsrs.js';
-
-const KEY = 'recall.v1';
 
 // Per-deck settings.
 //   scheduler     'sm2' (Anki's default algorithm) or 'fsrs' (Anki with FSRS switched on)
@@ -32,81 +30,127 @@ export const DECK_DEFAULTS = {
 // log[day][deckId] holds twelve counts, Again to Easy for each kind in ANSWER_KINDS.
 const emptyState = () => ({ version: 1, decks: [], cards: [], daily: {}, log: {}, settings: {} });
 
-const memory = new Map();
-const storage = (() => {
-  try {
-    const ls = globalThis.localStorage;
-    if (ls) return ls;
-  } catch {
-    // Storage blocked or unavailable; fall through to memory.
-  }
-  return {
-    getItem: (k) => (memory.has(k) ? memory.get(k) : null),
-    setItem: (k, v) => memory.set(k, v),
-  };
-})();
-
 let state = emptyState();
 
 // ---- Persistence ------------------------------------------------------------
-// When the app is served by server.js, everything is saved to a file on disk through
-// `api/state`. The browser's localStorage always holds a second copy, and is the only
-// store when there is no server (for example on a static host).
+// The state lives on the server, which keeps each user's own. It is loaded from `api/state`,
+// and each change sends `api/sync` only the decks, cards and figures that differ from what
+// the server last took, so a phone and a laptop used on the same day do not overwrite each
+// other's work. Nothing is kept in the browser, so a shared phone holds nothing after logout.
 
-const API = 'api/state';
-const disk = { available: false, ok: true, file: null, voice: null };
+const server = { available: false, ok: true, signedOut: false, voice: null };
+// What the server holds, as last loaded or saved.
+let snapshot = snapshotOf(emptyState());
 let writing = false;
 let dirty = false;
 let retry = null;
 let notify = () => {};
 
-/** Where data is being kept, and the server's voice if any: `{ available, ok, file, voice }`. */
-export const storageInfo = () => ({ ...disk });
+/** Whether the state came from the server and saves reach it, and the server's voice. */
+export const storageInfo = () => ({ ...server });
 
-/** Call `listener` whenever saving to disk starts failing or recovers. */
+/**
+ * Call `listener` whenever saving starts failing or recovers, the session ends, or the state is
+ * reloaded from the server. A reload passes the message to show.
+ */
 export function onStorageChange(listener) {
   notify = listener;
 }
 
-function readLocal() {
-  try {
-    const raw = storage.getItem(KEY);
-    return raw ? normalize(JSON.parse(raw)) : null;
-  } catch {
-    return null;
-  }
+/**
+ * Each deck and card as JSON, by id, and the daily figures, log and settings as JSON,
+ * so a later state can be compared with this one.
+ */
+export function snapshotOf(s) {
+  return {
+    decks: new Map(s.decks.map((d) => [d.id, JSON.stringify(d)])),
+    cards: new Map(s.cards.map((c) => [c.id, JSON.stringify(c)])),
+    daily: JSON.stringify(s.daily),
+    log: JSON.stringify(s.log),
+    settings: JSON.stringify(s.settings),
+  };
 }
 
-async function readDisk() {
-  try {
-    const res = await fetch(API, { cache: 'no-store' });
-    const file = res.headers.get('X-Data-File');
-    if (!file || (res.status !== 200 && res.status !== 204)) return null;
-    disk.available = true;
-    disk.file = decodeURIComponent(file);
-    disk.voice = decodeURIComponent(res.headers.get('X-Tts-Engine') ?? '') || null;
-    return res.status === 200 ? normalize(await res.json()) : null;
-  } catch {
-    return null;
+/** What differs from `before` in `after`, both snapshots, as the changes `api/sync` takes, or null. */
+function changesBetween(before, after, savedAt) {
+  const changes = {};
+  for (const kind of ['decks', 'cards']) {
+    const changed = [...after[kind]].filter(([id, json]) => before[kind].get(id) !== json).map(([, json]) => JSON.parse(json));
+    const gone = [...before[kind].keys()].filter((id) => !after[kind].has(id));
+    if (changed.length) changes[kind] = changed;
+    if (gone.length) changes[kind === 'decks' ? 'deletedDecks' : 'deletedCards'] = gone;
   }
+  for (const key of ['daily', 'log', 'settings']) {
+    if (before[key] !== after[key]) changes[key] = JSON.parse(after[key]);
+  }
+  if (!Object.keys(changes).length) return null;
+  return { ...changes, savedAt: savedAt ?? Date.now() };
 }
 
+/**
+ * The changes that turn the state `snapshot` was taken of into `s`: decks and cards that are new
+ * or differ, the ids of those removed, and the daily figures, log and settings when they changed.
+ * Null when nothing changed.
+ */
+export const diffState = (snap, s) => changesBetween(snap, snapshotOf(s), s.savedAt);
+
+/** Fetch this user's state; null when signed out. Throws when the server cannot be reached. */
+async function fetchState() {
+  const res = await fetch('api/state', { cache: 'no-store' });
+  if (res.status === 401) return null;
+  if (!res.ok) throw new Error(`load failed: ${res.status}`);
+  server.voice = decodeURIComponent(res.headers.get('X-Tts-Engine') ?? '') || null;
+  return normalize(await res.json());
+}
+
+/** Take `data` as the state the server holds. */
+function useState(data) {
+  state = data;
+  // Taken after normalize, so the defaults it fills in are not sent back as changes.
+  snapshot = snapshotOf(state);
+}
+
+/** Load the signed-in user's state from the server. Throws when the server cannot be reached. */
 export async function load() {
-  const local = readLocal();
-  const saved = await readDisk();
-  // The newer copy wins, so reviews done while the server was down are not lost.
-  const useLocal = local && (!saved || local.savedAt > saved.savedAt);
-  state = (useLocal ? local : saved) ?? emptyState();
-  if (disk.available && useLocal) flush();
+  const data = await fetchState();
+  if (!data) return { signedIn: false };
+  useState(data);
+  server.available = true;
+  server.signedOut = false;
+  server.ok = true;
+  return { signedIn: true };
 }
 
-function setDiskOk(ok) {
-  if (disk.ok === ok) return;
-  disk.ok = ok;
+function setOk(ok) {
+  if (server.ok === ok) return;
+  server.ok = ok;
   notify();
 }
 
-async function flush() {
+function signOut() {
+  server.signedOut = true;
+  notify();
+}
+
+/** Some changes were refused: start again from what the server holds. */
+async function reload() {
+  try {
+    const data = await fetchState();
+    if (!data) return signOut();
+    useState(data);
+  } catch {
+    // The server is out of reach again; keep what is here.
+  }
+  notify('Some changes could not be saved');
+}
+
+/**
+ * Send the server what changed since it last saved. Each change is read when it is sent, and
+ * only what was sent counts as saved, so edits made meanwhile go in the next request.
+ * A failure is retried every 5 seconds.
+ */
+export async function flush() {
+  if (!server.available || server.signedOut) return;
   if (writing) {
     dirty = true;
     return;
@@ -115,17 +159,28 @@ async function flush() {
   clearTimeout(retry);
   do {
     dirty = false;
+    const next = snapshotOf(state);
+    const changes = changesBetween(snapshot, next, state.savedAt);
+    if (!changes) break;
     try {
-      const res = await fetch(API, {
-        method: 'PUT',
+      const res = await fetch('api/sync', {
+        method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(state),
+        body: JSON.stringify(changes),
       });
+      if (res.status === 401) {
+        signOut();
+        break;
+      }
       if (!res.ok) throw new Error(`save failed: ${res.status}`);
-      setDiskOk(true);
+      const { rejected } = await res.json();
+      snapshot = next;
+      setOk(true);
+      if (rejected?.length) await reload();
     } catch {
-      setDiskOk(false);
+      setOk(false);
       retry = setTimeout(flush, 5000);
+      break;
     }
   } while (dirty);
   writing = false;
@@ -133,12 +188,7 @@ async function flush() {
 
 function save() {
   state.savedAt = Date.now();
-  try {
-    storage.setItem(KEY, JSON.stringify(state));
-  } catch {
-    // Browser storage full or blocked; the disk copy is what matters.
-  }
-  if (disk.available) flush();
+  flush();
 }
 
 function normalize(data) {
@@ -188,6 +238,18 @@ export function setSetting(name, value) {
 export const decks = () => state.decks;
 export const deck = (id) => state.decks.find((d) => d.id === id);
 
+// A deck given by the admin (`assigned: true`, from its owner `from`) is studied like any other,
+// but its name, languages and cards are the owner's. These deck fields come from the owner, as
+// listed in server/fields.js.
+const SHARED_DECK_KEYS = ['name', 'created', 'ankiId', 'frontLang', 'backLang', 'saveAudio'];
+
+/** Whether a deck's name and cards can be changed here: not for a deck given by the admin. */
+export const editable = (deckId) => !deck(deckId)?.assigned;
+
+function mustEdit(deckId) {
+  if (!editable(deckId)) throw new Error('read-only deck');
+}
+
 export function createDeck({ name, ...options }) {
   const d = { ...DECK_DEFAULTS, ...options, id: uid(), name, created: Date.now() };
   state.decks.push(d);
@@ -196,11 +258,13 @@ export function createDeck({ name, ...options }) {
 }
 
 export function updateDeck(id, patch) {
+  if (SHARED_DECK_KEYS.some((key) => key in patch)) mustEdit(id);
   Object.assign(deck(id), patch);
   save();
 }
 
 export function deleteDeck(id) {
+  mustEdit(id);
   state.decks = state.decks.filter((d) => d.id !== id);
   state.cards = state.cards.filter((c) => c.deckId !== id);
   save();
@@ -215,6 +279,7 @@ export const cardsIn = (deckId) => state.cards.filter((c) => c.deckId === deckId
 const reserveFlag = (reserved) => (reserved ? { reserved: true } : {});
 
 export function addCard(deckId, front, back, now = Date.now(), { reserved = false } = {}) {
+  mustEdit(deckId);
   const c = { id: uid(), deckId, front, back, created: now, updated: now, ...newSchedule(now), ...reserveFlag(reserved) };
   state.cards.push(c);
   save();
@@ -223,6 +288,7 @@ export function addCard(deckId, front, back, now = Date.now(), { reserved = fals
 
 /** Add many cards at once from `[front, back]` pairs. Returns how many were added. */
 export function addCards(deckId, pairs, now = Date.now(), { reserved = false } = {}) {
+  mustEdit(deckId);
   pairs.forEach(([front, back], i) => {
     // Stagger creation times so the cards keep the order they had in the file.
     const created = now + i;
@@ -244,7 +310,8 @@ export function importAnkiDecks(imported, now = Date.now(), { reserved = false }
   for (const { ankiId, name, settings, cards } of imported) {
     const fresh = cards.filter((c) => !known.has(c.ankiId));
     if (!fresh.length) continue;
-    let d = state.decks.find((x) => x.ankiId === ankiId);
+    // A given deck from the same file is the owner's; the import makes a deck of your own.
+    let d = state.decks.find((x) => x.ankiId === ankiId && editable(x.id));
     if (!d) {
       d = { ...DECK_DEFAULTS, ...settings, id: uid(), name, ankiId, created: now };
       state.decks.push(d);
@@ -263,6 +330,10 @@ export const ankiCardIds = () => new Set(state.cards.map((c) => c.ankiId).filter
 
 export function updateCard(id, patch) {
   const c = card(id);
+  if (['front', 'back', 'deckId'].some((key) => key in patch)) {
+    mustEdit(c.deckId);
+    if (patch.deckId) mustEdit(patch.deckId);
+  }
   const moved = patch.deckId && patch.deckId !== c.deckId;
   Object.assign(c, patch, { updated: Date.now() });
   // A place in the reserve does not outlast leaving it, or changing deck.
@@ -371,8 +442,10 @@ export function returnToReserve(ids, now = Date.now()) {
 export function addReversed(ids, now = Date.now()) {
   const key = (deckId, front, back) => [deckId, front, back].map((text) => text.trim().toLowerCase()).join('\n');
   const known = new Set(state.cards.map((c) => key(c.deckId, c.front, c.back)));
+  const named = ids.map(card).filter(Boolean);
+  for (const c of named) mustEdit(c.deckId);
   const added = [];
-  for (const c of ids.map(card).filter(Boolean)) {
+  for (const c of named) {
     const copy = key(c.deckId, c.back, c.front);
     if (known.has(copy)) continue;
     known.add(copy);
@@ -387,6 +460,7 @@ export function addReversed(ids, now = Date.now()) {
 
 /** Delete several cards at once. Returns how many were deleted. */
 export function deleteCards(ids) {
+  for (const c of ids.map(card).filter(Boolean)) mustEdit(c.deckId);
   const doomed = new Set(ids);
   const before = state.cards.length;
   state.cards = state.cards.filter((c) => !doomed.has(c.id));
@@ -446,6 +520,8 @@ export function findCards(deckId, { text = '', groups = [], due = 'any', added =
 }
 
 export function deleteCard(id) {
+  const c = card(id);
+  if (c) mustEdit(c.deckId);
   state.cards = state.cards.filter((c) => c.id !== id);
   save();
 }

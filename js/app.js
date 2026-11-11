@@ -2371,6 +2371,9 @@ document.addEventListener('visibilitychange', () => {
 });
 
 await store.load();
-store.onStorageChange(render);
+store.onStorageChange((message) => {
+  render();
+  if (message) toast(message);
+});
 applyTheme();
 render();
