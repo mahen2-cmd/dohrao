@@ -84,6 +84,9 @@ const ICONS = {
   user: '<circle cx="12" cy="8" r="4"/><path d="M4.5 20a7.5 7.5 0 0 1 15 0"/>',
   logout: '<path d="M14 4h4a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-4M10 16l-4-4 4-4M6 12h10"/>',
   shield: '<path d="M12 3l7 3v5c0 4.5-3 8-7 10-4-2-7-5.5-7-10V6z"/>',
+  copy: '<rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a1 1 0 0 1 1-1h10"/>',
+  key: '<circle cx="8" cy="15" r="4"/><path d="M11 12l9-9M17 6l3 3M15 8l2 2"/>',
+  share: '<circle cx="9" cy="8" r="3.5"/><path d="M3 20a6 6 0 0 1 12 0M18 8v6M15 11h6"/>',
 };
 
 function icon(name) {
@@ -478,8 +481,16 @@ function confirmDialog({ title, message, confirmLabel = 'Delete' }) {
   });
 }
 
+/** The quiet line naming who gave a deck, or nothing for a deck of your own. */
+const deckFrom = (deck) => deck.assigned && h('span', { class: 'deck-from' }, `From ${deck.from}`);
+
+/**
+ * Create a deck, or change one's settings. A deck given by the admin shows only the settings
+ * that are the user's own; its name and languages are the owner's.
+ */
 function openDeckDialog(deck) {
   const defaults = deck ?? store.DECK_DEFAULTS;
+  const own = !deck || store.editable(deck.id);
   const name = h('input', { type: 'text', required: true, maxLength: 80, value: deck?.name ?? '', placeholder: 'e.g. Spanish vocabulary' });
   const newPerDay = h('input', { type: 'number', required: true, min: 0, max: 9999, step: 1, value: defaults.newPerDay });
   const retention = h('input', { type: 'number', required: true, min: 70, max: 97, step: 1, value: Math.round(defaults.retention * 100) });
@@ -518,24 +529,24 @@ function openDeckDialog(deck) {
       onsubmit: (e) => {
         e.preventDefault();
         const values = {
-          name: name.value.trim(),
           scheduler: scheduler.value,
           newPerDay: Number(newPerDay.value),
           retention: Number(retention.value) / 100,
           easyInterval: Number(easyInterval.value),
-          speak: speakSide.value,
-          frontLang: frontLang.value,
-          backLang: backLang.value,
-          speechRate: Number(speechRate.value),
-          saveAudio: saveAudio.checked,
+          ...(canSpeak() && { speak: speakSide.value, speechRate: Number(speechRate.value) }),
+          ...(own && {
+            name: name.value.trim(),
+            ...(canSpeak() && { frontLang: frontLang.value, backLang: backLang.value }),
+            ...(serverVoice() && { saveAudio: saveAudio.checked }),
+          }),
         };
-        if (!values.name) return name.focus();
+        if (own && !values.name) return name.focus();
         if (deck) store.updateDeck(deck.id, values);
         else store.createDeck(values);
         dialog.close();
       },
     },
-    h('label', { class: 'field' }, h('span', null, 'Name'), name),
+    own && h('label', { class: 'field' }, h('span', null, 'Name'), name),
     h(
       'div',
       { class: 'field-row' },
@@ -556,14 +567,15 @@ function openDeckDialog(deck) {
         h('label', { class: 'field' }, h('span', null, 'Auto-play audio'), speakSide),
         h('label', { class: 'field' }, h('span', null, 'Speaking speed'), speechRate),
       ),
-      h(
-        'div',
-        { class: 'field-row' },
-        h('label', { class: 'field' }, h('span', null, 'Front language'), frontLang),
-        h('label', { class: 'field' }, h('span', null, 'Back language'), backLang),
-      ),
+      own &&
+        h(
+          'div',
+          { class: 'field-row' },
+          h('label', { class: 'field' }, h('span', null, 'Front language'), frontLang),
+          h('label', { class: 'field' }, h('span', null, 'Back language'), backLang),
+        ),
       h('small', { class: 'field-note' }, 'Auto-play reads a side aloud when it appears, in that side’s language. You can always play either side with its speaker button. Maths is read out in words, in English; images are skipped.'),
-      serverVoice() && [
+      own && serverVoice() && [
         h('label', { class: 'check', style: 'margin-top: 12px' }, saveAudio, 'Keep the audio made for this deck'),
         h('small', { class: 'field-note' }, 'Turn this off for decks that are mostly maths: audio is then made each time it plays instead of being kept, and “npm run cache-voice” leaves the deck out.'),
       ],
@@ -576,7 +588,7 @@ function openDeckDialog(deck) {
     ),
   );
   const dialog = modal(deck ? 'Deck settings' : 'New deck', form, { narrow: true, onclose: render });
-  name.focus();
+  (own ? name : newPerDay).focus();
 }
 
 /**
@@ -678,12 +690,13 @@ function sideEditor(label, textarea) {
 }
 
 function openCardDialog({ card, deckId }) {
+  if (!store.editable(card?.deckId ?? deckId)) return;
   const front = h('textarea', { required: true, value: card?.front ?? '', placeholder: 'Question or prompt' });
   const back = h('textarea', { required: true, value: card?.back ?? '', placeholder: 'Answer' });
   const deckSelect = h(
     'select',
     null,
-    store.decks().map((d) => h('option', { value: d.id, selected: d.id === (card?.deckId ?? deckId) }, d.name)),
+    store.decks().filter((d) => store.editable(d.id)).map((d) => h('option', { value: d.id, selected: d.id === (card?.deckId ?? deckId) }, d.name)),
   );
   // Only a card that has never been studied can wait on the reserve.
   const reserved = h('input', { type: 'checkbox', checked: Boolean(card?.reserved) });
@@ -740,11 +753,29 @@ function openCardDialog({ card, deckId }) {
   front.focus();
 }
 
+/** How many people have been given a deck and still have it. Only an admin gives decks. */
+async function recipientsOf(deckId) {
+  if (account?.role !== 'admin') return 0;
+  const given = await api.admin.decks();
+  return given.find((d) => d.id === deckId)?.recipients.filter((r) => r.active).length ?? 0;
+}
+
 async function removeDeck(deck) {
   const n = store.cardsIn(deck.id).length;
+  let people;
+  try {
+    people = await recipientsOf(deck.id);
+  } catch {
+    toast('Could not check who has this deck. Try again when you are online.');
+    return;
+  }
   const ok = await confirmDialog({
     title: `Delete “${deck.name}”?`,
-    message: n ? `This deck and its ${plural(n, 'card')} will be permanently deleted.` : 'This deck will be permanently deleted.',
+    message: people
+      ? `${people === 1 ? '1 person has' : `${people.toLocaleString()} people have`} this deck. Deleting it removes it and their progress.`
+      : n
+        ? `This deck and its ${plural(n, 'card')} will be permanently deleted.`
+        : 'This deck will be permanently deleted.',
     confirmLabel: 'Delete deck',
   });
   if (!ok) return;
@@ -1239,6 +1270,7 @@ function renderHome() {
         'a',
         { class: 'deck-main', href: `#/deck/${deck.id}` },
         h('span', { class: 'deck-name' }, deck.name),
+        deckFrom(deck),
         h('span', { class: 'deck-meta' }, plural(c.cards, 'card') + (c.reserve ? ` · ${c.reserve.toLocaleString()} on reserve` : '') + (c.tomorrow.total ? ` · ${c.tomorrow.total.toLocaleString()} tomorrow` : '')),
       ),
       countPills(c),
@@ -1246,12 +1278,14 @@ function renderHome() {
         'div',
         { class: 'deck-actions' },
         iconButton('edit', 'Deck settings', () => openDeckDialog(deck)),
-        iconButton('trash', 'Delete deck', () => removeDeck(deck), 'danger'),
+        store.editable(deck.id) && iconButton('trash', 'Delete deck', () => removeDeck(deck), 'danger'),
         c.total
           ? h('a', { class: 'btn', href: `#/study/${deck.id}` }, `Study ${c.total}`)
           : c.cards
             ? h('span', { class: 'caught-up' }, icon('check'), 'Caught up')
-            : h('button', { class: 'btn', type: 'button', onclick: () => openCardDialog({ deckId: deck.id }) }, icon('plus'), 'Add cards'),
+            : store.editable(deck.id)
+              ? h('button', { class: 'btn', type: 'button', onclick: () => openCardDialog({ deckId: deck.id }) }, icon('plus'), 'Add cards')
+              : h('span', { class: 'caught-up' }, 'No cards yet'),
       ),
     );
 
@@ -1313,7 +1347,7 @@ function reserveBar(deck, n) {
   const more = [
     n > 1 && ['Pull all', `Pull all ${n.toLocaleString()}`, null, () => pull(n), null],
     n > 1 && ['Choose cards', 'Choose cards', 'check', reorder, 'List the reserve in the order it is pulled in, to tick cards to pull in or to rearrange it'],
-    ['Import to reserve', 'Import to reserve', 'upload', () => pickImportFile(deck, true), 'Import cards from a CSV or Excel file straight into the reserve'],
+    store.editable(deck.id) && ['Import to reserve', 'Import to reserve', 'upload', () => pickImportFile(deck, true), 'Import cards from a CSV or Excel file straight into the reserve'],
   ].filter(Boolean);
   return h(
     'form',
@@ -1333,12 +1367,14 @@ function reserveBar(deck, n) {
     ),
     n > 0 && [amount, h('button', { class: 'btn primary', type: 'submit' }, 'Pull in')],
     more.map(([, label, glyph, onclick, title]) => h('button', { class: 'btn reserve-wide', type: 'button', title, onclick }, glyph && icon(glyph), label)),
-    h('div', { class: 'reserve-narrow' }, menu('More for the reserve', more.map(([, label, glyph, onclick]) => h('button', { type: 'button', onclick }, icon(glyph ?? 'down'), label)))),
+    more.length > 0 && h('div', { class: 'reserve-narrow' }, menu('More for the reserve', more.map(([, label, glyph, onclick]) => h('button', { type: 'button', onclick }, icon(glyph ?? 'down'), label)))),
   );
 }
 
 function renderDeck(deck) {
   const now = Date.now();
+  // A deck given by the admin is studied here, but its cards are changed only by its owner.
+  const editable = store.editable(deck.id);
   const c = store.counts(deck.id, now);
   const cards = store.cardsIn(deck.id);
   if (filtersDeck !== deck.id) {
@@ -1507,13 +1543,15 @@ function renderDeck(deck) {
                 icon('box'),
                 'Back to reserve',
               ),
-            h(
-              'button',
-              { class: 'btn', type: 'button', title: 'Add a copy of each ticked card with its front and back swapped, on the reserve', onclick: () => addReversedCards([...selected]) },
-              icon('swap'),
-              'Add reversed',
-            ),
-            h('button', { class: 'btn danger', type: 'button', onclick: () => removeCards([...selected]) }, icon('trash'), `Delete ${plural(selected.size, 'card')}`),
+            editable && [
+              h(
+                'button',
+                { class: 'btn', type: 'button', title: 'Add a copy of each ticked card with its front and back swapped, on the reserve', onclick: () => addReversedCards([...selected]) },
+                icon('swap'),
+                'Add reversed',
+              ),
+              h('button', { class: 'btn danger', type: 'button', onclick: () => removeCards([...selected]) }, icon('trash'), `Delete ${plural(selected.size, 'card')}`),
+            ],
             h('button', { class: 'btn ghost', type: 'button', onclick: () => pick([...selected], false) }, 'Cancel'),
           ],
         ),
@@ -1532,8 +1570,8 @@ function renderDeck(deck) {
           const row = h(
             'div',
             {
-              class: `card-row ${selected.has(card.id) ? 'selected' : ''}`,
-              onclick: () => openCardDialog({ card }),
+              class: `card-row ${selected.has(card.id) ? 'selected' : ''} ${editable ? '' : 'read-only'}`,
+              onclick: editable && (() => openCardDialog({ card })),
               ...(sortable && {
                 draggable: true,
                 // Dragging a ticked card takes the other ticked cards along.
@@ -1567,12 +1605,13 @@ function renderDeck(deck) {
             h('div', { class: 'text' }, rich(card.front)),
             h('div', { class: 'text back-text' }, rich(card.back)),
             statusMark(status, status.label, 'due'),
-            h(
-              'div',
-              { class: 'row-actions', onclick: (e) => e.stopPropagation() },
-              iconButton('edit', 'Edit card', () => openCardDialog({ card })),
-              iconButton('trash', 'Delete card', () => removeCard(card), 'danger'),
-            ),
+            editable &&
+              h(
+                'div',
+                { class: 'row-actions', onclick: (e) => e.stopPropagation() },
+                iconButton('edit', 'Edit card', () => openCardDialog({ card })),
+                iconButton('trash', 'Delete card', () => removeCard(card), 'danger'),
+              ),
           );
           return row;
         }),
@@ -1617,13 +1656,17 @@ function renderDeck(deck) {
         'div',
         { class: 'empty' },
         h('h2', null, 'No cards yet'),
-        h('p', null, 'Add a question on the front and its answer on the back, or import a list from an Excel file.'),
-        h(
-          'div',
-          { class: 'row' },
-          h('button', { class: 'btn primary', type: 'button', onclick: () => openCardDialog({ deckId: deck.id }) }, icon('plus'), 'Add card'),
-          h('button', { class: 'btn', type: 'button', onclick: () => pickImportFile(deck) }, icon('upload'), 'Import from Excel'),
-        ),
+        editable
+          ? [
+              h('p', null, 'Add a question on the front and its answer on the back, or import a list from an Excel file.'),
+              h(
+                'div',
+                { class: 'row' },
+                h('button', { class: 'btn primary', type: 'button', onclick: () => openCardDialog({ deckId: deck.id }) }, icon('plus'), 'Add card'),
+                h('button', { class: 'btn', type: 'button', onclick: () => pickImportFile(deck) }, icon('upload'), 'Import from Excel'),
+              ),
+            ]
+          : h('p', null, `Cards appear here when ${deck.from} adds them.`),
       );
   if (cards.length) drawList();
 
@@ -1636,18 +1679,18 @@ function renderDeck(deck) {
       h(
         'div',
         { class: 'page-head', style: 'margin-top: 14px' },
-        h('div', null, h('h1', null, deck.name), countPills(c), h('div', { class: 'deck-meta tomorrow' }, tomorrowText(c), ' ', h('a', { href: `#/upcoming/${deck.id}` }, 'See the days ahead'))),
+        h('div', null, h('h1', null, deck.name), deckFrom(deck), countPills(c), h('div', { class: 'deck-meta tomorrow' }, tomorrowText(c), ' ', h('a', { href: `#/upcoming/${deck.id}` }, 'See the days ahead'))),
         h(
           'div',
           { class: 'actions' },
           menu('More for this deck', [
             h('a', { href: `#/upcoming/${deck.id}` }, icon('calendar'), 'Upcoming cards'),
             h('a', { href: `#/stats/${deck.id}` }, icon('chart'), 'Statistics'),
-            h('button', { type: 'button', title: 'Import cards from an Excel or CSV file', onclick: () => pickImportFile(deck) }, icon('upload'), 'Import from Excel'),
+            editable && h('button', { type: 'button', title: 'Import cards from an Excel or CSV file', onclick: () => pickImportFile(deck) }, icon('upload'), 'Import from Excel'),
             h('button', { type: 'button', onclick: () => openDeckDialog(deck) }, icon('edit'), 'Deck settings'),
-            h('button', { type: 'button', class: 'danger', onclick: () => removeDeck(deck) }, icon('trash'), 'Delete deck'),
+            editable && h('button', { type: 'button', class: 'danger', onclick: () => removeDeck(deck) }, icon('trash'), 'Delete deck'),
           ]),
-          h('button', { class: 'btn', type: 'button', onclick: () => openCardDialog({ deckId: deck.id }) }, icon('plus'), 'Add card'),
+          editable && h('button', { class: 'btn', type: 'button', onclick: () => openCardDialog({ deckId: deck.id }) }, icon('plus'), 'Add card'),
           c.total > 0 && h('a', { class: 'btn primary', href: `#/study/${deck.id}` }, icon('play'), `Study ${c.total}`),
         ),
       ),
@@ -1746,7 +1789,7 @@ function renderStudy(deck) {
       h('div', { class: 'study-title' }, deck.name),
       card && statusMark(cardStatus(card, now), card.state === State.Review ? 'Review' : cardStatus(card, now).label, 'state'),
       countPills(c),
-      card && h('div', { class: 'tools' }, iconButton('edit', 'Edit card (E)', () => openCardDialog({ card })), iconButton('trash', 'Delete card', () => removeCard(card), 'danger')),
+      card && store.editable(deck.id) && h('div', { class: 'tools' }, iconButton('edit', 'Edit card (E)', () => openCardDialog({ card })), iconButton('trash', 'Delete card', () => removeCard(card), 'danger')),
     ),
     bar,
   ];
@@ -2420,6 +2463,223 @@ function renderOffline() {
   );
 }
 
+// ---- Admin ----------------------------------------------------------------
+// People, invite codes and the decks the admin gives. Loaded from the server on arrival and
+// after each change; `fresh` is cleared on leaving, so coming back loads it again.
+
+const adminState = { data: null, fresh: false, error: false };
+const listFormat = new Intl.ListFormat(undefined, { type: 'conjunction' });
+
+async function loadAdmin() {
+  adminState.fresh = true;
+  try {
+    const [users, invites, decks] = await Promise.all([api.admin.users(), api.admin.invites(), api.admin.decks()]);
+    adminState.data = { users, invites, decks };
+    adminState.error = false;
+  } catch (error) {
+    // The session ended, perhaps by resetting your own password: log in again.
+    if (error.message === 'signed-out') return location.reload();
+    adminState.error = true;
+  }
+  if (route().view === 'admin' && !document.querySelector('dialog[open]')) render();
+}
+
+/** Run an admin change, say `done` (or what `done` makes of its result), then load the screen again. */
+async function adminChange(change, done) {
+  let result;
+  try {
+    result = await change();
+  } catch {
+    toast('Could not save that. Try again.');
+    return;
+  }
+  toast(typeof done === 'function' ? done(result) : done);
+  await loadAdmin();
+}
+
+const adminRow = (main, meta, ...actions) =>
+  h('li', { class: 'admin-row' }, h('div', { class: 'admin-main' }, main, h('span', { class: 'admin-meta' }, meta)), h('div', { class: 'admin-actions' }, actions));
+
+function openResetDialog(user) {
+  const password = h('input', { type: 'password', name: 'password', required: true, minLength: 8, autocomplete: 'new-password' });
+  const error = h('p', { class: 'auth-error', role: 'alert' });
+  const submit = h('button', { class: 'btn primary', type: 'submit' }, 'Set password');
+  const form = h(
+    'form',
+    {
+      onsubmit: async (e) => {
+        e.preventDefault();
+        submit.disabled = true;
+        error.textContent = '';
+        try {
+          await api.admin.resetPassword(user.id, password.value);
+        } catch (err) {
+          error.textContent = err.message === 'not-found' ? 'That account no longer exists.' : authMessage(err);
+          submit.disabled = false;
+          return;
+        }
+        dialog.close();
+        toast(`Password changed for ${user.name}`);
+      },
+    },
+    h('label', { class: 'field' }, h('span', null, 'New password'), password, h('small', null, `${user.name} is logged out everywhere and logs in with this password.`)),
+    error,
+    h('div', { class: 'modal-foot' }, h('button', { class: 'btn', type: 'button', onclick: () => dialog.close() }, 'Cancel'), submit),
+  );
+  const dialog = modal(`Reset password for ${user.name}`, form, { narrow: true, onclose: render });
+  password.focus();
+}
+
+function openGiveDialog(deck, users) {
+  const people = users.filter((u) => u.id !== account.id);
+  const had = new Set(deck.recipients.filter((r) => r.active).map((r) => r.userId));
+  const boxes = people.map((u) => h('input', { type: 'checkbox', value: u.id, checked: had.has(u.id) }));
+  const nameOf = (id) => people.find((u) => u.id === id).name;
+  const form = h(
+    'form',
+    {
+      onsubmit: async (e) => {
+        e.preventDefault();
+        const now = new Set(boxes.filter((box) => box.checked).map((box) => box.value));
+        const added = [...now].filter((id) => !had.has(id));
+        const removed = [...had].filter((id) => !now.has(id));
+        dialog.close();
+        if (!added.length && !removed.length) return;
+        const said = [
+          added.length && `Given to ${listFormat.format(added.map(nameOf))}`,
+          removed.length && `${added.length ? 'taken' : 'Taken'} back from ${listFormat.format(removed.map(nameOf))}`,
+        ].filter(Boolean);
+        await adminChange(async () => {
+          if (added.length) await api.admin.assign(deck.id, added);
+          if (removed.length) await api.admin.unassign(deck.id, removed);
+        }, said.join(', '));
+      },
+    },
+    people.length
+      ? [
+          h('p', { class: 'message' }, 'They study it with their own progress and cannot change its cards. Taking it back hides it from them and keeps their progress.'),
+          h('div', { class: 'give-list' }, people.map((u, i) => h('label', { class: 'check' }, boxes[i], h('span', null, u.name, ' ', h('span', { class: 'give-user' }, u.username))))),
+        ]
+      : h('p', { class: 'message' }, 'No one else has an account yet. Make an invite code and send it to them.'),
+    h(
+      'div',
+      { class: 'modal-foot' },
+      h('button', { class: 'btn', type: 'button', onclick: () => dialog.close() }, 'Cancel'),
+      people.length > 0 && h('button', { class: 'btn primary', type: 'submit' }, 'Save'),
+    ),
+  );
+  const dialog = modal(`Give “${deck.name}” to…`, form, { narrow: true, onclose: render });
+  boxes[0]?.focus();
+}
+
+function copyCode(code) {
+  const copied = navigator.clipboard?.writeText(code) ?? Promise.reject();
+  copied.then(() => toast(`Copied ${code}`), () => toast(`Could not copy. The code is ${code}`));
+}
+
+function peopleSection({ users }) {
+  return h(
+    'section',
+    { class: 'admin-section', 'aria-label': 'People' },
+    h('div', { class: 'section-head' }, h('h2', null, 'People')),
+    h(
+      'ul',
+      { class: 'admin-list' },
+      users.map((u) =>
+        adminRow(
+          h('b', null, u.name),
+          u.role === 'admin' ? `${u.username} · admin` : u.username,
+          h('button', { class: 'btn', type: 'button', onclick: () => openResetDialog(u) }, icon('key'), 'Reset password'),
+        ),
+      ),
+    ),
+  );
+}
+
+function invitesSection({ invites }) {
+  const active = invites.filter((invite) => !invite.revoked && invite.usesLeft > 0);
+  const uses = h('input', { type: 'number', required: true, min: 1, max: 20, step: 1, value: 1, 'aria-label': 'Uses' });
+  return h(
+    'section',
+    { class: 'admin-section', 'aria-label': 'Invite codes' },
+    h(
+      'div',
+      { class: 'section-head' },
+      h('h2', null, 'Invite codes'),
+      h(
+        'form',
+        {
+          class: 'actions invite-new',
+          onsubmit: (e) => {
+            e.preventDefault();
+            adminChange(() => api.admin.createInvite(Number(uses.value)), ({ code }) => `Invite code ${code} made`);
+          },
+        },
+        h('label', { class: 'uses' }, h('span', null, 'Uses'), uses),
+        h('button', { class: 'btn primary', type: 'submit' }, icon('plus'), 'New invite code'),
+      ),
+    ),
+    h(
+      'ul',
+      { class: 'admin-list' },
+      active.length
+        ? active.map((invite) =>
+            adminRow(
+              h('b', { class: 'invite-code' }, invite.code),
+              `${plural(invite.usesLeft, 'use')} left · made ${shortDate.format(invite.created)}`,
+              iconButton('copy', `Copy ${invite.code}`, () => copyCode(invite.code)),
+              iconButton('close', `Revoke ${invite.code}`, () => adminChange(() => api.admin.revokeInvite(invite.code), `Invite code ${invite.code} revoked`), 'danger'),
+            ),
+          )
+        : h('li', { class: 'admin-empty' }, 'No active invite codes. Make one to let someone sign up.'),
+    ),
+  );
+}
+
+function decksSection({ decks, users }) {
+  const given = (deck) => {
+    const names = deck.recipients.filter((r) => r.active).map((r) => r.name);
+    return names.length ? `Given to ${listFormat.format(names)}` : 'Not given to anyone';
+  };
+  return h(
+    'section',
+    { class: 'admin-section', 'aria-label': 'Your decks' },
+    h('div', { class: 'section-head' }, h('h2', null, 'Your decks')),
+    h(
+      'ul',
+      { class: 'admin-list' },
+      decks.length
+        ? decks.map((deck) =>
+            adminRow(
+              h('b', null, deck.name),
+              `${plural(deck.cards, 'card')} · ${given(deck)}`,
+              h('button', { class: 'btn', type: 'button', onclick: () => openGiveDialog(deck, users) }, icon('share'), 'Give to…'),
+            ),
+          )
+        : h('li', { class: 'admin-empty' }, 'You have no decks yet.'),
+    ),
+  );
+}
+
+function renderAdmin() {
+  if (!adminState.fresh) loadAdmin();
+  const d = adminState.data;
+  const body = d
+    ? [peopleSection(d), invitesSection(d), decksSection(d)]
+    : adminState.error
+      ? h('div', { class: 'empty' }, h('h2', null, 'Could not load this page'), h('div', { class: 'row' }, h('button', { class: 'btn', type: 'button', onclick: loadAdmin }, 'Try again')))
+      : h('p', { class: 'admin-empty' }, 'Loading…');
+  app.replaceChildren(
+    h(
+      'div',
+      { class: 'page' },
+      topbar(),
+      h('div', { class: 'page-head' }, h('div', null, h('h1', null, 'Admin'), h('p', { class: 'sub' }, 'People, invite codes and the decks you give.'))),
+      body,
+    ),
+  );
+}
+
 // ---- Routing and shortcuts ------------------------------------------------
 
 function route() {
@@ -2433,6 +2693,8 @@ function render() {
   if (!account || store.storageInfo().signedOut) {
     session.deckId = session.cardId = null;
     stopSpeaking();
+    // A dialog left open would sit over the login form.
+    for (const open of document.querySelectorAll('dialog[open]')) open.close();
     const mode = view === 'signup' ? 'signup' : 'login';
     // Leave a form being filled in alone when nothing about it changed.
     if (app.querySelector(`.auth[data-mode="${mode}"]`)) return;
@@ -2446,8 +2708,13 @@ function render() {
     query = '';
     filtersDeck = null;
   }
+  if (view !== 'admin') adminState.fresh = false;
   tip.hidden = true;
-  if (view === 'deck' && deck) renderDeck(deck);
+  if (view === 'admin' && account.role !== 'admin') {
+    history.replaceState(null, '', '#/');
+    renderHome();
+  } else if (view === 'admin') renderAdmin();
+  else if (view === 'deck' && deck) renderDeck(deck);
   else if (view === 'study' && deck) renderStudy(deck);
   else if (view === 'stats') renderStats(deck);
   else if (view === 'upcoming') renderUpcoming(deck);
@@ -2472,7 +2739,7 @@ document.addEventListener('keydown', (e) => {
     const deck = store.deck(card.deckId);
     const side = deck.speak === 'front' || !session.revealed ? 'front' : 'back';
     speakSideOf(card, deck, side);
-  } else if (e.key.toLowerCase() === 'e') {
+  } else if (e.key.toLowerCase() === 'e' && store.editable(session.deckId)) {
     e.preventDefault();
     openCardDialog({ card: store.card(session.cardId) });
   }
@@ -2504,5 +2771,6 @@ try {
   render();
 } catch {
   offline = true;
+  applyTheme();
   renderOffline();
 }
