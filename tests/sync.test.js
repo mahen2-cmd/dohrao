@@ -176,6 +176,14 @@ test('cards added later reach recipients at the end of their reserve', async () 
   assert.deepEqual(later.map((c) => [c.id, c.order]).sort(), [['c4', 3], ['c5', 4]]);
 });
 
+test('deleting something already gone is done, not rejected', async () => {
+  const { db, ana } = await seed();
+  const gone = { deletedCards: ['c1'], deletedDecks: ['d1'] };
+  assert.deepEqual(applyChanges(db, ana.id, gone, NOW), { rejected: [] });
+  assert.deepEqual(applyChanges(db, ana.id, gone, NOW), { rejected: [] });
+  assert.deepEqual(applyChanges(db, ana.id, { deletedCards: ['never'], deletedDecks: ['never'] }, NOW), { rejected: [] });
+});
+
 test('daily, log and settings are per user', async () => {
   const { db, ana, ben } = await seed();
   applyChanges(db, ana.id, { daily: { a: 1 }, log: { x: [1] }, settings: { theme: 'dark' }, savedAt: NOW }, NOW);

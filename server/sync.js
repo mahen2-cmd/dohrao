@@ -144,12 +144,15 @@ export function applyChanges(db, userId, changes, now) {
   try {
     each(changes.deletedCards, (_, id) => {
       const deckId = deckOfCard(db, id);
-      if (deckId === undefined || access(db, userId, deckId) !== 'own') return false;
+      if (deckId === undefined) return true; // already gone
+      if (access(db, userId, deckId) !== 'own') return false;
       db.prepare('DELETE FROM cards WHERE id = ?').run(id);
       return true;
     });
     each(changes.deletedDecks, (_, id) => {
-      if (access(db, userId, id) !== 'own') return false;
+      const kind = access(db, userId, id);
+      if (kind === null) return true; // already gone
+      if (kind !== 'own') return false;
       db.prepare('DELETE FROM decks WHERE id = ?').run(id);
       return true;
     });
