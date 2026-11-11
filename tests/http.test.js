@@ -202,6 +202,19 @@ test('requests for another host are refused', async (t) => {
   assert.equal(own.status, 200);
 });
 
+test('static files stay inside the folders they are served from', async (t) => {
+  const { port } = await start(t);
+  for (const path of [
+    'js/..%2F..%2Fpackage.json', 'js/..%2Fserver%2Fauth.js', 'js/..%2F..%2Fdata%2Frecall.db',
+    'css/%2e%2e/%2e%2e/package.json', 'js/..%5C..%5Cpackage.json', 'js/app.js%00', 'server.js', 'data/recall.db',
+  ]) {
+    assert.equal((await call(port, 'GET', path)).status, 404, path);
+  }
+  assert.equal((await call(port, 'GET', 'js/app.js')).status, 200);
+  assert.equal((await call(port, 'GET', 'index.html')).status, 200);
+  assert.equal((await call(port, 'GET', 'api/media/..%2F..%2Fpackage.json', { cookie: (await logIn(port, 'admin', 'admin-password')).cookie })).status, 404);
+});
+
 test('tts audio is cacheable on the phone', async (t) => {
   const { port, invite } = await start(t);
   const { cookie } = await signUp(port, invite);

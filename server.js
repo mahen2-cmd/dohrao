@@ -6,7 +6,7 @@ import { createHash } from 'node:crypto';
 import { mkdirSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { access, mkdir, readFile, rename, writeFile } from 'node:fs/promises';
-import { extname, join, normalize, resolve } from 'node:path';
+import { extname, join, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { readAnkiPackage } from './anki.js';
@@ -162,10 +162,13 @@ async function fileRoute(res, task) {
 
 async function staticFile(path, res) {
   if (path === '/') path = '/index.html';
-  // Only the app itself is served; the data folder is not reachable by URL.
-  const allowed = path === '/index.html' || ['/js/', '/css/', '/vendor/'].some((dir) => path.startsWith(dir));
-  const file = join(ROOT, normalize(path));
-  if (!allowed || !file.startsWith(ROOT)) throw new Error('not found');
+  // Only the app itself is served; the data folder is not reachable by URL. The file is
+  // resolved first and must then lie inside one of the served folders.
+  if (/\.\.|\\|\0/.test(path)) throw new Error('not found');
+  const file = resolve(ROOT, `.${path}`);
+  const allowed = file === join(ROOT, 'index.html')
+    || ['js', 'css', 'vendor'].some((dir) => file.startsWith(join(ROOT, dir) + sep));
+  if (!allowed) throw new Error('not found');
   const body = await readFile(file);
   res.writeHead(200, {
     'Content-Type': TYPES[extname(file)] ?? 'application/octet-stream',
