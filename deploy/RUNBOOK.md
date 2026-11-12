@@ -224,3 +224,58 @@ reboot                                     # if it says a restart is required
 ```
 
 Recall and Caddy start again by themselves after a reboot.
+
+## 9. Topics: the key and the one-off sort of Portuguese A1
+
+Sorting cards into topics for the admin uses Anthropic's API, so it needs a key. Without one
+everything else works and sorting is simply off. Give the key to the server in one of two
+ways. Either put it in the data folder, readable only by the service user:
+
+```bash
+# On the server
+cat > /var/lib/recall/claude.json <<'JSON'
+{"apiKey": "sk-ant-...", "model": "claude-opus-5-5"}
+JSON
+chown recall:recall /var/lib/recall/claude.json
+chmod 600 /var/lib/recall/claude.json
+systemctl restart recall
+```
+
+or add `Environment=ANTHROPIC_API_KEY=sk-ant-...` to the `[Service]` section of the `recall`
+unit (`systemctl edit recall`), then `systemctl restart recall`. To use a cheaper model later,
+change `model`. Deploying now runs `npm ci` on the server (the Anthropic SDK is a dependency),
+so the server needs internet access when you deploy; `deploy.sh` does it for you.
+
+**The one-off sort.** Your Portuguese A1 cards came from the `new_cards_<topic>.csv` files.
+This sorts the cards that match them into topics, with no AI involved (about 4,800 of the
+6,500). Run it once after the first deploy that has topics:
+
+```bash
+# On your computer, from the folder that holds the new_cards_*.csv files
+ssh root@203.0.113.10 'mkdir -p /tmp/topic-files'
+scp new_cards_*.csv root@203.0.113.10:/tmp/topic-files/
+ssh root@203.0.113.10 'chown -R recall:recall /tmp/topic-files'
+```
+
+```bash
+# On the server. Stop the service first, as in step 4, so nothing changes underneath it.
+systemctl stop recall
+cd /opt/recall
+# Dry run first: prints the counts and changes nothing.
+sudo -u recall node scripts/assign-topics.js --data /var/lib/recall --username yourname \
+  --deck "Portuguese A1" --files /tmp/topic-files --dry-run
+# Then for real. It first saves /var/lib/recall/backups/recall-before-topics-<date>.db.
+sudo -u recall node scripts/assign-topics.js --data /var/lib/recall --username yourname \
+  --deck "Portuguese A1" --files /tmp/topic-files
+systemctl start recall
+rm -rf /tmp/topic-files
+```
+
+Use your own admin username. It only writes topics onto cards that have none; it never
+touches a schedule or your progress, and it leaves a card unsorted if two files list it. It
+refuses to run if that day's before-topics backup already exists. To undo it, stop the service
+and copy that backup over `recall.db` (see step 7).
+
+Then open Portuguese A1 in the app and press **Sort now** to place the remaining cards, about
+1,700, with the AI. That costs a small charge per batch of about 100 cards.
+
