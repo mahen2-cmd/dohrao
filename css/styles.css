@@ -2751,3 +2751,96 @@ table.upcoming {
     transition: none !important;
   }
 }
+
+/* ---- Study by topic ------------------------------------------------------ */
+
+.btn.topic-pick {
+  max-width: 200px;
+}
+.btn.topic-pick > span:first-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.reserve select.reserve-topic {
+  height: 36px;
+  max-width: 190px;
+  padding: 0 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text);
+}
+.reserve select.reserve-topic:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.pick-note {
+  margin: 0 0 12px;
+  color: var(--muted);
+  font-size: 13.5px;
+}
+.pick-list {
+  max-height: min(60vh, 420px);
+  overflow-y: auto;
+  border-top: 1px solid var(--border);
+}
+.pick-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+  padding: 6px 2px;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+}
+.pick-row.nested {
+  padding-left: 28px;
+}
+.pick-row input {
+  flex: none;
+  margin: 0;
+  accent-color: var(--accent);
+}
+.pick-name {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.pick-count {
+  flex: none;
+  color: var(--muted);
+  font-size: 12.5px;
+}
+.pick-head {
+  display: flex;
+  align-items: stretch;
+}
+.pick-head .pick-row {
+  flex: 1;
+  min-width: 0;
+}
+.pick-toggle {
+  flex: none;
+  align-self: center;
+}
+.pick-toggle[aria-expanded='true'] .icon {
+  transform: rotate(180deg);
+}
+.pick-topics[hidden] {
+  display: none;
+}
+.pick-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 18px;
+}
+@media (max-width: 640px) {
+  .reserve select.reserve-topic {
+    flex: 1 1 100%;
+    max-width: none;
+  }
+}
