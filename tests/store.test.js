@@ -626,3 +626,90 @@ test('topic edits never touch scheduling fields', () => {
   store.deleteTopic(deck.id, t.id, T0 + 3);
   assert.equal(sched(), before);
 });
+
+// ---- study, count and pull by topic ----
+
+const topicId = (deckId, key) => store.deck(deckId).topics.find((t) => t.key === key).id;
+
+test('a topic session shows only that topic and shares the daily new allowance', () => {
+  const deck = setup({ newPerDay: 3 });
+  store.addCards(deck.id, [['a', '1'], ['b', '2'], ['c', '3']], T0, { topicKey: 'verb_ser' });
+  store.addCards(deck.id, [['d', '4'], ['e', '5']], T0, { topicKey: 'animals' });
+  const ser = ['t:' + topicId(deck.id, 'verb_ser')];
+  assert.equal(store.counts(deck.id, T0, ser).new, 3);
+  for (let i = 0; i < 2; i++) store.answerCard(store.nextCard(deck.id, T0, ser).id, Rating.Good, T0);
+  assert.equal(store.counts(deck.id, T0).new, 1);
+  assert.equal(store.counts(deck.id, T0, ser).newLeft, 1);
+});
+
+test('filtered counts are zero while deck counts are not', () => {
+  const deck = setup();
+  store.addCards(deck.id, [['a', '1']], T0, { topicKey: 'verb_ser' });
+  store.addCards(deck.id, [['d', '4']], T0, { topicKey: 'animals' });
+  const [ser, animals] = ['verb_ser', 'animals'].map((k) => ['t:' + topicId(deck.id, k)]);
+  const card = store.nextCard(deck.id, T0, animals);
+  store.answerCard(card.id, Rating.Easy, T0);
+  const later = T0 + 40 * DAY;
+  assert.equal(store.counts(deck.id, later, animals).review, 1);
+  assert.equal(store.counts(deck.id, later, ser).review, 0);
+  assert.equal(store.counts(deck.id, later, ser).new, 1);
+  assert.equal(store.counts(deck.id, later, ser).cards, 2);
+  assert.equal(store.counts(deck.id, later).total, 2);
+  assert.equal(store.nextCard(deck.id, later, ser).front, 'a');
+  assert.equal(store.counts(deck.id, T0, []).total, store.counts(deck.id, T0).total);
+  // A group with no topics holds no cards, so it gives zero.
+  const empty = store.createGroup(deck.id, 'Empty', T0);
+  assert.equal(store.counts(deck.id, later, ['g:' + empty.id]).total, 0);
+});
+
+test('pulling by topic takes that topic in reserve order', () => {
+  const deck = setup();
+  store.addCards(deck.id, [['a1', ''], ['a2', ''], ['a3', '']], T0, { reserved: true, topicKey: 'x' });
+  store.addCards(deck.id, [['b1', ''], ['b2', '']], T0, { reserved: true });
+  const x = ['t:' + topicId(deck.id, 'x')];
+  assert.equal(store.pullFromReserve(deck.id, 2, T0, x), 2);
+  const pulled = store.cardsIn(deck.id).filter((c) => !c.reserved).map((c) => c.front).sort();
+  assert.deepEqual(pulled, ['a1', 'a2']);
+  assert.equal(store.counts(deck.id, T0).reserve, 3);
+  assert.equal(store.pullFromReserve(deck.id, 1, T0, ['unsorted']), 1);
+  assert.ok(!store.cardsIn(deck.id).find((c) => c.front === 'b1').reserved);
+});
+
+test('answering in a topic session schedules exactly as in a mixed one', () => {
+  const run = (filtered) => {
+    const deck = setup();
+    store.addCards(deck.id, [['a', '1']], T0, { topicKey: 'verb_ser' });
+    store.addCards(deck.id, [['b', '2']], T0, { topicKey: 'animals' });
+    const f = filtered ? ['t:' + topicId(deck.id, 'verb_ser')] : undefined;
+    const c = store.nextCard(deck.id, T0, f);
+    store.answerCard(c.id, Rating.Good, T0);
+    const { due, state, scheduledDays, stability, difficulty, reps, lapses } = store.card(c.id);
+    return { front: c.front, due, state, scheduledDays, stability, difficulty, reps, lapses };
+  };
+  const mixed = run(false);
+  const topic = run(true);
+  assert.equal(mixed.front, topic.front);
+  assert.deepEqual(topic, mixed);
+});
+
+test('findCards filters by topic and unsorted', () => {
+  const deck = setup();
+  store.addCards(deck.id, [['a', '1']], T0, { topicKey: 'verb_ser' });
+  store.addCards(deck.id, [['b', '2']], T0, { topicKey: 'animals' });
+  store.addCard(deck.id, 'loose', '3', T0);
+  const ser = 't:' + topicId(deck.id, 'verb_ser');
+  assert.deepEqual(store.findCards(deck.id, { topics: [ser] }, T0).map((c) => c.front), ['a']);
+  assert.deepEqual(store.findCards(deck.id, { topics: ['unsorted'] }, T0).map((c) => c.front), ['loose']);
+  assert.equal(store.findCards(deck.id, { topics: [ser, 'unsorted'] }, T0).length, 2);
+  assert.equal(store.findCards(deck.id, {}, T0).length, 3);
+});
+
+test('topicCounts reports due, fresh and reserve per topic', () => {
+  const deck = setup();
+  store.addCards(deck.id, [['a', '1'], ['b', '2']], T0, { topicKey: 'verb_ser' });
+  store.addCards(deck.id, [['r', '3']], T0, { topicKey: 'verb_ser', reserved: true });
+  store.addCard(deck.id, 'loose', '3', T0);
+  const m = store.topicCounts(deck.id, T0);
+  assert.deepEqual(m.get(topicId(deck.id, 'verb_ser')), { due: 0, fresh: 2, reserve: 1 });
+  assert.deepEqual(m.get(''), { due: 0, fresh: 1, reserve: 0 });
+});

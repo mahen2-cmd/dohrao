@@ -337,7 +337,7 @@ test('importing into Recall adds decks once and makes the cards due as in Anki',
   assert.equal(deck.name, 'Languages::Portuguese');
   assert.equal(deck.newPerDay, 15);
   // One overdue review, two cards in learning steps and three new cards.
-  assert.deepEqual(store.counts(deck.id, NOW), { new: 3, learning: 2, review: 1, total: 6, tomorrow: { new: 0, learning: 0, review: 0, total: 0 }, cards: 8, reserve: 0 });
+  assert.deepEqual(store.counts(deck.id, NOW), { new: 3, learning: 2, review: 1, total: 6, newLeft: 14, tomorrow: { new: 0, learning: 0, review: 0, total: 0 }, cards: 8, reserve: 0 });
   assert.equal(store.counts(deck.id, NOW + 3 * DAY).review, 2);
   assert.equal(store.nextCard(deck.id, NOW).front, 'Late');
 
@@ -367,7 +367,7 @@ test('an Anki import can put its new cards on reserve, in Anki’s order, leavin
   const [deck] = store.decks();
   assert.deepEqual(store.reserveIn(deck.id).map((card) => card.front), ['First new', 'Second new', 'Lisboa fica em [país]']);
   // Nothing new is left to study; the review and learning cards keep their schedule.
-  assert.deepEqual(store.counts(deck.id, NOW), { new: 0, learning: 2, review: 1, total: 3, tomorrow: { new: 0, learning: 0, review: 0, total: 0 }, cards: 8, reserve: 3 });
+  assert.deepEqual(store.counts(deck.id, NOW), { new: 0, learning: 2, review: 1, total: 3, newLeft: 14, tomorrow: { new: 0, learning: 0, review: 0, total: 0 }, cards: 8, reserve: 3 });
   assert.equal(store.pullFromReserve(deck.id, 1, NOW), 1);
   assert.equal(store.counts(deck.id, NOW).new, 1);
 });

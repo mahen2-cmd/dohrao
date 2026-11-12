@@ -3,7 +3,7 @@
 import * as api from './api.js';
 import { mergeCounts } from './counts.js';
 import { dayKey, streakOf } from './progress.js';
-import { readableTopicName, prefixGroup } from './topics.js';
+import { readableTopicName, prefixGroup, resolveFilter, inFilter } from './topics.js';
 import { DAY, State, dayStart, newSchedule, nextDayAt, preview, schedule } from './fsrs.js';
 
 // Per-deck settings.
@@ -564,9 +564,11 @@ export function reverseReserve(deckId) {
 /**
  * Move up to `n` cards from the front of a deck's reserve in with its new cards, where
  * they wait behind the new cards already there, in the order they had. Returns how many moved.
+ * With a study `filter` (see `resolveFilter`), only reserve cards in it count: the first `n` of them.
  */
-export function pullFromReserve(deckId, n = Infinity, now = Date.now()) {
-  return pullIn(reserveIn(deckId).slice(0, Math.max(0, n)), now);
+export function pullFromReserve(deckId, n = Infinity, now = Date.now(), filter) {
+  const set = resolveFilter(deck(deckId), filter);
+  return pullIn(reserveIn(deckId).filter((c) => inFilter(c, set)).slice(0, Math.max(0, n)), now);
 }
 
 /**
@@ -672,14 +674,16 @@ const SORTS = {
  *           New and reserve cards have no review coming, so any of these leaves them out.
  *   added   'today', 'week' or 'month': how recently the card was created
  *   lapses  'some' (forgotten at least once) or 'many' (three times or more)
+ *   topics  a study filter (see `resolveFilter`: `g:` groups, `t:` topics, `'unsorted'`); none means all
  *   sort    'newest', 'oldest', 'due' (soonest first), 'front' (A to Z), 'lapses' or
  *           'reserve' (the reserve first, in the order it is pulled in)
  */
-export function findCards(deckId, { text = '', groups = [], due = 'any', added = 'any', lapses = 'any', sort = 'newest' } = {}, now = Date.now()) {
+export function findCards(deckId, { text = '', groups = [], due = 'any', added = 'any', lapses = 'any', topics = [], sort = 'newest' } = {}, now = Date.now()) {
   const q = text.trim().toLowerCase();
   const today = dayStart(now);
   const tomorrow = nextDayAt(now);
   const wanted = new Set(groups);
+  const topicSet = resolveFilter(deck(deckId), topics);
   const scheduled = (c) => !c.reserved && c.state !== State.New;
   const dueBefore = { today: tomorrow, week: tomorrow + 6 * DAY, month: tomorrow + 29 * DAY }[due];
   const addedSince = { today, week: today - 6 * DAY, month: today - 29 * DAY }[added];
@@ -691,6 +695,7 @@ export function findCards(deckId, { text = '', groups = [], due = 'any', added =
       (c) =>
         (!q || `${c.front}\n${c.back}`.toLowerCase().includes(q)) &&
         (!wanted.size || wanted.has(cardGroup(c, now))) &&
+        inFilter(c, topicSet) &&
         (due !== 'overdue' || (c.state === State.Review && !c.reserved && c.due < today)) &&
         (!dueBefore || (scheduled(c) && c.due < dueBefore)) &&
         (!addedSince || c.created >= addedSince) &&
@@ -817,24 +822,45 @@ export function setCardsTopic(ids, topicId, now = Date.now()) {
 /** How many cards in a deck have no topic and were not left that way by hand. */
 export const unsortedCount = (deckId) => cardsIn(deckId).filter((c) => !c.topic && c.topicBy !== 'manual').length;
 
+/**
+ * For each topic id (`''` is Unsorted) with cards, what it holds now: `due` learning and review
+ * cards, `fresh` new cards (all of them, not only today's allowance) and `reserve` cards.
+ */
+export function topicCounts(deckId, now = Date.now()) {
+  const out = new Map();
+  const end = nextDayAt(now);
+  for (const c of cardsIn(deckId)) {
+    const n = out.get(c.topic ?? '') ?? { due: 0, fresh: 0, reserve: 0 };
+    if (c.reserved) n.reserve++;
+    else if (c.state === State.New) n.fresh++;
+    else if (c.state === State.Review ? c.due < end : isLearning(c)) n.due++;
+    out.set(c.topic ?? '', n);
+  }
+  return out;
+}
+
 // ---- Study queue ----------------------------------------------------------
 
 const isLearning = (c) => c.state === State.Learning || c.state === State.Relearning;
 
-function queue(deckId, now) {
+// The cards to study today. The new-card allowance is the deck's, whatever the `filter` (a study
+// filter, see `resolveFilter`): the filter picks which cards fill it, and none means all of them.
+function queue(deckId, now, filter) {
   const d = deck(deckId);
+  const set = resolveFilter(d, filter);
   const today = dayStart(now);
   const all = cardsIn(deckId).filter((c) => !c.reserved);
   const introduced = all.filter((c) => c.introduced >= today).length;
   const allowance = Math.max(0, d.newPerDay - introduced);
   return {
-    learning: all.filter(isLearning).sort((a, b) => a.due - b.due),
+    allowance,
+    learning: all.filter((c) => isLearning(c) && inFilter(c, set)).sort((a, b) => a.due - b.due),
     // Review cards are scheduled in whole days, so anything due today counts.
     review: all
-      .filter((c) => c.state === State.Review && c.due < nextDayAt(now))
+      .filter((c) => c.state === State.Review && c.due < nextDayAt(now) && inFilter(c, set))
       .sort((a, b) => a.due - b.due),
     fresh: all
-      .filter((c) => c.state === State.New)
+      .filter((c) => c.state === State.New && inFilter(c, set))
       .sort((a, b) => (a.pulled ?? a.created) - (b.pulled ?? b.created))
       .slice(0, allowance),
   };
@@ -843,15 +869,18 @@ function queue(deckId, now) {
 /**
  * How many cards are waiting in a deck today, by kind, and how many it holds in all and on reserve.
  * `tomorrow` counts the same kinds for tomorrow, as `upcoming` does.
+ * With a study `filter`, `new`, `learning`, `review` and `total` count only cards in it; the rest
+ * stay deck-wide. `newLeft` is the deck's new-card allowance left today, which a filter shares.
  */
-export function counts(deckId, now = Date.now()) {
-  const q = queue(deckId, now);
+export function counts(deckId, now = Date.now(), filter) {
+  const q = queue(deckId, now, filter);
   const n = { new: q.fresh.length, learning: q.learning.length, review: q.review.length };
   const all = cardsIn(deckId);
   const { start, ...tomorrow } = upcoming(deckId, 2, now)[1];
   return {
     ...n,
     total: n.new + n.learning + n.review,
+    newLeft: q.allowance,
     tomorrow,
     cards: all.length,
     reserve: all.filter((c) => c.reserved).length,
@@ -894,9 +923,9 @@ export function upcoming(deckId, days = 30, now = Date.now()) {
   return out;
 }
 
-/** The next card to study, or `undefined` when the deck is done for today. */
-export function nextCard(deckId, now = Date.now()) {
-  const q = queue(deckId, now);
+/** The next card to study, or `undefined` when the deck is done for today. `filter` limits it to a study filter. */
+export function nextCard(deckId, now = Date.now(), filter) {
+  const q = queue(deckId, now, filter);
   if (q.learning[0]?.due <= now) return q.learning[0];
   // Otherwise show waiting learning cards early rather than making the user wait.
   return q.review[0] ?? q.fresh[0] ?? q.learning[0];
