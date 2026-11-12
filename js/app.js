@@ -911,6 +911,7 @@ async function storeSheetImages(rows, images) {
 // Decks being sorted now; one poll loop each. Sorting runs in the background, and studying carries on.
 const sorting = new Set();
 const proposing = new Set();
+const SORT_LIMIT = 15 * 60 * 1000;
 let sortingOffShown = false;
 const newId = () => globalThis.crypto?.randomUUID?.() ?? Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
 
@@ -933,7 +934,12 @@ async function requestSort(deckId, { started = false } = {}) {
   if (!started && !(store.deck(deckId).topics ?? []).length) return;
   sorting.add(deckId);
   try {
-    await store.flush();
+    try {
+      await store.flush();
+    } catch {
+      toast('Could not save before sorting. Try again in a moment.');
+      return;
+    }
     const before = store.unsortedCount(deckId);
     if (!started) {
       try {
@@ -946,8 +952,15 @@ async function requestSort(deckId, { started = false } = {}) {
     }
     render();
     let failures = 0;
+    const giveUp = Date.now() + SORT_LIMIT;
     for (;;) {
       await new Promise((resolve) => setTimeout(resolve, 5000));
+      // Signed out, or the deck is gone: nothing left to wait for.
+      if (!canSort(deckId)) return;
+      if (Date.now() > giveUp) {
+        toast('Sorting is taking a long time. Check back later.');
+        return;
+      }
       try {
         if (!(await api.admin.sortStatus(deckId)).running) break;
         failures = 0;
@@ -958,9 +971,16 @@ async function requestSort(deckId, { started = false } = {}) {
         }
       }
     }
-    await store.refresh();
+    try {
+      await store.refresh();
+    } catch {
+      toast('Sorted, but could not reload the deck. Reload the page.');
+      return;
+    }
     const done = before - store.unsortedCount(deckId);
     toast(done > 0 ? `Sorted ${plural(done, 'card')}` : 'Sorting finished');
+  } catch {
+    toast('Sorting stopped. Try again in a moment.');
   } finally {
     sorting.delete(deckId);
     render();
@@ -1270,9 +1290,10 @@ function openAnkiDialog(fileName, { decks, suspended, blank, sound, missingImage
     {
       onsubmit: (e) => {
         e.preventDefault();
-        const added = store.importAnkiDecks(incoming, Date.now(), { reserved: reserved.checked });
+        const touched = new Set();
+        const added = store.importAnkiDecks(incoming, Date.now(), { reserved: reserved.checked, touched });
         dialog.close();
-        for (const d of store.decks()) if (store.unsortedCount(d.id) > 0) requestSort(d.id);
+        for (const id of touched) requestSort(id);
         const onReserve = !reserved.checked ? '' : fresh === added ? ' onto the reserve' : `, ${fresh.toLocaleString()} of them on reserve`;
         toast(`Imported ${plural(added, 'card')} from Anki${onReserve}`);
       },

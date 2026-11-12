@@ -465,9 +465,9 @@ export function addCards(deckId, pairs, now = Date.now(), { reserved = false, to
  * Add decks read from an Anki file by the server, with every card's schedule as it was.
  * Importing the same file again adds only the cards that are not here yet. With `reserved`,
  * the new cards go on their deck's reserve, in Anki's order; cards already being studied keep
- * their schedule. Returns how many cards were added.
+ * their schedule. Returns how many cards were added; a `touched` Set collects the ids of the decks that got cards.
  */
-export function importAnkiDecks(imported, now = Date.now(), { reserved = false } = {}) {
+export function importAnkiDecks(imported, now = Date.now(), { reserved = false, touched } = {}) {
   const known = ankiCardIds();
   let added = 0;
   for (const { ankiId, name, settings, cards } of imported) {
@@ -483,6 +483,7 @@ export function importAnkiDecks(imported, now = Date.now(), { reserved = false }
       state.cards.push({ ...newSchedule(now), ...c, id: uid(), deckId: d.id, ...reserveFlag(reserved && c.state === State.New) });
     }
     added += fresh.length;
+    touched?.add(d.id);
   }
   if (added) save();
   return added;
