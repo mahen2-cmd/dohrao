@@ -36,6 +36,11 @@ In the registrar's DNS settings, add an **A record**:
 |---|---|---|
 | A | `recall` (or `@` for the bare domain) | `203.0.113.10` |
 
+If your DNS is at **Cloudflare**, set the record's proxy status to **DNS only** (the grey
+cloud, not the orange one). With the proxy on, every visitor reaches Recall from Cloudflare's
+addresses, so they all share one login rate limit and can lock each other out, and Caddy's
+certificate requests can fail.
+
 If the server also has an IPv6 address, add an **AAAA record** with it too. Check that it has
 taken effect before going on (it can take from a minute to an hour):
 
@@ -59,7 +64,7 @@ Copy the deploy folder up and run the setup script once:
 
 ```bash
 # On your computer, from the Recall folder
-scp -r deploy root@203.0.113.10:/root/recall-deploy
+rsync -a deploy/ root@203.0.113.10:/root/recall-deploy/
 ssh root@203.0.113.10 'bash /root/recall-deploy/setup.sh recall.example.com'
 ```
 
@@ -98,11 +103,16 @@ Then, from the Recall folder:
 
 ```bash
 # On your computer. Pick your own username and name; it asks for the password (8+ characters).
-node scripts/migrate-json.js --data data --username mahen --name "Mahen"
+node scripts/migrate-json.js --data data --username yourname --name "Your Name"
 ```
 
 It prints how many decks and cards it moved. `data/recall.json` is left as it was, as a
 fallback.
+
+**Do not start Recall on your computer between this step and the copy below.** A running
+server keeps its newest changes in a side file, `data/recall.db-wal`, and copying
+`recall.db` without it leaves them behind. If you did start it, stop it first (Ctrl+C), and if
+a `data/recall.db-wal` is still there, copy it up together with `recall.db`.
 
 Copy the database, the images and the saved audio to the server, and give them to the
 `recall` user:

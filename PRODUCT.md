@@ -8,22 +8,22 @@ web
 
 ## Users
 
-The author first: a self-learner studying European Portuguese vocabulary and technical subjects such as robotics maths (Lynch & Park's *Modern Robotics*). Later, other self-learners who clone the repository from GitHub and run it themselves, many of them coming from Anki.
+The author first: a self-learner studying European Portuguese vocabulary and technical subjects such as robotics maths (Lynch & Park's *Modern Robotics*). Now also friends and family, each with their own account on the hosted app, mostly on their phones, some of them coming from Anki.
 
 They use it in several settings, all of them real:
 
 - long keyboard-driven review sessions at a desktop;
-- short bursts of review on a phone over the local network, using touch;
+- short bursts of review on a phone, using touch;
 - long stretches writing cards: equations, screenshots from books, imports from spreadsheets and Anki;
 - often in the evening or in low light, in dark mode.
 
 ## Product Purpose
 
-Recall is a small, fast spaced-repetition flashcard app with Anki's scheduling and a cleaner interface. It runs on the learner's own computer, keeps every card in a plain file they own (`data/recall.json`, images in `data/media/`), and reads cards aloud, with a language for each side. Success means a learner reviews every day without friction and trusts that the schedule is exactly Anki's.
+Recall is a small, fast spaced-repetition flashcard app with Anki's scheduling and a cleaner interface. It is hosted on one small server at an HTTPS address, where each person signs in to their own decks, cards and progress (kept in the server's database, images in its `media/` folder), and it reads cards aloud, with a language for each side. Success means a learner reviews every day without friction and trusts that the schedule is exactly Anki's.
 
 ## Positioning
 
-Recall uses Anki's own scheduler (SM-2 by default, FSRS-6 per deck), ported from Anki's source, and an Anki import that keeps every card's due date, interval and ease. It adds things Anki makes awkward: maths typed in a visual editor, images pasted straight onto a card, per-side read-aloud in two languages, and a reserve of cards held out of study until pulled in. It is local-first and the data is a plain file the learner owns.
+Recall uses Anki's own scheduler (SM-2 by default, FSRS-6 per deck), ported from Anki's source, and an Anki import that keeps every card's due date, interval and ease. It adds things Anki makes awkward: maths typed in a visual editor, images pasted straight onto a card, per-side read-aloud in two languages, and a reserve of cards held out of study until pulled in. The owner can give decks to other people, who study them at their own pace.
 
 ## Operating Context
 
@@ -32,14 +32,14 @@ Recall uses Anki's own scheduler (SM-2 by default, FSRS-6 per deck), ported from
 - Card authoring: LaTeX between `\( \)` and `\[ \]` markers, the MathLive equation editor, images pasted, dropped or picked.
 - Imports: Excel/CSV into a deck or its reserve, and Anki `.apkg` packages.
 - Review planning: statistics (forecast, activity calendar, card states, answer buttons, retention) and upcoming cards by day.
-- Started with `npm start` and opened at `http://localhost:5173`, on desktop or on a phone on the same network.
+- Opened at the hosted HTTPS address, on desktop or on a phone, after signing in. Sign-up needs an invite code from the admin.
 
 ## Capabilities and Constraints
 
 - Decks and cards: create, edit, move, search, filter, sort, select and delete in bulk.
 - Per-deck settings: new cards per day, easy interval, scheduler (Anki default or FSRS), FSRS retention, auto-play audio, front and back language, speaking speed, keeping generated audio.
 - Reserve: import into it, pull in N or all, reorder by drag or by Up/Down/To top/To bottom, reverse the whole order, add reversed copies, send cards back.
-- Must work fully offline: KaTeX and MathLive are vendored in `vendor/`, and any fonts or assets must be bundled locally, with nothing loaded from a CDN.
+- Online only: the app needs the server to load and save. Answers given with no signal are kept on the device and sent once the connection is back. KaTeX and MathLive are vendored in `vendor/`, and fonts and assets are served by Recall itself, with nothing loaded from a CDN.
 - The current stack is plain HTML, CSS and JavaScript with no build step, served by a single Node file (`server.js`). Avoiding new dependencies was not made a hard rule.
 - Light and dark themes are both first-class.
 - Works at phone width with touch.
@@ -62,7 +62,7 @@ Recall uses Anki's own scheduler (SM-2 by default, FSRS-6 per deck), ported from
 
 1. The daily review is sacred: nothing gets between the learner and the next card.
 2. Trust through fidelity: scheduling numbers match Anki's, and the interface shows them honestly.
-3. The learner owns everything: local, offline, a plain file.
+3. The learner's progress is never lost: unsent answers are kept until the server has them, and the server is backed up daily.
 4. Authoring is a first-class job, not an afterthought to studying.
 5. Quiet enough for a late-night session, clear enough on a phone in a queue.
 
