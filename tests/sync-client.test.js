@@ -210,6 +210,62 @@ test('logging out sends what is left and forgets it', async () => {
   assert.equal(store.storageInfo().available, false);
 });
 
+test('logging out with answers the server has not taken keeps them and stays signed in', async () => {
+  let online = false;
+  const calls = serve((url) => {
+    if (url === 'api/state') return json(200, view());
+    if (url === 'api/logout') return new Response(null, { status: 204 });
+    if (!online) return json(502, { error: 'bad-gateway' });
+    return json(200, { rejected: [] });
+  });
+  await store.load();
+  store.answerCard('c1', Rating.Good, T0);
+  await settle();
+  await assert.rejects(store.logOut(), { message: 'unsaved' });
+  assert.ok(!calls.some((c) => c.url === 'api/logout'));
+  assert.equal(store.storageInfo().available, true);
+  assert.equal(store.card('c1').reps, 1);
+  const kept = JSON.parse(storage.getItem('recall.pending.u1'));
+  assert.deepEqual(kept.cards.map((c) => c.id), ['c1']);
+
+  // Once the server can be reached, logging out sends the answer first.
+  online = true;
+  await store.logOut();
+  const order = calls.filter((c) => c.url === 'api/sync' || c.url === 'api/logout').map((c) => c.url);
+  assert.deepEqual(order.slice(-2), ['api/sync', 'api/logout']);
+  assert.deepEqual(syncs(calls).at(-1).body.cards.map((c) => c.id), ['c1']);
+  assert.deepEqual(storage.keys(), []);
+  assert.equal(store.storageInfo().available, false);
+});
+
+test('logging out while a save is on its way waits for it and sends changes made meanwhile', async () => {
+  let release;
+  let loggedOut = false;
+  const calls = serve(async (url) => {
+    if (url === 'api/state') return json(200, view());
+    if (url === 'api/logout') {
+      loggedOut = true;
+      return new Response(null, { status: 204 });
+    }
+    if (loggedOut) return json(401, { error: 'signed-out' });
+    if (syncs(calls).length === 1) await new Promise((resolve) => (release = resolve));
+    return json(200, { rejected: [] });
+  });
+  await store.load();
+  store.updateCard('c1', { front: 'first' });
+  await settle();
+  store.updateCard('c2', { front: 'during' });
+  const out = store.logOut();
+  await settle();
+  release();
+  await out;
+  const order = calls.filter((c) => c.url === 'api/sync' || c.url === 'api/logout');
+  assert.deepEqual(order.map((c) => c.url), ['api/sync', 'api/sync', 'api/logout']);
+  assert.deepEqual(order[1].body.cards.map((c) => `${c.id}:${c.front}`), ['c2:during']);
+  assert.deepEqual(storage.keys(), []);
+  assert.equal(store.storageInfo().available, false);
+});
+
 test('refresh takes newer state from the server only when nothing is waiting to be sent', async () => {
   let notified = 0;
   store.onStorageChange(() => notified++);

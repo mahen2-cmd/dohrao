@@ -864,7 +864,7 @@ function planImport(rows, { front, back, header, skipExisting, existing }) {
 /**
  * Keep the pictures read from a spreadsheet on the server, and point the cells at the stored
  * copies. A picture the server will not take, such as a drawing saved by Excel as EMF, is left
- * out, as are all of them without a server. Returns the rows and how many pictures were left out.
+ * out, as is any picture whose upload fails. Returns the rows and how many were left out.
  */
 async function storeSheetImages(rows, images) {
   const stored = new Map();
@@ -1131,14 +1131,15 @@ function storageChip() {
   );
 }
 
-/** Log out after sending what is left; with no connection, stay signed in and say so. */
+/** Log out after sending what is left; with answers unsent or no connection, stay signed in and say so. */
 async function logOut() {
   try {
     await store.logOut();
   } catch (error) {
     // The session had already ended: start again at the login screen, keeping unsent changes.
     if (error.message === 'signed-out') return location.reload();
-    toast('Could not log out without a connection. Try again when you are online.');
+    if (error.message === 'unsaved') toast("Some answers haven't been saved yet. Try again when you're online.");
+    else toast('Could not log out without a connection. Try again when you are online.');
     return;
   }
   account = null;

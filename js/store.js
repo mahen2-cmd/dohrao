@@ -47,6 +47,8 @@ const server = { available: false, ok: true, signedOut: false, voice: null };
 let snapshot = snapshotOf(emptyState());
 let userId = null;
 let writing = false;
+// The save on its way, which resolves once it and any changes made meanwhile are sent or kept.
+let sending = Promise.resolve();
 let dirty = false;
 let retry = null;
 let notify = () => {};
@@ -235,11 +237,19 @@ export async function refresh() {
   return true;
 }
 
-/** Send what is left, log out, and forget this user's changes kept in the browser. */
+/**
+ * Send what is left, waiting for a save already on its way, then log out and forget this user's
+ * changes kept in the browser. Throws Error('unsaved'), staying signed in with those changes
+ * kept, when the server has not taken them all, and Error('signed-out') when the session had
+ * already ended.
+ */
 export async function logOut() {
   await flush();
+  if (server.signedOut) throw new Error('signed-out');
+  if (unsent()) throw new Error('unsaved');
   await api.logOut();
-  writePending(null);
+  // Anything changed while logging out stays kept for this user's next login.
+  keepPending();
   userId = null;
   server.available = false;
   useState(emptyState());
@@ -282,15 +292,22 @@ async function reload(sent, refused) {
 /**
  * Send the server what changed since it last saved. Each change is read when it is sent, and
  * only what was sent counts as saved, so edits made meanwhile go in the next request.
- * A failure to reach the server is retried every 5 seconds.
+ * A failure to reach the server is retried every 5 seconds. Resolves when nothing is on its way,
+ * waiting for a save already being sent.
  */
-export async function flush() {
-  if (!server.available || server.signedOut) return;
+export function flush() {
+  if (!server.available || server.signedOut) return Promise.resolve();
   if (writing) {
     dirty = true;
-    return;
+    return sending;
   }
   writing = true;
+  sending = send();
+  return sending;
+}
+
+/** Send changes until none are left or sending fails. */
+async function send() {
   clearTimeout(retry);
   do {
     dirty = false;
