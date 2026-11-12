@@ -89,6 +89,9 @@ function applyDeck(db, userId, deck) {
   const [shared, prefs] = split(clean, DECK_SHARED);
   const kind = access(db, userId, deck.id);
   if (kind === 'other') return false;
+  // A given deck that no longer exists was deleted by its owner; a device still showing it must
+  // not bring it back as the recipient's own.
+  if (kind === null && deck.assigned) return false;
   if (kind === null) {
     db.prepare('INSERT INTO decks (id, owner_id, data) VALUES (?, ?, ?)').run(deck.id, userId, JSON.stringify(shared));
   } else if (kind === 'own') {

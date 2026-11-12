@@ -144,6 +144,17 @@ test('a deck taken back is hidden and its changes rejected', async () => {
   assert.deepEqual(applyChanges(db, ben.id, { cards: [cardOf('c1')] }, NOW), { rejected: ['c1'] });
 });
 
+test('a given deck the admin deleted is not recreated by a recipient still showing it', async () => {
+  const { db, ben } = await seed();
+  give(db, 'd1', ben.id);
+  const view = buildView(db, ben.id, NOW);
+  db.prepare('DELETE FROM decks WHERE id = ?').run('d1');
+  const result = applyChanges(db, ben.id, { decks: view.decks, cards: view.cards }, NOW);
+  assert.deepEqual(result.rejected.sort(), ['c1', 'c2', 'c3', 'd1']);
+  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM decks').get().n, 0);
+  assert.deepEqual(buildView(db, ben.id, NOW).decks, []);
+});
+
 test('ids that are not strings of 1-100 chars are rejected', async () => {
   const { db, ana } = await seed();
   const long = 'x'.repeat(101);
