@@ -1,0 +1,18 @@
+# Recall behind Caddy. setup.sh installs this as /etc/caddy/Caddyfile with {$RECALL_DOMAIN}
+# replaced by the real domain. Caddy gets and renews the HTTPS certificate itself.
+{$RECALL_DOMAIN} {
+	encode zstd gzip
+
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options nosniff
+		Referrer-Policy same-origin
+		X-Frame-Options DENY
+	}
+
+	# No trusted_proxies here, on purpose: without it Caddy throws away any X-Forwarded-For
+	# the visitor sent and sets it to the address the connection really came from. Recall's
+	# login and sign-up rate limits trust the first X-Forwarded-For entry from this proxy, so
+	# trusting a client-supplied one would let anyone dodge the limits.
+	reverse_proxy 127.0.0.1:5173
+}

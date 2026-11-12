@@ -1,5 +1,7 @@
+import * as api from './api.js';
+import { hasRichContent, imageToken, mathSpans, mathToken, parseContent, speechText } from './content.js';
 import { DAY, MINUTE, Rating, State, dayStart } from './fsrs.js';
-import { ankiCollection, parseSpreadsheet } from './importer.js';
+import { parseSpreadsheet } from './importer.js';
 import * as store from './store.js';
 
 const app = document.getElementById('app');
@@ -7,7 +9,36 @@ const toasts = document.getElementById('toasts');
 
 // The card currently on screen in study mode.
 const session = { deckId: null, cardId: null, revealed: false, done: 0, spoken: null };
+// Who is signed in ({ id, username, name, role }), or null.
+let account = null;
+// Set when the server could not be reached as the app started.
+let offline = false;
 let query = '';
+
+// Filters on a deck's card list, reset whenever a different deck is opened.
+const NO_FILTERS = { groups: [], due: 'any', added: 'any', lapses: 'any', sort: 'newest' };
+let filters = { ...NO_FILTERS };
+let filtersDeck = null;
+// Whether the filter and sort selects are open on a phone, where they start folded away.
+let filtersOpen = false;
+// Ids of the cards ticked in that list. Only cards on screen stay selected.
+let selected = new Set();
+// How many cards the list draws at first, and how many more each "Show more" adds.
+const CARD_PAGE = 200;
+
+const CARD_GROUPS = [
+  ['new', 'New'],
+  ['learning', 'Learning'],
+  ['due', 'Due'],
+  ['later', 'Not due yet'],
+  ['reserve', 'On reserve'],
+];
+const FILTER_SELECTS = [
+  ['due', 'Next review', [['any', 'Any time'], ['overdue', 'Overdue'], ['today', 'Today or overdue'], ['week', 'Within 7 days'], ['month', 'Within 30 days']]],
+  ['added', 'Added', [['any', 'Any time'], ['today', 'Today'], ['week', 'In the last 7 days'], ['month', 'In the last 30 days']]],
+  ['lapses', 'Forgotten', [['any', 'Any'], ['some', 'At least once'], ['many', '3 times or more']]],
+  ['sort', 'Sort by', [['newest', 'Newest first'], ['oldest', 'Oldest first'], ['due', 'Next review'], ['front', 'Front, A to Z'], ['lapses', 'Most forgotten'], ['reserve', 'Reserve order']]],
+];
 
 // ---- DOM helpers ----------------------------------------------------------
 
@@ -36,13 +67,26 @@ const ICONS = {
   upload: '<path d="M12 16V5M7 9l5-5 5 5M5 20h14"/>',
   search: '<circle cx="11" cy="11" r="6.5"/><path d="M20 20l-4-4"/>',
   check: '<path d="M5 12.5l4.5 4.5L19 7.5"/>',
-  disk: '<path d="M5 4h11l3 3v13H5z"/><path d="M8 4v5h7V4M8 20v-6h8v6"/>',
-  browser: '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 9h18"/>',
   alert: '<path d="M12 4l9 16H3z"/><path d="M12 10v4M12 17v.5"/>',
   speaker: '<path d="M4 9.5v5h3.5L12 18V6L7.5 9.5H4z"/><path d="M15.5 9a4 4 0 0 1 0 6M18 6.5a7.5 7.5 0 0 1 0 11"/>',
   play: '<path d="M7 5l12 7-12 7V5z"/>',
   chart: '<path d="M5 20v-8M12 20V5M19 20v-5"/>',
+  calendar: '<rect x="4" y="5" width="16" height="15" rx="2"/><path d="M4 10h16M9 3v4M15 3v4"/>',
   box: '<path d="M4 8h16v11H4zM3 5h18v3H3zM10 12h4"/>',
+  decks: '<rect x="4" y="8" width="16" height="12" rx="2"/><path d="M7 5h10M9 2.5h6"/>',
+  up: '<path d="M12 19V5M6 11l6-6 6 6"/>',
+  down: '<path d="M12 5v14M6 13l6 6 6-6"/>',
+  swap: '<path d="M7 4L3 8l4 4M3 8h14M17 12l4 4-4 4M21 16H7"/>',
+  grip: '<path d="M9 6h.01M15 6h.01M9 12h.01M15 12h.01M9 18h.01M15 18h.01"/>',
+  sigma: '<path d="M18 5H6l6 7-6 7h12"/>',
+  more: '<path d="M6 12h.01M12 12h.01M18 12h.01"/>',
+  image: '<rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="9" cy="10" r="1.5"/><path d="M21 15l-5-5-9 9"/>',
+  user: '<circle cx="12" cy="8" r="4"/><path d="M4.5 20a7.5 7.5 0 0 1 15 0"/>',
+  logout: '<path d="M14 4h4a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-4M10 16l-4-4 4-4M6 12h10"/>',
+  shield: '<path d="M12 3l7 3v5c0 4.5-3 8-7 10-4-2-7-5.5-7-10V6z"/>',
+  copy: '<rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a1 1 0 0 1 1-1h10"/>',
+  key: '<circle cx="8" cy="15" r="4"/><path d="M11 12l9-9M17 6l3 3M15 8l2 2"/>',
+  share: '<circle cx="9" cy="8" r="3.5"/><path d="M3 20a6 6 0 0 1 12 0M18 8v6M15 11h6"/>',
 };
 
 function icon(name) {
@@ -50,6 +94,20 @@ function icon(name) {
   span.innerHTML = `<svg viewBox="0 0 24 24">${ICONS[name]}</svg>`;
   return span;
 }
+
+/** A small menu behind a "more" button. It closes when an item is chosen or on a click elsewhere. */
+function menu(label, items) {
+  const el = h(
+    'details',
+    { class: 'menu' },
+    h('summary', { class: 'icon-btn', title: label, 'aria-label': label }, icon('more')),
+    h('div', { class: 'menu-items', onclick: () => el.removeAttribute('open') }, items),
+  );
+  return el;
+}
+document.addEventListener('click', (e) => {
+  for (const open of document.querySelectorAll('details.menu[open]')) if (!open.contains(e.target)) open.removeAttribute('open');
+});
 
 const iconButton = (name, label, onclick, extra = '') =>
   h('button', { class: `icon-btn ${extra}`, type: 'button', title: label, 'aria-label': label, onclick }, icon(name));
@@ -81,14 +139,189 @@ function cardStatus(card, now) {
   return { kind: 'zero', label: `Due in ${formatInterval(days * DAY)}` };
 }
 
+function tomorrowText({ tomorrow: t, reserve }) {
+  if (!t.total) return reserve ? 'Nothing comes tomorrow. Pull some cards in from the reserve.' : 'Nothing comes tomorrow.';
+  return `Tomorrow: ${plural(t.total, 'card')} (${t.new.toLocaleString()} new, ${t.learning.toLocaleString()} learning, ${t.review.toLocaleString()} due)`;
+}
+
+// A count is a coloured dot beside a figure: Anki's blue for new, ochre for learning, green for due.
+const countOf = (kind, n, label) =>
+  h('span', { class: `count ${n ? kind : 'zero'}`, title: `${n} ${label.toLowerCase()}` }, h('i', { class: 'dot', 'aria-hidden': 'true' }), h('b', null, n.toLocaleString()), h('span', null, label));
+
 function countPills(c) {
-  const pill = (kind, n, label) =>
-    h('span', { class: `pill ${n ? kind : 'zero'}`, title: `${n} ${label.toLowerCase()}` }, h('b', null, String(n)), h('span', null, label));
-  return h('div', { class: 'counts' }, pill('new', c.new, 'New'), pill('learning', c.learning, 'Learning'), pill('review', c.review, 'Due'));
+  return h('div', { class: 'counts' }, countOf('new', c.new, 'New'), countOf('learning', c.learning, 'Learning'), countOf('review', c.review, 'Due'));
+}
+
+const statusMark = (status, label = status.label, extra = '') =>
+  h('span', { class: `status ${status.kind} ${extra}` }, h('i', { class: 'dot', 'aria-hidden': 'true' }), label);
+
+// ---- Card content ---------------------------------------------------------
+// A side's text, with its maths typeset by KaTeX (loaded by index.html from vendor/katex/)
+// and its images shown from the server.
+
+/** Marks display maths too wide for its box, which then fades at the edge to show it scrolls. */
+function markOverflow(root) {
+  requestAnimationFrame(() => {
+    for (const el of root.querySelectorAll('.katex-display')) el.classList.toggle('overflows', el.scrollWidth > el.clientWidth + 1);
+  });
+}
+
+const mediaUrl = (name) => `api/media/${encodeURIComponent(name)}`;
+
+function mathElement(tex, display, onclick) {
+  const el = h('span', { class: `math${display ? ' display' : ''}${onclick ? ' editable' : ''}`, title: onclick && 'Edit this maths', onclick });
+  if (globalThis.katex) globalThis.katex.render(tex, el, { displayMode: display, throwOnError: false });
+  else el.textContent = display ? `\\[${tex}\\]` : `\\(${tex}\\)`;
+  return el;
+}
+
+/** The nodes that show a card side. With `editMath`, clicking the nth piece of maths calls `editMath(n)`. */
+const rich = (text, editMath) => {
+  let n = 0;
+  return parseContent(text).map((part) => {
+    if (part.text !== undefined) return part.text;
+    if (part.math !== undefined) {
+      const index = n++;
+      return mathElement(part.math, part.display, editMath && (() => editMath(index)));
+    }
+    return h('img', {
+      class: 'card-image',
+      src: mediaUrl(part.image),
+      alt: '',
+      loading: 'lazy',
+      onerror: (e) => e.target.replaceWith(h('span', { class: 'image-missing' }, 'Image not found')),
+    });
+  });
+};
+
+// ---- Equation editor ------------------------------------------------------
+// MathLive, from vendor/mathlive/, loaded the first time it is needed. It shares KaTeX's fonts.
+
+let mathLive = null;
+
+function loadMathLive() {
+  mathLive ??= import('../vendor/mathlive/mathlive.min.mjs').then(({ MathfieldElement }) => {
+    MathfieldElement.fontsDirectory = new URL('../vendor/katex/fonts/', import.meta.url).href;
+    MathfieldElement.soundsDirectory = null;
+  });
+  mathLive.catch(() => (mathLive = null));
+  return mathLive;
+}
+
+// Shortcuts above the equation box. In each, #0 stands for what is selected and #? for an
+// empty slot to fill in.
+const matrix = (n) => `\\begin{bmatrix}${Array.from({ length: n }, () => Array(n).fill('#?').join('&')).join('\\\\')}\\end{bmatrix}`;
+const MATH_TOOLS = [
+  ['a/b', 'Fraction', '\\frac{#0}{#?}'],
+  ['√', 'Square root', '\\sqrt{#0}'],
+  ['xⁿ', 'Power', '#0^{#?}'],
+  ['xₙ', 'Subscript', '#0_{#?}'],
+  ['ẋ', 'Rate of change (dot)', '\\dot{#0}'],
+  ['v⃗', 'Vector arrow', '\\vec{#0}'],
+  ['2×2', '2 by 2 matrix', matrix(2)],
+  ['3×3', '3 by 3 matrix', matrix(3)],
+  ['4×4', '4 by 4 matrix', matrix(4)],
+];
+
+/**
+ * Open the equation editor on `math` (LaTeX), and call `onsave(math, display)` with the result.
+ * `display` is whether the maths sits on a line of its own.
+ */
+async function openMathDialog({ math = '', display = false, editing = false }, onsave) {
+  try {
+    await loadMathLive();
+  } catch {
+    toast('Could not load the equation editor.');
+    return;
+  }
+  const field = h('math-field', { class: 'math-input', 'aria-label': 'Equation' });
+  field.value = math;
+  const ownLine = h('input', { type: 'checkbox', checked: display });
+  const form = h(
+    'form',
+    {
+      onsubmit: (e) => {
+        e.preventDefault();
+        // An empty slot left in a fraction or power is written as a placeholder; drop it.
+        const latex = field
+          .getValue('latex-expanded')
+          .replace(/\\placeholder(?:\[[^\]]*\])?\{([^{}]*)\}/g, '$1')
+          .trim();
+        if (!latex) return field.focus();
+        // Close first: closing hands the focus back, and the text box should end up with it.
+        dialog.close();
+        onsave(latex, ownLine.checked);
+      },
+    },
+    h(
+      'div',
+      { class: 'math-tools', role: 'toolbar', 'aria-label': 'Insert' },
+      MATH_TOOLS.map(([text, title, latex]) =>
+        h(
+          'button',
+          {
+            class: 'btn sm',
+            type: 'button',
+            title,
+            'aria-label': title,
+            // Keep the focus, and so the selection, in the equation box.
+            onmousedown: (e) => e.preventDefault(),
+            onclick: () => {
+              field.insert(latex, { selectionMode: 'placeholder', focus: true });
+              field.focus();
+            },
+          },
+          text,
+        ),
+      ),
+    ),
+    field,
+    h('small', { class: 'field-note math-help' }, 'Type maths as it looks: / starts a fraction, ^ a power and _ a subscript, and the arrow keys move between the parts and between the cells of a matrix. Type sqrt, theta, omega, pi or sum by name. More is in the menu at the end of the box. On a phone, a maths keyboard opens.'),
+    h('label', { class: 'check' }, ownLine, 'On a line of its own, centred'),
+    h(
+      'div',
+      { class: 'modal-foot' },
+      h('button', { class: 'btn', type: 'button', onclick: () => dialog.close() }, 'Cancel'),
+      h('button', { class: 'btn primary', type: 'submit' }, editing ? 'Save' : 'Insert'),
+    ),
+  );
+  field.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey && !e.altKey) {
+      e.preventDefault();
+      form.requestSubmit();
+    }
+  });
+  // The dialog sits above the page, so the maths keyboard opens in a layer inside it, and
+  // the dialog moves to the top of the screen to stay clear of it.
+  const keyboard = globalThis.mathVirtualKeyboard;
+  const keyboardLayer = h('div', { class: 'math-keyboard' });
+  const placeDialog = () => dialog.element.classList.toggle('with-keyboard', keyboard.visible);
+  const dialog = modal(editing ? 'Edit maths' : 'Insert maths', form, {
+    narrow: true,
+    onclose: () => {
+      keyboard.hide();
+      keyboard.container = document.body;
+      keyboard.removeEventListener('geometrychange', placeDialog);
+      keyboard.removeEventListener('virtual-keyboard-toggle', placeDialog);
+    },
+  });
+  dialog.element.append(keyboardLayer);
+  keyboard.container = keyboardLayer;
+  keyboard.addEventListener('geometrychange', placeDialog);
+  keyboard.addEventListener('virtual-keyboard-toggle', placeDialog);
+  field.focus();
+}
+
+/** Keep an image on the server, returning the name a card refers to it by. */
+async function uploadImage(blob) {
+  const res = await fetch('api/media', { method: 'POST', body: blob });
+  if (!res.ok) throw new Error(await res.text());
+  return (await res.json()).name;
 }
 
 // ---- Speech ---------------------------------------------------------------
-// Uses the server's voice when there is one, otherwise the browser's own.
+// Uses the server's voice when there is one, otherwise the browser's own. Only a side's words
+// are read: its maths and images are skipped.
 
 const LANGUAGES = [
   ['pt-PT', 'Portuguese (Portugal)'],
@@ -98,7 +331,7 @@ const LANGUAGES = [
 let player = null;
 let speechToken = 0;
 
-const ttsUrl = (text, lang) => `api/tts?text=${encodeURIComponent(text)}&lang=${encodeURIComponent(lang)}`;
+const ttsUrl = (text, lang, save = true) => `api/tts?text=${encodeURIComponent(text)}&lang=${encodeURIComponent(lang)}${save ? '' : '&save=0'}`;
 const serverVoice = () => store.storageInfo().voice;
 const canSpeak = () => Boolean(serverVoice()) || 'speechSynthesis' in window;
 
@@ -109,7 +342,8 @@ function stopSpeaking() {
   if ('speechSynthesis' in window) speechSynthesis.cancel();
 }
 
-async function speak(text, lang, rate = 1) {
+/** Read `text` aloud. With `save` false, the server makes the audio without keeping it. */
+async function speak(text, lang, rate = 1, save = true) {
   stopSpeaking();
   if (!text.trim()) return;
   if (!serverVoice()) {
@@ -122,7 +356,7 @@ async function speak(text, lang, rate = 1) {
   }
   const token = speechToken;
   try {
-    const res = await fetch(ttsUrl(text, lang));
+    const res = await fetch(ttsUrl(text, lang, save));
     if (!res.ok) throw new Error(await res.text());
     const url = URL.createObjectURL(await res.blob());
     if (token !== speechToken) return; // moved on while the audio was loading
@@ -142,19 +376,31 @@ function prepareSpeech(text, lang) {
   if (serverVoice() && text.trim()) fetch(ttsUrl(text, lang)).catch(() => {});
 }
 
-/** Read one side of a card aloud, in that side's language. */
-const speakSideOf = (card, deck, side) => speak(card[side], deck[`${side}Lang`], deck.speechRate);
+// A reversed card shows the deck's back on its front, so each of its sides takes the
+// language and the auto-play setting of the deck's other side.
+const deckSide = (card, side) => (card.reversed ? (side === 'front' ? 'back' : 'front') : side);
+const sideLang = (card, deck, side) => deck[`${deckSide(card, side)}Lang`];
 
-const speaksSide = (deck, side) => deck.speak === side || deck.speak === 'both';
+/** Read the words on one side of a card aloud, in that side's language. */
+const speakSideOf = (card, deck, side) => speak(speechText(card[side]), sideLang(card, deck, side), deck.speechRate, deck.saveAudio);
+
+const speaksSide = (card, deck, side) => deck.speak === deckSide(card, side) || deck.speak === 'both';
+
+/** Make a side's audio ahead of time, unless its deck keeps no audio to play later. */
+function prepareSideSpeech(card, deck, side) {
+  if (deck.saveAudio) prepareSpeech(speechText(card[side]), sideLang(card, deck, side));
+}
 
 function prepareCardSpeech(card) {
   const deck = store.deck(card.deckId);
-  if (speaksSide(deck, 'front')) prepareSpeech(card.front, deck.frontLang);
-  if (speaksSide(deck, 'back')) prepareSpeech(card.back, deck.backLang);
+  for (const side of ['front', 'back']) {
+    if (speaksSide(card, deck, side)) prepareSideSpeech(card, deck, side);
+  }
 }
 
 const speakButton = (card, deck, side) =>
   canSpeak() &&
+  speechText(card[side]) !== '' &&
   h('button', { class: 'speak', type: 'button', title: `Listen to the ${side} (R)`, 'aria-label': `Listen to the ${side}`, onclick: () => speakSideOf(card, deck, side) }, icon('speaker'));
 
 // ---- Theme ----------------------------------------------------------------
@@ -201,7 +447,7 @@ function modal(title, content, { narrow = false, onclose } = {}) {
   dialog.addEventListener('close', finish);
   document.body.append(dialog);
   dialog.showModal();
-  return { close };
+  return { close, element: dialog };
 }
 
 function confirmDialog({ title, message, confirmLabel = 'Delete' }) {
@@ -234,8 +480,16 @@ function confirmDialog({ title, message, confirmLabel = 'Delete' }) {
   });
 }
 
+/** The quiet line naming who gave a deck, or nothing for a deck of your own. */
+const deckFrom = (deck) => deck.assigned && h('span', { class: 'deck-from' }, `From ${deck.from}`);
+
+/**
+ * Create a deck, or change one's settings. A deck given by the admin shows only the settings
+ * that are the user's own; its name and languages are the owner's.
+ */
 function openDeckDialog(deck) {
   const defaults = deck ?? store.DECK_DEFAULTS;
+  const own = !deck || store.editable(deck.id);
   const name = h('input', { type: 'text', required: true, maxLength: 80, value: deck?.name ?? '', placeholder: 'e.g. Spanish vocabulary' });
   const newPerDay = h('input', { type: 'number', required: true, min: 0, max: 9999, step: 1, value: defaults.newPerDay });
   const retention = h('input', { type: 'number', required: true, min: 70, max: 97, step: 1, value: Math.round(defaults.retention * 100) });
@@ -266,6 +520,7 @@ function openDeckDialog(deck) {
       h('option', { value, selected: value === defaults.speechRate }, label),
     ),
   );
+  const saveAudio = h('input', { type: 'checkbox', checked: defaults.saveAudio });
 
   const form = h(
     'form',
@@ -273,23 +528,24 @@ function openDeckDialog(deck) {
       onsubmit: (e) => {
         e.preventDefault();
         const values = {
-          name: name.value.trim(),
           scheduler: scheduler.value,
           newPerDay: Number(newPerDay.value),
           retention: Number(retention.value) / 100,
           easyInterval: Number(easyInterval.value),
-          speak: speakSide.value,
-          frontLang: frontLang.value,
-          backLang: backLang.value,
-          speechRate: Number(speechRate.value),
+          ...(canSpeak() && { speak: speakSide.value, speechRate: Number(speechRate.value) }),
+          ...(own && {
+            name: name.value.trim(),
+            ...(canSpeak() && { frontLang: frontLang.value, backLang: backLang.value }),
+            ...(serverVoice() && { saveAudio: saveAudio.checked }),
+          }),
         };
-        if (!values.name) return name.focus();
+        if (own && !values.name) return name.focus();
         if (deck) store.updateDeck(deck.id, values);
         else store.createDeck(values);
         dialog.close();
       },
     },
-    h('label', { class: 'field' }, h('span', null, 'Name'), name),
+    own && h('label', { class: 'field' }, h('span', null, 'Name'), name),
     h(
       'div',
       { class: 'field-row' },
@@ -310,13 +566,18 @@ function openDeckDialog(deck) {
         h('label', { class: 'field' }, h('span', null, 'Auto-play audio'), speakSide),
         h('label', { class: 'field' }, h('span', null, 'Speaking speed'), speechRate),
       ),
-      h(
-        'div',
-        { class: 'field-row' },
-        h('label', { class: 'field' }, h('span', null, 'Front language'), frontLang),
-        h('label', { class: 'field' }, h('span', null, 'Back language'), backLang),
-      ),
-      h('small', { class: 'field-note' }, 'Auto-play reads a side aloud when it appears, in that side’s language. You can always play either side with its speaker button.'),
+      own &&
+        h(
+          'div',
+          { class: 'field-row' },
+          h('label', { class: 'field' }, h('span', null, 'Front language'), frontLang),
+          h('label', { class: 'field' }, h('span', null, 'Back language'), backLang),
+        ),
+      h('small', { class: 'field-note' }, 'Auto-play reads a side aloud when it appears, in that side’s language. You can always play either side with its speaker button. Maths is read out in words, in English; images are skipped.'),
+      own && serverVoice() && [
+        h('label', { class: 'check', style: 'margin-top: 12px' }, saveAudio, 'Keep the audio made for this deck'),
+        h('small', { class: 'field-note' }, 'Turn this off for decks that are mostly maths: audio is then made each time it plays instead of being kept, and “npm run cache-voice” leaves the deck out.'),
+      ],
     ],
     h(
       'div',
@@ -326,16 +587,115 @@ function openDeckDialog(deck) {
     ),
   );
   const dialog = modal(deck ? 'Deck settings' : 'New deck', form, { narrow: true, onclose: render });
-  name.focus();
+  (own ? name : newPerDay).focus();
+}
+
+/**
+ * Put `text` in a text box in place of `start` to `end` (the selection unless given), on a line
+ * of its own when `ownLine` is set.
+ */
+function insertText(textarea, text, { start = textarea.selectionStart, end = textarea.selectionEnd, ownLine = false } = {}) {
+  const { value } = textarea;
+  const before = ownLine && start && value[start - 1] !== '\n' ? '\n' : '';
+  const after = ownLine && end < value.length && value[end] !== '\n' ? '\n' : '';
+  textarea.setRangeText(before + text + after, start, end, 'end');
+  textarea.focus();
+  textarea.dispatchEvent(new Event('input'));
+}
+
+const insertAtCursor = (textarea, text) => insertText(textarea, text, { ownLine: true });
+
+/**
+ * The editor for one side of a card: its text box, buttons to add maths and images, paste or
+ * drop for images, and a preview of the side once it holds maths or images. Clicking maths in
+ * the preview, or pressing Maths with the cursor in some, opens it in the equation editor.
+ */
+function sideEditor(label, textarea) {
+  const preview = h('div', { class: 'side-preview', 'aria-live': 'polite' });
+  const editMath = (span) =>
+    openMathDialog({ ...span, editing: true }, (math, display) =>
+      insertText(textarea, mathToken(math, display), { start: span.start, end: span.end, ownLine: display && !span.display }),
+    );
+  const update = () => {
+    preview.hidden = !hasRichContent(textarea.value);
+    if (!preview.hidden) {
+      preview.replaceChildren(...rich(textarea.value, (n) => editMath(mathSpans(textarea.value)[n])));
+      markOverflow(preview);
+    }
+  };
+  const mathButton = () => {
+    const { selectionStart: start, selectionEnd: end } = textarea;
+    const inside = mathSpans(textarea.value).find((span) => span.start <= start && end <= span.end && start < span.end);
+    if (inside) return editMath(inside);
+    openMathDialog({}, (math, display) => insertText(textarea, mathToken(math, display), { start, end, ownLine: display }));
+  };
+  const isImage = (file) => file.type.startsWith('image/');
+  const addImages = async (files) => {
+    try {
+      const names = [];
+      for (const file of files.filter(isImage)) names.push(await uploadImage(file));
+      if (names.length) insertAtCursor(textarea, names.map(imageToken).join('\n'));
+    } catch (error) {
+      toast(error.message || 'Could not add that image.');
+    }
+  };
+  const picker = h('input', {
+    type: 'file',
+    accept: 'image/png,image/jpeg,image/gif,image/webp,image/svg+xml',
+    multiple: true,
+    hidden: true,
+    onchange: () => {
+      addImages([...picker.files]);
+      picker.value = '';
+    },
+  });
+  textarea.setAttribute('aria-label', label);
+  textarea.addEventListener('input', update);
+  textarea.addEventListener('paste', (e) => {
+    const files = [...(e.clipboardData?.files ?? [])].filter(isImage);
+    if (!files.length) return;
+    e.preventDefault();
+    addImages(files);
+  });
+  textarea.addEventListener('dragover', (e) => {
+    if (e.dataTransfer?.types.includes('Files')) e.preventDefault();
+  });
+  textarea.addEventListener('drop', (e) => {
+    const files = [...(e.dataTransfer?.files ?? [])].filter(isImage);
+    if (!files.length) return;
+    e.preventDefault();
+    textarea.focus();
+    addImages(files);
+  });
+  update();
+  return h(
+    'div',
+    { class: 'field' },
+    h(
+      'div',
+      { class: 'field-head' },
+      h('span', null, label),
+      h(
+        'div',
+        { class: 'field-tools' },
+        h('button', { class: 'btn ghost sm', type: 'button', title: `Write maths on the ${label.toLowerCase()}, or edit the maths at the cursor`, onclick: mathButton }, icon('sigma'), 'Maths'),
+        h('button', { class: 'btn ghost sm', type: 'button', title: `Add an image to the ${label.toLowerCase()}`, onclick: () => picker.click() }, icon('image'), 'Add image'),
+      ),
+      picker,
+    ),
+    textarea,
+    preview,
+  );
 }
 
 function openCardDialog({ card, deckId }) {
+  if (!store.editable(card?.deckId ?? deckId)) return;
   const front = h('textarea', { required: true, value: card?.front ?? '', placeholder: 'Question or prompt' });
   const back = h('textarea', { required: true, value: card?.back ?? '', placeholder: 'Answer' });
   const deckSelect = h(
     'select',
     null,
-    store.decks().map((d) => h('option', { value: d.id, selected: d.id === (card?.deckId ?? deckId) }, d.name)),
+    store.decks().filter((d) => store.editable(d.id)).map((d) => h('option', { value: d.id, selected: d.id === (card?.deckId ?? deckId) }, d.name)),
   );
   // Only a card that has never been studied can wait on the reserve.
   const reserved = h('input', { type: 'checkbox', checked: Boolean(card?.reserved) });
@@ -368,14 +728,16 @@ function openCardDialog({ card, deckId }) {
         // Stay open so several cards can be added in a row.
         prepareCardSpeech(store.addCard(deckSelect.value, values.front, values.back, Date.now(), { reserved: reserved.checked }));
         front.value = back.value = '';
+        for (const box of [front, back]) box.dispatchEvent(new Event('input'));
         note.textContent = reserved.checked ? 'Card added to the reserve' : 'Card added';
         note.className = 'note ok';
         front.focus();
         render();
       },
     },
-    h('label', { class: 'field' }, h('span', null, 'Front'), front),
-    h('label', { class: 'field' }, h('span', null, 'Back'), back),
+    sideEditor('Front', front),
+    sideEditor('Back', back),
+    h('small', { class: 'field-note', style: 'margin: -6px 0 14px' }, 'Paste or drop images into a side. Press Maths to write an equation, or click one in the preview to change it. Maths can also be typed as LaTeX: \\( x^2 \\) within a line, \\[ x^2 \\] on its own line.'),
     h('label', { class: 'field' }, h('span', null, 'Deck'), deckSelect),
     canReserve && h('label', { class: 'check' }, reserved, 'Keep on reserve, out of study until pulled in'),
     h(
@@ -390,17 +752,81 @@ function openCardDialog({ card, deckId }) {
   front.focus();
 }
 
+/** How many people have been given a deck and still have it. Only an admin gives decks. */
+async function recipientsOf(deckId) {
+  if (account?.role !== 'admin') return 0;
+  const given = await api.admin.decks();
+  return given.find((d) => d.id === deckId)?.recipients.filter((r) => r.active).length ?? 0;
+}
+
 async function removeDeck(deck) {
   const n = store.cardsIn(deck.id).length;
+  let people;
+  try {
+    people = await recipientsOf(deck.id);
+  } catch {
+    toast('Could not check who has this deck. Try again when you are online.');
+    return;
+  }
   const ok = await confirmDialog({
     title: `Delete “${deck.name}”?`,
-    message: n ? `This deck and its ${plural(n, 'card')} will be permanently deleted.` : 'This deck will be permanently deleted.',
+    message: people
+      ? `${people === 1 ? '1 person has' : `${people.toLocaleString()} people have`} this deck. Deleting it removes it and their progress.`
+      : n
+        ? `This deck and its ${plural(n, 'card')} will be permanently deleted.`
+        : 'This deck will be permanently deleted.',
     confirmLabel: 'Delete deck',
   });
   if (!ok) return;
   store.deleteDeck(deck.id);
   if (location.hash !== '#/') location.hash = '#/';
   else render();
+}
+
+async function removeCards(ids) {
+  const one = ids.length === 1;
+  const ok = await confirmDialog({
+    title: `Delete ${plural(ids.length, 'card')}?`,
+    message: `${one ? 'This card and its' : 'These cards and their'} review history will be permanently deleted.`,
+    confirmLabel: `Delete ${plural(ids.length, 'card')}`,
+  });
+  if (!ok) return;
+  const deleted = store.deleteCards(ids);
+  selected = new Set();
+  toast(`${plural(deleted, 'card')} deleted`);
+  render();
+}
+
+/** Put a reversed copy of each card on the reserve, and leave the copies ticked, ready to be moved. */
+function addReversedCards(ids) {
+  const added = store.addReversed(ids);
+  const skipped = ids.length - added.length;
+  const already = skipped ? `${skipped.toLocaleString()} already had one` : '';
+  if (added.length) {
+    selected = new Set(added.map((card) => card.id));
+    toast(`${plural(added.length, 'reversed card')} added to the reserve${already && `, ${already}`}`);
+  } else {
+    toast(skipped === 1 ? 'This card already has a reversed version' : 'These cards already have reversed versions');
+  }
+  render();
+}
+
+/** Put cards back on the reserve, after asking first if that wipes out their progress. */
+async function returnCardsToReserve(ids) {
+  const studied = ids.map(store.card).filter((card) => card && !card.reserved && card.state !== State.New).length;
+  if (studied) {
+    const one = studied === 1;
+    const which = ids.length === 1 ? 'This card has' : one ? 'One of these cards has' : `${studied.toLocaleString()} of these cards have`;
+    const ok = await confirmDialog({
+      title: `Put ${plural(ids.length, 'card')} back on reserve?`,
+      message: `${which} already been studied. ${one ? 'Its' : 'Their'} progress will be reset, and ${one ? 'it starts' : 'they start'} over as new when pulled in again.`,
+      confirmLabel: 'Put back on reserve',
+    });
+    if (!ok) return;
+  }
+  const moved = store.returnToReserve(ids);
+  toast(`${plural(moved, 'card')} put back on reserve`);
+  render();
 }
 
 async function removeCard(card) {
@@ -435,6 +861,26 @@ function planImport(rows, { front, back, header, skipExisting, existing }) {
   return plan;
 }
 
+/**
+ * Keep the pictures read from a spreadsheet on the server, and point the cells at the stored
+ * copies. A picture the server will not take, such as a drawing saved by Excel as EMF, is left
+ * out, as is any picture whose upload fails. Returns the rows and how many were left out.
+ */
+async function storeSheetImages(rows, images) {
+  const stored = new Map();
+  for (const [path, bytes] of images) {
+    stored.set(path, await uploadImage(new Blob([bytes])).catch(() => null));
+  }
+  const cells = rows.map((row) =>
+    row.map((cell) =>
+      cell
+        .replace(/\[image:([^\]\s]+)\]/g, (_, path) => (stored.get(path) ? imageToken(stored.get(path)) : ''))
+        .trim(),
+    ),
+  );
+  return { rows: cells, skipped: [...stored.values()].filter((name) => !name).length };
+}
+
 function pickImportFile(deck, toReserve = false) {
   const input = h('input', {
     type: 'file',
@@ -443,8 +889,14 @@ function pickImportFile(deck, toReserve = false) {
       const file = input.files[0];
       if (!file) return;
       try {
-        const rows = await parseSpreadsheet(await file.arrayBuffer(), file.name);
+        const images = new Map();
+        let rows = await parseSpreadsheet(await file.arrayBuffer(), file.name, images);
         if (!rows.length) throw new Error('That file has no rows to import.');
+        if (images.size) {
+          const result = await storeSheetImages(rows, images);
+          rows = result.rows;
+          if (result.skipped) toast(`${plural(result.skipped, 'picture')} in a format Recall cannot show will be left out`);
+        }
         openImportDialog(deck, file.name, rows, toReserve);
       } catch (error) {
         toast(error.message || 'Could not read that file.');
@@ -463,7 +915,8 @@ function openImportDialog(deck, fileName, rows, toReserve = false) {
       { onchange: () => update() },
       Array.from({ length: width }, (_, i) => {
         const sample = rows.find((row) => row[i])?.[i] ?? 'empty';
-        const label = `${columnName(i)}: ${sample.length > 28 ? `${sample.slice(0, 28)}…` : sample}`;
+        const words = sample.replace(/\[image:[^\]\s]+\]/g, '(image)');
+        const label = `${columnName(i)}: ${words.length > 28 ? `${words.slice(0, 28)}…` : words}`;
         return h('option', { value: i, selected: i === selected }, label);
       }),
     );
@@ -492,7 +945,7 @@ function openImportDialog(deck, fileName, rows, toReserve = false) {
       'table',
       null,
       h('thead', null, h('tr', null, h('th', null, 'Front'), h('th', null, 'Back'))),
-      h('tbody', null, cards.slice(0, 5).map(([f, b]) => h('tr', null, h('td', null, f), h('td', null, b)))),
+      h('tbody', null, cards.slice(0, 5).map(([f, b]) => h('tr', null, h('td', null, rich(f)), h('td', null, rich(b))))),
     );
     const more = cards.length > 5 ? [h('div', { class: 'import-more' }, `and ${cards.length - 5} more`)] : [];
     preview.replaceChildren(table, ...more);
@@ -548,10 +1001,6 @@ function openImportDialog(deck, fileName, rows, toReserve = false) {
 // ---- Import decks from Anki ---------------------------------------------------
 
 function pickAnkiFile() {
-  if (!store.storageInfo().available) {
-    toast('Importing from Anki needs the Recall server. Start it with "npm start".');
-    return;
-  }
   const input = h('input', {
     type: 'file',
     accept: '.apkg,.colpkg',
@@ -559,7 +1008,8 @@ function pickAnkiFile() {
       const file = input.files[0];
       if (!file) return;
       try {
-        const res = await fetch('api/anki', { method: 'POST', body: await ankiCollection(await file.arrayBuffer()) });
+        // The whole package goes, as the server stores the images the cards show.
+        const res = await fetch('api/anki', { method: 'POST', body: file });
         if (!res.ok) throw new Error(await res.text());
         openAnkiDialog(file.name, await res.json());
       } catch (error) {
@@ -570,13 +1020,15 @@ function pickAnkiFile() {
   input.click();
 }
 
-function openAnkiDialog(fileName, { decks, suspended, blank, media }) {
+function openAnkiDialog(fileName, { decks, suspended, blank, sound, missingImages }) {
   const known = store.ankiCardIds();
   const incoming = decks
     .map((deck) => ({ ...deck, cards: deck.cards.filter((card) => !known.has(card.ankiId)) }))
     .filter((deck) => deck.cards.length);
   const total = incoming.reduce((sum, deck) => sum + deck.cards.length, 0);
   const existing = decks.reduce((sum, deck) => sum + deck.cards.length, 0) - total;
+  const fresh = incoming.reduce((sum, deck) => sum + deck.cards.filter((card) => card.state === State.New).length, 0);
+  const reserved = h('input', { type: 'checkbox' });
 
   const breakdown = (cards) => {
     const count = (...states) => cards.filter((card) => states.includes(card.state)).length;
@@ -593,7 +1045,8 @@ function openAnkiDialog(fileName, { decks, suspended, blank, media }) {
     existing && `${plural(existing, 'card')} already in Recall will be skipped.`,
     suspended && `${plural(suspended, 'suspended card')} will be left out.`,
     blank && `${plural(blank, 'card')} with no text on the front will be left out.`,
-    media && 'Images and audio are not imported. Cards are plain text.',
+    sound && 'Audio is not imported. Images and maths are.',
+    missingImages && `${plural(missingImages, 'image')} named on cards ${missingImages === 1 ? 'is' : 'are'} missing from the file or in a format Recall cannot show, and will be left out.`,
     ...incoming
       .filter((deck) => deck.custom.length)
       .map((deck) => `“${deck.name}” has its own ${deck.custom.join(', ')} in Anki. Recall uses Anki’s defaults for these, so some intervals will differ.`),
@@ -604,9 +1057,10 @@ function openAnkiDialog(fileName, { decks, suspended, blank, media }) {
     {
       onsubmit: (e) => {
         e.preventDefault();
-        const added = store.importAnkiDecks(incoming);
+        const added = store.importAnkiDecks(incoming, Date.now(), { reserved: reserved.checked });
         dialog.close();
-        toast(`Imported ${plural(added, 'card')} from Anki`);
+        const onReserve = !reserved.checked ? '' : fresh === added ? ' onto the reserve' : `, ${fresh.toLocaleString()} of them on reserve`;
+        toast(`Imported ${plural(added, 'card')} from Anki${onReserve}`);
       },
     },
     h(
@@ -624,6 +1078,13 @@ function openAnkiDialog(fileName, { decks, suspended, blank, media }) {
           h('thead', null, h('tr', null, h('th', null, 'Deck'), h('th', null, 'Cards'))),
           h('tbody', null, incoming.map((deck) => h('tr', null, h('td', null, deck.name), h('td', null, breakdown(deck.cards))))),
         ),
+      ),
+    fresh > 0 &&
+      h(
+        'label',
+        { class: 'check', style: 'margin-top: 14px' },
+        reserved,
+        fresh === total ? 'Put these cards on reserve, to pull in when you want them' : `Put the ${plural(fresh, 'new card')} on reserve, to pull in when you want them`,
       ),
     notes.map((note) => h('p', { class: 'import-summary' }, note)),
     h(
@@ -644,35 +1105,6 @@ function exportBackup() {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
-function importBackup() {
-  const input = h('input', {
-    type: 'file',
-    accept: 'application/json,.json',
-    onchange: async () => {
-      const file = input.files[0];
-      if (!file) return;
-      const text = await file.text();
-      if (store.decks().length) {
-        const ok = await confirmDialog({
-          title: 'Replace all data?',
-          message: 'Importing a backup replaces every deck and card currently in Recall.',
-          confirmLabel: 'Replace',
-        });
-        if (!ok) return;
-      }
-      try {
-        store.importData(text);
-        applyTheme();
-        toast('Backup imported');
-      } catch {
-        toast('That file is not a valid Recall backup');
-      }
-      render();
-    },
-  });
-  input.click();
-}
-
 function loadSampleDeck() {
   const deck = store.createDeck({ name: 'How memory works' });
   const cards = [
@@ -690,77 +1122,183 @@ function loadSampleDeck() {
 // ---- Views ----------------------------------------------------------------
 
 function storageChip() {
-  const { available, ok, file } = store.storageInfo();
-  if (!available) {
-    return h('span', { class: 'save-chip', title: 'Saved in this browser only. Start the app with "npm start" to save to a file on your computer.' }, icon('browser'), h('span', null, 'Browser only'));
+  if (store.storageInfo().ok) return h('span', { class: 'save-chip', title: 'Your changes are saved' }, icon('check'), h('span', null, 'Saved'));
+  return h(
+    'span',
+    { class: 'save-chip error', title: 'Cannot reach Recall. Your changes are kept on this device and are sent when the connection is back.' },
+    icon('alert'),
+    h('span', null, 'Not saved, retrying'),
+  );
+}
+
+/** Log out after sending what is left; with answers unsent or no connection, stay signed in and say so. */
+async function logOut() {
+  try {
+    await store.logOut();
+  } catch (error) {
+    // The session had already ended: start again at the login screen, keeping unsent changes.
+    if (error.message === 'signed-out') return location.reload();
+    if (error.message === 'unsaved') toast("Some answers haven't been saved yet. Try again when you're online.");
+    else toast('Could not log out without a connection. Try again when you are online.');
+    return;
   }
-  if (!ok) {
-    return h('span', { class: 'save-chip error', title: `Cannot reach the Recall server, so changes are not reaching ${file}. They are kept in this browser and will be saved once the server is running again.` }, icon('alert'), h('span', null, 'Not saved to disk'));
-  }
-  return h('span', { class: 'save-chip', title: `Saved to ${file}` }, icon('disk'), h('span', null, 'Saved on this computer'));
+  account = null;
+  history.replaceState(null, '', location.pathname + location.search);
+  render();
+}
+
+/** The signed-in user's name, opening Admin (for admins), Export backup on phones, and Log out. */
+function accountMenu() {
+  const name = account?.name ?? 'Account';
+  const el = h(
+    'details',
+    { class: 'menu account' },
+    h('summary', { title: name, 'aria-label': `Account: ${name}` }, icon('user'), h('span', { class: 'account-name' }, name)),
+    h(
+      'div',
+      { class: 'menu-items', onclick: () => el.removeAttribute('open') },
+      account?.username && h('div', { class: 'menu-who' }, h('b', null, account.name), h('span', null, account.username)),
+      account?.role === 'admin' && h('a', { href: '#/admin' }, icon('shield'), 'Admin'),
+      h('button', { class: 'phone-only', type: 'button', onclick: exportBackup }, icon('download'), 'Export backup'),
+      h('button', { type: 'button', onclick: logOut }, icon('logout'), 'Log out'),
+    ),
+  );
+  return el;
 }
 
 function topbar() {
   const dark = document.documentElement.dataset.theme === 'dark';
+  const here = location.hash.split('/')[1] || '';
+  // On a phone the same links become a tab bar along the bottom, each with its icon.
+  const tab = (path, label, glyph) =>
+    h('a', { href: `#/${path}`, 'aria-current': (path === here || (path === '' && here === 'deck')) && 'page' }, icon(glyph), h('span', null, label));
   return h(
     'header',
     { class: 'topbar' },
-    h('a', { class: 'brand', href: '#/' }, h('span', { class: 'brand-mark' }), 'Recall'),
+    h('a', { class: 'brand', href: '#/' }, 'Recall'),
+    h('nav', { class: 'nav', 'aria-label': 'Main' }, tab('', 'Decks', 'decks'), tab('upcoming', 'Upcoming', 'calendar'), tab('stats', 'Statistics', 'chart')),
+    h('span', { class: 'spacer' }),
     storageChip(),
-    h('a', { class: 'icon-btn', href: '#/stats', title: 'Statistics', 'aria-label': 'Statistics' }, icon('chart')),
-    iconButton('upload', 'Import backup', importBackup),
-    iconButton('download', 'Export backup', exportBackup),
+    // On a phone, Export backup moves into the account menu so the bar fits.
+    iconButton('download', 'Export backup', exportBackup, 'wide-only'),
     iconButton(dark ? 'sun' : 'moon', dark ? 'Light theme' : 'Dark theme', toggleTheme),
+    accountMenu(),
+  );
+}
+
+const NUMBER_WORDS = ['No', 'One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight', 'Nine', 'Ten'];
+const weekdayLong = new Intl.DateTimeFormat(undefined, { weekday: 'long' });
+
+/** "Thursday evening": the day, and the part of it, that the home page greets. */
+function partOfDay(now) {
+  const d = new Date(now);
+  const hour = d.getHours();
+  const part = hour < 4 ? 'night' : hour < 12 ? 'morning' : hour < 18 ? 'afternoon' : 'evening';
+  // Days roll over at 4am, so the small hours still belong to the day before.
+  return `${weekdayLong.format(hour < 4 ? addDays(d, -1) : d)} ${part}`;
+}
+
+/** The day's headline: how much is left to study, in a sentence. */
+function todayHeadline(due, reviewedToday) {
+  if (!due) return reviewedToday ? 'All caught up for today.' : 'Nothing is due today.';
+  const count = due <= 10 ? NUMBER_WORDS[due] : due.toLocaleString();
+  return `${count} ${due === 1 ? 'card' : 'cards'}, then you’re done.`;
+}
+
+/** Today at a glance: the headline and the way into the first deck with cards due, beside the day's figures. */
+function todayPanel(all, now) {
+  const { reviewedToday, streak } = store.stats(now);
+  const due = all.reduce((total, { c }) => total + c.total, 0);
+  const tomorrow = all.reduce((total, { c }) => total + c.tomorrow.total, 0);
+  const waiting = all.filter(({ c }) => c.total);
+  const first = waiting[0]?.deck;
+  const days = store.recentDays(7, now);
+
+  return h(
+    'section',
+    { class: 'today', 'aria-label': 'Today' },
+    h(
+      'div',
+      { class: 'today-main' },
+      h('p', { class: 'today-when' }, partOfDay(now)),
+      h('h1', null, todayHeadline(due, reviewedToday)),
+      first &&
+        h(
+          'div',
+          { class: 'today-go' },
+          h('a', { class: 'btn primary lg', href: `#/study/${first.id}` }, icon('play'), 'Start review'),
+          h('span', null, waiting.length > 1 ? `${first.name} first, then ${plural(waiting.length - 1, 'more deck')}` : `From ${first.name}`),
+        ),
+    ),
+    h(
+      'dl',
+      { class: 'today-figures' },
+      h('div', null, h('dd', null, reviewedToday.toLocaleString()), h('dt', null, 'reviewed today')),
+      h(
+        'div',
+        { class: 'streak' },
+        h(
+          'div',
+          { class: 'streak-days', 'aria-hidden': 'true' },
+          days.map(({ date, n }, i) =>
+            withTip(h('i', { class: `${n ? 'on' : ''} ${i === days.length - 1 ? 'now' : ''}` }), n ? plural(n, 'review') : 'No reviews', longDate.format(date)),
+          ),
+        ),
+        h('dd', null, `${streak}-day`),
+        h('dt', null, 'streak'),
+      ),
+      h('div', null, h('dd', null, tomorrow.toLocaleString()), h('dt', null, 'due tomorrow')),
+    ),
   );
 }
 
 function renderHome() {
   const now = Date.now();
   const decks = store.decks();
-  const { reviewedToday, streak } = store.stats(now);
   const all = decks.map((deck) => ({ deck, c: store.counts(deck.id, now) }));
-  const due = all.reduce((sum, { c }) => sum + c.total, 0);
 
-  const tile = ({ deck, c }) =>
+  const row = ({ deck, c }) =>
     h(
-      'article',
+      'li',
       { class: 'deck' },
       h(
         'a',
         { class: 'deck-main', href: `#/deck/${deck.id}` },
-        h('div', { class: 'deck-name' }, deck.name),
-        h('div', { class: 'deck-meta' }, plural(c.cards, 'card') + (c.reserve ? `, ${c.reserve.toLocaleString()} on reserve` : '')),
-        countPills(c),
+        h('span', { class: 'deck-name' }, deck.name),
+        deckFrom(deck),
+        h('span', { class: 'deck-meta' }, plural(c.cards, 'card') + (c.reserve ? ` · ${c.reserve.toLocaleString()} on reserve` : '') + (c.tomorrow.total ? ` · ${c.tomorrow.total.toLocaleString()} tomorrow` : '')),
       ),
+      countPills(c),
       h(
         'div',
-        { class: 'deck-foot' },
-        c.total
-          ? h('a', { class: 'btn primary', href: `#/study/${deck.id}` }, icon('play'), `Study ${c.total}`)
-          : c.cards
-            ? h('span', { class: 'caught-up' }, icon('check'), 'All caught up')
-            : h('button', { class: 'btn', type: 'button', onclick: () => openCardDialog({ deckId: deck.id }) }, icon('plus'), 'Add cards'),
-        h('span', { class: 'spacer' }),
+        { class: 'deck-actions' },
         iconButton('edit', 'Deck settings', () => openDeckDialog(deck)),
-        iconButton('trash', 'Delete deck', () => removeDeck(deck), 'danger'),
+        store.editable(deck.id) && iconButton('trash', 'Delete deck', () => removeDeck(deck), 'danger'),
+        c.total
+          ? h('a', { class: 'btn', href: `#/study/${deck.id}` }, `Study ${c.total}`)
+          : c.cards
+            ? h('span', { class: 'caught-up' }, icon('check'), 'Caught up')
+            : store.editable(deck.id)
+              ? h('button', { class: 'btn', type: 'button', onclick: () => openCardDialog({ deckId: deck.id }) }, icon('plus'), 'Add cards')
+              : h('span', { class: 'caught-up' }, 'No cards yet'),
       ),
     );
 
   const body = decks.length
     ? [
+        todayPanel(all, now),
         h(
           'div',
-          { class: 'summary' },
-          h('div', { class: 'stat' }, h('b', null, String(due)), 'due today'),
-          h('div', { class: 'stat' }, h('b', null, String(reviewedToday)), 'reviewed today'),
-          h('div', { class: 'stat' }, h('b', null, String(streak)), `day streak`),
+          { class: 'section-head' },
+          h('h2', null, 'Decks'),
+          h(
+            'div',
+            { class: 'actions' },
+            h('button', { class: 'btn', type: 'button', title: 'Import decks from an Anki .apkg file', onclick: pickAnkiFile }, icon('upload'), 'Import from Anki'),
+            h('button', { class: 'btn', type: 'button', onclick: () => openDeckDialog() }, icon('plus'), 'New deck'),
+          ),
         ),
-        h(
-          'div',
-          { class: 'deck-grid' },
-          all.map(tile),
-          h('button', { class: 'deck add', type: 'button', onclick: () => openDeckDialog() }, icon('plus'), 'New deck'),
-        ),
+        h('ul', { class: 'deck-list', 'aria-label': 'Decks' }, all.map(row)),
       ]
     : h(
         'div',
@@ -781,24 +1319,13 @@ function renderHome() {
       'div',
       { class: 'page' },
       topbar(),
-      h(
-        'div',
-        { class: 'page-head' },
-        h('div', null, h('h1', null, 'Decks'), h('p', { class: 'sub' }, decks.length ? plural(decks.length, 'deck') : 'Nothing here yet')),
-        decks.length > 0 &&
-          h(
-            'div',
-            { class: 'actions' },
-            h('button', { class: 'btn', type: 'button', title: 'Import decks from an Anki .apkg file', onclick: pickAnkiFile }, icon('upload'), 'Import from Anki'),
-            h('button', { class: 'btn primary', type: 'button', onclick: () => openDeckDialog() }, icon('plus'), 'New deck'),
-          ),
-      ),
+      !decks.length && h('div', { class: 'page-head' }, h('div', null, h('h1', null, 'Decks'), h('p', { class: 'sub' }, 'Nothing here yet'))),
       body,
     ),
   );
 }
 
-/** A deck's reserve: how many cards are waiting, and the controls to pull some in. */
+/** A deck's reserve: how many cards are waiting, and the controls to pull some in or rearrange them. */
 function reserveBar(deck, n) {
   const pull = (count) => {
     const pulled = store.pullFromReserve(deck.id, count);
@@ -806,6 +1333,17 @@ function reserveBar(deck, n) {
     render();
   };
   const amount = h('input', { type: 'number', required: true, min: 1, max: n, step: 1, value: Math.min(n, 10), 'aria-label': 'How many cards to pull in' });
+  const reorder = () => {
+    query = '';
+    filters = { ...NO_FILTERS, groups: ['reserve'], sort: 'reserve' };
+    render();
+  };
+  // Shown as buttons on a wide screen, and folded into a menu on a phone.
+  const more = [
+    n > 1 && ['Pull all', `Pull all ${n.toLocaleString()}`, null, () => pull(n), null],
+    n > 1 && ['Choose cards', 'Choose cards', 'check', reorder, 'List the reserve in the order it is pulled in, to tick cards to pull in or to rearrange it'],
+    store.editable(deck.id) && ['Import to reserve', 'Import to reserve', 'upload', () => pickImportFile(deck, true), 'Import cards from a CSV or Excel file straight into the reserve'],
+  ].filter(Boolean);
   return h(
     'form',
     {
@@ -820,49 +1358,277 @@ function reserveBar(deck, n) {
       'div',
       { class: 'reserve-text' },
       h('b', null, n ? `${plural(n, 'card')} on reserve` : 'Nothing on reserve'),
-      h('span', null, n ? 'Kept out of study until you pull them in, oldest first.' : 'Cards on reserve are kept out of study until you pull them in.'),
+      h('span', null, n ? 'Kept out of study until you pull them in, the first in line first.' : 'Cards on reserve are kept out of study until you pull them in.'),
     ),
-    n > 0 && [amount, h('button', { class: 'btn primary', type: 'submit' }, 'Pull in'), n > 1 && h('button', { class: 'btn', type: 'button', onclick: () => pull(n) }, `Pull all ${n.toLocaleString()}`)],
-    h('button', { class: 'btn', type: 'button', title: 'Import cards from a CSV or Excel file straight into the reserve', onclick: () => pickImportFile(deck, true) }, icon('upload'), 'Import to reserve'),
+    n > 0 && [amount, h('button', { class: 'btn primary', type: 'submit' }, 'Pull in')],
+    more.map(([, label, glyph, onclick, title]) => h('button', { class: 'btn reserve-wide', type: 'button', title, onclick }, glyph && icon(glyph), label)),
+    more.length > 0 && h('div', { class: 'reserve-narrow' }, menu('More for the reserve', more.map(([, label, glyph, onclick]) => h('button', { type: 'button', onclick }, icon(glyph ?? 'down'), label)))),
   );
 }
 
 function renderDeck(deck) {
   const now = Date.now();
+  // A deck given by the admin is studied here, but its cards are changed only by its owner.
+  const editable = store.editable(deck.id);
   const c = store.counts(deck.id, now);
-  const cards = store.cardsIn(deck.id).sort((a, b) => b.created - a.created);
+  const cards = store.cardsIn(deck.id);
+  if (filtersDeck !== deck.id) {
+    filters = { ...NO_FILTERS };
+    filtersDeck = deck.id;
+    selected = new Set();
+  }
+  const filtering = Object.keys(NO_FILTERS).some((key) => key !== 'sort' && String(filters[key]) !== String(NO_FILTERS[key]));
+  const setFilters = (patch) => {
+    filters = { ...filters, ...patch };
+    render();
+  };
+
+  const groupCounts = {};
+  for (const card of cards) {
+    const group = store.cardGroup(card, now);
+    groupCounts[group] = (groupCounts[group] ?? 0) + 1;
+  }
+  const filterBar = [
+    h(
+      'div',
+      { class: 'chips', role: 'group', 'aria-label': 'Show cards that are' },
+      CARD_GROUPS.map(([group, label]) => {
+        const on = filters.groups.includes(group);
+        return h(
+          'button',
+          {
+            class: 'chip',
+            type: 'button',
+            'aria-pressed': String(on),
+            onclick: () => setFilters({ groups: on ? filters.groups.filter((g) => g !== group) : [...filters.groups, group] }),
+          },
+          label,
+          h('b', null, (groupCounts[group] ?? 0).toLocaleString()),
+        );
+      }),
+    ),
+    h(
+      'button',
+      {
+        class: 'btn filter-toggle',
+        type: 'button',
+        'aria-expanded': String(filtersOpen || filtering),
+        onclick: () => {
+          filtersOpen = !(filtersOpen || filtering);
+          render();
+        },
+      },
+      filtering ? 'Filters on' : 'Filter and sort',
+    ),
+    h(
+      'div',
+      { class: `filters ${filtersOpen || filtering ? 'open' : ''}` },
+      FILTER_SELECTS.map(([key, label, options]) => {
+        const select = h(
+          'select',
+          { onchange: () => setFilters({ [key]: select.value }) },
+          options.map(([value, text]) => h('option', { value, selected: value === filters[key] }, text)),
+        );
+        return h('label', { class: key !== 'sort' && filters[key] !== NO_FILTERS[key] ? 'on' : '' }, h('span', null, label), select);
+      }),
+      filtering && h('button', { class: 'btn ghost', type: 'button', onclick: () => setFilters({ ...NO_FILTERS, sort: filters.sort }) }, icon('close'), 'Clear filters'),
+    ),
+  ];
 
   const list = h('div');
   const shown = h('span', { class: 'count' });
+  // Ids of the reserve cards being dragged to a new place.
+  let dragged = null;
+  // How many matching cards are drawn; a deck can hold thousands, and drawing them all is slow.
+  let limit = CARD_PAGE;
 
   const drawList = () => {
-    const q = query.trim().toLowerCase();
-    const matches = q ? cards.filter((card) => `${card.front}\n${card.back}`.toLowerCase().includes(q)) : cards;
-    shown.textContent = q ? `${matches.length} of ${plural(cards.length, 'card')}` : plural(cards.length, 'card');
+    const q = query.trim();
+    const matches = store.findCards(deck.id, { text: q, ...filters }, now);
+    shown.textContent = q || filtering ? `${matches.length.toLocaleString()} of ${plural(cards.length, 'card')}` : plural(cards.length, 'card');
+    selected = new Set(matches.filter((card) => selected.has(card.id)).map((card) => card.id));
+    const pick = (ids, on) => {
+      for (const id of ids) on ? selected.add(id) : selected.delete(id);
+      drawList();
+    };
+    // In reserve order, the reserve cards shown can be moved: `line` is those, first to last.
+    const line = filters.sort === 'reserve' ? matches.filter((card) => card.reserved) : [];
+    const picked = line.filter((card) => selected.has(card.id));
+    const waiting = line.filter((card) => !selected.has(card.id));
+    const movable = picked.length > 0 && picked.length === selected.size;
+    // Ticked cards not on reserve, which can be put back on it.
+    const unreserved = matches.filter((card) => selected.has(card.id) && !card.reserved).map((card) => card.id);
+    // Ticked cards on reserve, which can be pulled in.
+    const reserved = matches.filter((card) => selected.has(card.id) && card.reserved).map((card) => card.id);
+    const move = (ids, where) => {
+      dragged = null;
+      store.moveInReserve(deck.id, ids, where);
+      drawList();
+    };
+    // One place up or down among the cards shown, which gathers the ticked cards together.
+    const step = (down) => {
+      const edge = line.indexOf(picked.at(down ? -1 : 0));
+      const anchor = line[edge + (down ? 1 : -1)] ?? waiting.at(down ? -1 : 0);
+      if (anchor) move([...selected], { [down ? 'after' : 'before']: anchor.id });
+    };
+    const moveButton = (label, title, onclick, glyph) => h('button', { class: 'btn', type: 'button', title, onclick }, glyph && icon(glyph), label);
     if (!matches.length) {
-      list.replaceChildren(h('div', { class: 'card-list' }, h('div', { class: 'list-empty' }, `No cards match “${query.trim()}”.`)));
+      const message = q && !filtering ? `No cards match “${q}”.` : q ? `No cards match “${q}” with these filters.` : 'No cards match these filters.';
+      list.replaceChildren(h('div', { class: 'card-list' }, h('div', { class: 'list-empty' }, message)));
       return;
     }
     list.replaceChildren(
       h(
         'div',
         { class: 'card-list' },
-        matches.map((card) => {
+        h(
+          'div',
+          { class: 'select-bar' },
+          h(
+            'label',
+            { class: 'pick' },
+            h('input', {
+              type: 'checkbox',
+              checked: selected.size === matches.length,
+              indeterminate: selected.size > 0 && selected.size < matches.length,
+              onchange: (e) => pick(matches.map((card) => card.id), e.target.checked),
+            }),
+            selected.size ? `${selected.size.toLocaleString()} selected` : matches.length === cards.length ? 'Select all' : `Select all ${matches.length.toLocaleString()} shown`,
+          ),
+          line.length > 1 && !selected.size && h('span', { class: 'hint' }, 'Drag cards to reorder them, or tick several to move them together.'),
+          // Only with the whole reserve in view, so nothing out of sight moves.
+          line.length > 1 &&
+            !selected.size &&
+            line.length === store.reserveIn(deck.id).length &&
+            moveButton('Reverse order', 'Turn the whole reserve around, so the last card is pulled in first', () => {
+              store.reverseReserve(deck.id);
+              drawList();
+            }, 'swap'),
+          movable &&
+            line.length > 1 && [
+              moveButton('Up', 'Move up one place', () => step(false), 'up'),
+              moveButton('Down', 'Move down one place', () => step(true), 'down'),
+              moveButton('To top', 'Move to the front of the reserve, to be pulled in first', () => {
+                const first = store.reserveIn(deck.id).find((card) => !selected.has(card.id));
+                if (first) move([...selected], { before: first.id });
+              }),
+              moveButton('To bottom', 'Move to the end of the reserve, to be pulled in last', () => move([...selected])),
+            ],
+          selected.size > 0 && [
+            reserved.length > 0 &&
+              h(
+                'button',
+                {
+                  class: 'btn primary',
+                  type: 'button',
+                  title: 'Pull the ticked reserve cards in as new cards, in their reserve order',
+                  onclick: () => {
+                    const pulled = store.pullCards(reserved);
+                    toast(`${plural(pulled, 'card')} pulled in as new ${pulled === 1 ? 'card' : 'cards'}`);
+                    render();
+                  },
+                },
+                icon('box'),
+                reserved.length === selected.size ? 'Pull in' : `Pull in ${reserved.length.toLocaleString()}`,
+              ),
+            unreserved.length > 0 &&
+              h(
+                'button',
+                { class: 'btn', type: 'button', title: 'Take the ticked cards out of study and put them at the end of the reserve', onclick: () => returnCardsToReserve(unreserved) },
+                icon('box'),
+                'Back to reserve',
+              ),
+            editable && [
+              h(
+                'button',
+                { class: 'btn', type: 'button', title: 'Add a copy of each ticked card with its front and back swapped, on the reserve', onclick: () => addReversedCards([...selected]) },
+                icon('swap'),
+                'Add reversed',
+              ),
+              h('button', { class: 'btn danger', type: 'button', onclick: () => removeCards([...selected]) }, icon('trash'), `Delete ${plural(selected.size, 'card')}`),
+            ],
+            h('button', { class: 'btn ghost', type: 'button', onclick: () => pick([...selected], false) }, 'Cancel'),
+          ],
+        ),
+        matches.slice(0, limit).map((card) => {
           const status = cardStatus(card, now);
-          return h(
+          const sortable = line.length > 1 && card.reserved;
+          // Dropping on the lower half of a row puts the cards after it.
+          const below = (e) => {
+            const box = row.getBoundingClientRect();
+            return e.clientY > box.top + box.height / 2;
+          };
+          const mark = (side) => {
+            row.classList.toggle('drop-before', side === 'before');
+            row.classList.toggle('drop-after', side === 'after');
+          };
+          const row = h(
             'div',
-            { class: 'card-row', onclick: () => openCardDialog({ card }) },
-            h('div', { class: 'text' }, card.front),
-            h('div', { class: 'text back-text' }, card.back),
-            h('span', { class: `pill ${status.kind} due`, style: 'justify-self: start' }, status.label),
+            {
+              class: `card-row ${selected.has(card.id) ? 'selected' : ''} ${editable ? '' : 'read-only'}`,
+              onclick: editable && (() => openCardDialog({ card })),
+              ...(sortable && {
+                draggable: true,
+                // Dragging a ticked card takes the other ticked cards along.
+                ondragstart: (e) => {
+                  dragged = selected.has(card.id) ? picked.map((c) => c.id) : [card.id];
+                  e.dataTransfer.effectAllowed = 'move';
+                  e.dataTransfer.setData('text/plain', card.front);
+                },
+                ondragover: (e) => {
+                  if (!dragged || dragged.includes(card.id)) return;
+                  e.preventDefault();
+                  mark(below(e) ? 'after' : 'before');
+                },
+                ondragleave: () => mark(),
+                ondrop: (e) => {
+                  if (!dragged || dragged.includes(card.id)) return;
+                  e.preventDefault();
+                  move(dragged, { [below(e) ? 'after' : 'before']: card.id });
+                },
+                ondragend: () => {
+                  dragged = null;
+                },
+              }),
+            },
             h(
-              'div',
-              { class: 'row-actions', onclick: (e) => e.stopPropagation() },
-              iconButton('edit', 'Edit card', () => openCardDialog({ card })),
-              iconButton('trash', 'Delete card', () => removeCard(card), 'danger'),
+              'label',
+              { class: 'pick', onclick: (e) => e.stopPropagation() },
+              sortable && h('span', { class: 'grip', title: 'Drag to reorder' }, icon('grip')),
+              h('input', { type: 'checkbox', 'aria-label': 'Select card', checked: selected.has(card.id), onchange: (e) => pick([card.id], e.target.checked) }),
             ),
+            h('div', { class: 'text' }, rich(card.front)),
+            h('div', { class: 'text back-text' }, rich(card.back)),
+            statusMark(status, status.label, 'due'),
+            editable &&
+              h(
+                'div',
+                { class: 'row-actions', onclick: (e) => e.stopPropagation() },
+                iconButton('edit', 'Edit card', () => openCardDialog({ card })),
+                iconButton('trash', 'Delete card', () => removeCard(card), 'danger'),
+              ),
           );
+          return row;
         }),
+        matches.length > limit &&
+          h(
+            'div',
+            { class: 'list-more' },
+            h(
+              'button',
+              {
+                class: 'btn',
+                type: 'button',
+                onclick: () => {
+                  limit += CARD_PAGE;
+                  drawList();
+                  list.querySelector('.list-more .btn')?.focus({ preventScroll: true });
+                },
+              },
+              `Show ${Math.min(CARD_PAGE, matches.length - limit).toLocaleString()} more`,
+            ),
+            h('span', null, `${limit.toLocaleString()} of ${matches.length.toLocaleString()} shown`),
+          ),
       ),
     );
   };
@@ -874,23 +1640,28 @@ function renderDeck(deck) {
     'aria-label': 'Search cards',
     oninput: () => {
       query = search.value;
+      limit = CARD_PAGE;
       drawList();
     },
   });
 
   const content = cards.length
-    ? [reserveBar(deck, c.reserve), h('div', { class: 'toolbar' }, h('div', { class: 'search' }, icon('search'), search), shown), list]
+    ? [reserveBar(deck, c.reserve), h('div', { class: 'toolbar' }, h('div', { class: 'search' }, icon('search'), search), shown), filterBar, list]
     : h(
         'div',
         { class: 'empty' },
         h('h2', null, 'No cards yet'),
-        h('p', null, 'Add a question on the front and its answer on the back, or import a list from an Excel file.'),
-        h(
-          'div',
-          { class: 'row' },
-          h('button', { class: 'btn primary', type: 'button', onclick: () => openCardDialog({ deckId: deck.id }) }, icon('plus'), 'Add card'),
-          h('button', { class: 'btn', type: 'button', onclick: () => pickImportFile(deck) }, icon('upload'), 'Import from Excel'),
-        ),
+        editable
+          ? [
+              h('p', null, 'Add a question on the front and its answer on the back, or import a list from an Excel file.'),
+              h(
+                'div',
+                { class: 'row' },
+                h('button', { class: 'btn primary', type: 'button', onclick: () => openCardDialog({ deckId: deck.id }) }, icon('plus'), 'Add card'),
+                h('button', { class: 'btn', type: 'button', onclick: () => pickImportFile(deck) }, icon('upload'), 'Import from Excel'),
+              ),
+            ]
+          : h('p', null, `Cards appear here when ${deck.from} adds them.`),
       );
   if (cards.length) drawList();
 
@@ -903,15 +1674,18 @@ function renderDeck(deck) {
       h(
         'div',
         { class: 'page-head', style: 'margin-top: 14px' },
-        h('div', null, h('h1', null, deck.name), countPills(c)),
+        h('div', null, h('h1', null, deck.name), deckFrom(deck), countPills(c), h('div', { class: 'deck-meta tomorrow' }, tomorrowText(c), ' ', h('a', { href: `#/upcoming/${deck.id}` }, 'See the days ahead'))),
         h(
           'div',
           { class: 'actions' },
-          h('a', { class: 'icon-btn', href: `#/stats/${deck.id}`, title: 'Deck statistics', 'aria-label': 'Deck statistics' }, icon('chart')),
-          iconButton('edit', 'Deck settings', () => openDeckDialog(deck)),
-          iconButton('trash', 'Delete deck', () => removeDeck(deck), 'danger'),
-          h('button', { class: 'btn', type: 'button', title: 'Import cards from an Excel or CSV file', onclick: () => pickImportFile(deck) }, icon('upload'), 'Import'),
-          h('button', { class: 'btn', type: 'button', onclick: () => openCardDialog({ deckId: deck.id }) }, icon('plus'), 'Add card'),
+          menu('More for this deck', [
+            h('a', { href: `#/upcoming/${deck.id}` }, icon('calendar'), 'Upcoming cards'),
+            h('a', { href: `#/stats/${deck.id}` }, icon('chart'), 'Statistics'),
+            editable && h('button', { type: 'button', title: 'Import cards from an Excel or CSV file', onclick: () => pickImportFile(deck) }, icon('upload'), 'Import from Excel'),
+            h('button', { type: 'button', onclick: () => openDeckDialog(deck) }, icon('edit'), 'Deck settings'),
+            editable && h('button', { type: 'button', class: 'danger', onclick: () => removeDeck(deck) }, icon('trash'), 'Delete deck'),
+          ]),
+          editable && h('button', { class: 'btn', type: 'button', onclick: () => openCardDialog({ deckId: deck.id }) }, icon('plus'), 'Add card'),
           c.total > 0 && h('a', { class: 'btn primary', href: `#/study/${deck.id}` }, icon('play'), `Study ${c.total}`),
         ),
       ),
@@ -926,6 +1700,45 @@ const RATINGS = [
   { rating: Rating.Good, label: 'Good', kind: 'good' },
   { rating: Rating.Easy, label: 'Easy', kind: 'easy' },
 ];
+
+// Where each answer would send the card, on a logarithmic time line from a minute to a year.
+const RULER_TICKS = [
+  ['1m', MINUTE],
+  ['1h', 60 * MINUTE],
+  ['1d', DAY],
+  ['1w', 7 * DAY],
+  ['1mo', 30 * DAY],
+  ['1y', 365 * DAY],
+];
+const rulerAt = (ms) => {
+  const span = Math.log(365 * DAY / MINUTE);
+  return Math.min(1, Math.max(0, Math.log(Math.max(ms, MINUTE) / MINUTE) / span)) * 100;
+};
+
+// Marks closer than this (in % of the ruler) are pushed apart, so each stays readable on a phone.
+const RULER_GAP = 4;
+
+function intervalRuler(options, now) {
+  const at = RATINGS.map(({ rating }) => rulerAt(options[rating].due - now));
+  for (let i = 1; i < at.length; i++) at[i] = Math.max(at[i], at[i - 1] + RULER_GAP);
+  for (let i = at.length - 1; i >= 0; i--) at[i] = Math.min(at[i], 100 - RULER_GAP * (at.length - 1 - i));
+  return h(
+    'div',
+    { class: 'ruler', 'aria-hidden': 'true' },
+    h(
+      'div',
+      { class: 'ruler-line' },
+      RATINGS.map(({ rating, kind }, i) => h('i', { class: `mark ${kind}`, style: `left: ${at[i]}%; --i: ${i}`, 'data-n': String(rating) })),
+    ),
+    h('div', { class: 'ruler-ticks' }, RULER_TICKS.map(([label, ms]) => h('span', { style: `left: ${rulerAt(ms)}%` }, label))),
+  );
+}
+
+// Sessions up to this many cards show a segment per card in the progress bar.
+const MAX_SEGMENTS = 24;
+
+/** A side that is a word or a short phrase, plain text on one line, which the card sets larger. */
+const isShort = (text) => text.length <= 28 && !/\n|\\[([]|\[image:/.test(text);
 
 function currentStudyCard(deckId, now) {
   let card = session.cardId && store.card(session.cardId);
@@ -955,7 +1768,13 @@ function renderStudy(deck) {
   if (session.deckId !== deck.id) Object.assign(session, { deckId: deck.id, cardId: null, revealed: false, done: 0, spoken: null });
   const card = currentStudyCard(deck.id, now);
   const c = store.counts(deck.id, now);
-  const progress = session.done + c.total ? (session.done / (session.done + c.total)) * 100 : 100;
+  const total = session.done + c.total;
+  const progress = total ? (session.done / total) * 100 : 100;
+  // A short session shows one segment per card; a long one, a single bar.
+  const bar =
+    total > 1 && total <= MAX_SEGMENTS
+      ? h('div', { class: 'progress segments', role: 'img', 'aria-label': `${session.done} of ${total} cards done` }, Array.from({ length: total }, (_, i) => h('i', { class: i < session.done ? 'done' : '' })))
+      : h('div', { class: 'progress', role: 'img', 'aria-label': `${session.done} of ${total} cards done` }, h('div', { style: `width: ${progress}%` }));
 
   const top = [
     h(
@@ -963,9 +1782,11 @@ function renderStudy(deck) {
       { class: 'study-top' },
       h('a', { class: 'icon-btn', href: `#/deck/${deck.id}`, title: 'Stop studying', 'aria-label': 'Stop studying' }, icon('close')),
       h('div', { class: 'study-title' }, deck.name),
+      card && statusMark(cardStatus(card, now), card.state === State.Review ? 'Review' : cardStatus(card, now).label, 'state'),
       countPills(c),
+      card && store.editable(deck.id) && h('div', { class: 'tools' }, iconButton('edit', 'Edit card (E)', () => openCardDialog({ card })), iconButton('trash', 'Delete card', () => removeCard(card), 'danger')),
     ),
-    h('div', { class: 'progress' }, h('div', { style: `width: ${progress}%` })),
+    bar,
   ];
 
   if (!card) {
@@ -989,6 +1810,7 @@ function renderStudy(deck) {
                 ? `You reviewed ${plural(session.done, 'card')} this session. Come back tomorrow for more.`
                 : 'Nothing is due in this deck right now.',
           ),
+          !empty && h('p', null, tomorrowText(c)),
           h('a', { class: 'btn primary', href: empty ? `#/deck/${deck.id}` : '#/' }, empty ? 'Go to deck' : 'Back to decks'),
         ),
       ),
@@ -996,7 +1818,6 @@ function renderStudy(deck) {
     return;
   }
 
-  const status = cardStatus(card, now);
   const options = session.revealed ? store.previewCard(card.id, now) : null;
 
   // Read the side that has just appeared, once.
@@ -1004,9 +1825,9 @@ function renderStudy(deck) {
   if (session.spoken !== shown) {
     session.spoken = shown;
     const side = session.revealed ? 'back' : 'front';
-    if (speaksSide(deck, side)) speakSideOf(card, deck, side);
+    if (speaksSide(card, deck, side)) speakSideOf(card, deck, side);
     else stopSpeaking();
-    if (!session.revealed && speaksSide(deck, 'back')) prepareSpeech(card.back, deck.backLang);
+    if (!session.revealed && speaksSide(card, deck, 'back')) prepareSideSpeech(card, deck, 'back');
   }
 
   app.replaceChildren(
@@ -1017,38 +1838,36 @@ function renderStudy(deck) {
       h(
         'div',
         { class: 'flashcard' },
-        h('span', { class: `pill ${status.kind} state` }, card.state === State.Review ? 'Review' : status.label),
-        h(
-          'div',
-          { class: 'tools' },
-          iconButton('edit', 'Edit card (E)', () => openCardDialog({ card })),
-          iconButton('trash', 'Delete card', () => removeCard(card), 'danger'),
-        ),
-        h('div', { class: 'face question' }, card.front),
+        h('div', { class: `face question ${isShort(card.front) ? 'short' : ''}` }, rich(card.front)),
         speakButton(card, deck, 'front'),
-        session.revealed && [h('hr'), h('div', { class: 'face answer' }, card.back), speakButton(card, deck, 'back')],
+        session.revealed && [h('hr'), h('div', { class: `face answer ${isShort(card.back) ? 'short' : ''}` }, rich(card.back)), speakButton(card, deck, 'back')],
       ),
       h(
         'div',
         { class: 'answer-bar' },
         session.revealed
-          ? h(
-              'div',
-              { class: 'ratings' },
-              RATINGS.map(({ rating, label, kind }) =>
-                h(
-                  'button',
-                  { class: `rate ${kind}`, type: 'button', onclick: () => rate(rating) },
-                  h('span', { class: 'ivl' }, (options[rating].state === State.Review ? '' : '<') + formatInterval(options[rating].due - now)),
-                  h('span', { class: 'label' }, label),
-                  h('kbd', null, String(rating)),
+          ? [
+              intervalRuler(options, now),
+              h(
+                'div',
+                { class: 'ratings' },
+                // Space and Enter also answer Good, so Good is the one the screen leans toward.
+                RATINGS.map(({ rating, label, kind }) =>
+                  h(
+                    'button',
+                    { class: `rate ${kind}`, type: 'button', title: rating === Rating.Good ? 'Good (3, Space or Enter)' : `${label} (${rating})`, onclick: () => rate(rating) },
+                    h('span', { class: 'label' }, label),
+                    h('span', { class: 'ivl' }, (options[rating].state === State.Review ? '' : '<') + formatInterval(options[rating].due - now)),
+                    h('kbd', null, rating === Rating.Good ? 'Space' : String(rating)),
+                  ),
                 ),
               ),
-            )
+            ]
           : h('button', { class: 'btn primary lg', type: 'button', onclick: reveal }, 'Show answer', h('kbd', null, 'Space')),
       ),
     ),
   );
+  markOverflow(app);
 }
 
 // ---- Statistics -----------------------------------------------------------
@@ -1122,7 +1941,10 @@ function axisTop(max) {
   return { step, top: Math.ceil(Math.max(max, 4) / step) * step };
 }
 
-/** Vertical bars from `[{ value, label, tick }]`; `tick` is the text under a bar, if any. */
+/**
+ * Vertical bars from `[{ value, label, tick, parts }]`; `tick` is the text under a bar, if any,
+ * and `parts`, if given, splits the bar into `[kind, value]` pieces, from the bottom up.
+ */
 function columnChart(items, unit) {
   const { step, top } = axisTop(Math.max(...items.map((item) => item.value)));
   const ticks = Array.from({ length: top / step + 1 }, (_, i) => i * step);
@@ -1138,7 +1960,16 @@ function columnChart(items, unit) {
         { class: 'chart-cols' },
         items.map((item) =>
           withTip(
-            h('div', { class: 'chart-col' }, item.value > 0 && h('div', { class: 'chart-bar', style: `height: ${(item.value / top) * 100}%` })),
+            h(
+              'div',
+              { class: 'chart-col' },
+              item.value > 0 &&
+                h(
+                  'div',
+                  { class: item.parts ? 'chart-bar split' : 'chart-bar', style: `height: ${(item.value / top) * 100}%` },
+                  item.parts?.filter(([, n]) => n).map(([kind, n]) => h('i', { class: `k-${kind}`, style: `flex: ${n} 0 0` })),
+                ),
+            ),
             plural(item.value, unit),
             item.label,
           ),
@@ -1213,16 +2044,20 @@ function activityPanel(s, today, deck) {
     sub,
     h(
       'div',
-      { class: 'heatmap', role: 'img', 'aria-label': `Calendar of reviews per day. ${sub}` },
-      h('div', { class: 'heat-days', 'aria-hidden': 'true' }, ['Mon', '', 'Wed', '', 'Fri', '', ''].map((day) => h('span', null, day))),
-      scroller,
-    ),
-    h(
-      'div',
-      { class: 'heat-key', 'aria-hidden': 'true' },
-      'Less',
-      [0, 1, 2, 3, 4].map((level) => h('i', { class: `heat l${level}` })),
-      'More',
+      { class: 'heat-wrap' },
+      h(
+        'div',
+        { class: 'heatmap', role: 'img', 'aria-label': `Calendar of reviews per day. ${sub}` },
+        h('div', { class: 'heat-days', 'aria-hidden': 'true' }, ['Mon', '', 'Wed', '', 'Fri', '', ''].map((day) => h('span', null, day))),
+        scroller,
+      ),
+      h(
+        'div',
+        { class: 'heat-key', 'aria-hidden': 'true' },
+        'Less',
+        [0, 1, 2, 3, 4].map((level) => h('i', { class: `heat l${level}` })),
+        'More',
+      ),
     ),
     deck && s.partial && h('p', { class: 'panel-note' }, `Reviews are counted for each deck separately ${s.loggedFrom ? `since ${sinceDate(s.loggedFrom)}` : 'from now on'}. Choose all decks to see earlier ones.`),
   );
@@ -1327,8 +2162,8 @@ function renderStats(deck) {
       'div',
       { class: 'page' },
       topbar(),
-      h('a', { class: 'back', href: deck ? `#/deck/${deck.id}` : '#/' }, icon('back'), deck ? deck.name : 'All decks'),
-      h('div', { class: 'page-head', style: 'margin-top: 14px' }, h('div', null, h('h1', null, 'Statistics'), h('p', { class: 'sub' }, deck ? deck.name : 'All decks'))),
+      deck && h('a', { class: 'back', href: `#/deck/${deck.id}` }, icon('back'), deck.name),
+      h('div', { class: 'page-head', style: deck ? 'margin-top: 14px' : null }, h('h1', null, 'Statistics')),
       hasCards
         ? [
             h(
@@ -1386,6 +2221,460 @@ function renderStats(deck) {
   if (activity) activity.scroller.scrollLeft = activity.scroller.scrollWidth;
 }
 
+// ---- Upcoming -------------------------------------------------------------
+
+// How many days ahead of today the page lists, and how often the chart labels a day.
+const AHEAD = [
+  { days: 7, every: 1, label: '1 week', span: 'week' },
+  { days: 30, every: 7, label: '1 month', span: 'month' },
+  { days: 90, every: 14, label: '3 months', span: '3 months' },
+];
+let ahead = AHEAD[0];
+
+const dayName = new Intl.DateTimeFormat(undefined, { weekday: 'short', day: 'numeric', month: 'short' });
+const weekday = new Intl.DateTimeFormat(undefined, { weekday: 'short' });
+
+// The kinds of card counted each day, as `store.upcoming` names them, and their colours.
+const UPCOMING_KINDS = [
+  ['new', 'New', 'new'],
+  ['learning', 'Learning', 'learning'],
+  ['review', 'Due', 'young'],
+];
+
+const breakdown = (day) => UPCOMING_KINDS.map(([kind, label]) => `${day[kind].toLocaleString()} ${label.toLowerCase()}`).join(', ');
+
+function renderUpcoming(deck) {
+  const now = Date.now();
+  const decks = store.decks();
+  const all = store.upcoming(deck?.id, Math.max(31, ahead.days + 1), now);
+  const days = all.slice(0, ahead.days + 1);
+  const name = (day, i) => (i === 0 ? 'Today' : i === 1 ? 'Tomorrow' : dayName.format(day.start));
+  const cards = deck ? store.cardsIn(deck.id) : decks.flatMap((d) => store.cardsIn(d.id));
+  const hasCards = cards.length > 0;
+  const reserve = cards.some((c) => c.reserved);
+
+  const deckSelect = h(
+    'select',
+    { 'aria-label': 'Deck', onchange: () => (location.hash = deckSelect.value ? `#/upcoming/${deckSelect.value}` : '#/upcoming') },
+    h('option', { value: '' }, 'All decks'),
+    decks.map((d) => h('option', { value: d.id, selected: d.id === deck?.id }, d.name)),
+  );
+  const stat = (n, label) => h('div', { class: 'stat' }, h('b', null, n.toLocaleString()), label);
+  const ahead7 = sum(all.slice(1, 8).map((d) => d.total));
+  const ahead30 = sum(all.slice(1, 31).map((d) => d.total));
+
+  const items = days.map((day, i) => ({
+    value: day.total,
+    label: `${i < 2 ? `${name(day, i)}, ${dayName.format(day.start)}` : longDate.format(day.start)}: ${breakdown(day)}`,
+    tick: i % ahead.every ? null : i === 0 ? 'Today' : ahead.every === 1 ? weekday.format(day.start) : shortDate.format(day.start),
+    parts: [...UPCOMING_KINDS].reverse().map(([kind, , colour]) => [colour, day[kind]]),
+  }));
+  const total = sum(days.slice(1).map((d) => d.total));
+  const busiest = days.slice(1).reduce((best, day) => (day.total > best.total ? day : best), { total: 0 });
+  const sub = total
+    ? `${plural(total, 'card')} over the next ${ahead.span}, about ${+(total / ahead.days).toFixed(1)} a day. The busiest day is ${dayName.format(busiest.start)}, with ${busiest.total.toLocaleString()}.`
+    : `Nothing comes up over the next ${ahead.span}.`;
+
+  const table = h(
+    'table',
+    { class: 'upcoming' },
+    h('thead', null, h('tr', null, h('th', { scope: 'col' }, 'Day'), UPCOMING_KINDS.map(([, label]) => h('th', { scope: 'col' }, label)), h('th', { scope: 'col' }, 'Total'))),
+    h(
+      'tbody',
+      null,
+      days.map((day, i) =>
+        h(
+          'tr',
+          { class: [!day.total && 'none', i > 0 && new Date(day.start).getDay() === 1 && 'week-start'].filter(Boolean).join(' ') },
+          h('th', { scope: 'row' }, name(day, i), i < 2 && h('span', null, dayName.format(day.start))),
+          UPCOMING_KINDS.map(([kind]) => h('td', { class: day[kind] ? kind : null }, day[kind] ? day[kind].toLocaleString() : '–')),
+          h('td', null, h('b', null, day.total.toLocaleString())),
+        ),
+      ),
+    ),
+  );
+
+  app.replaceChildren(
+    h(
+      'div',
+      { class: 'page' },
+      topbar(),
+      deck && h('a', { class: 'back', href: `#/deck/${deck.id}` }, icon('back'), deck.name),
+      h('div', { class: 'page-head', style: deck ? 'margin-top: 14px' : null }, h('h1', null, 'Upcoming')),
+      hasCards
+        ? [
+            h(
+              'div',
+              { class: 'filters' },
+              decks.length > 1 && deckSelect,
+              h(
+                'div',
+                { class: 'segmented', role: 'group', 'aria-label': 'How far ahead' },
+                AHEAD.map((range) =>
+                  h(
+                    'button',
+                    {
+                      type: 'button',
+                      'aria-pressed': String(range === ahead),
+                      onclick: () => {
+                        ahead = range;
+                        render();
+                      },
+                    },
+                    range.label,
+                  ),
+                ),
+              ),
+            ),
+            h('div', { class: 'summary' }, stat(all[0].total, 'today'), stat(all[1].total, 'tomorrow'), stat(ahead7, 'in the next 7 days'), stat(ahead30, 'in the next 30 days')),
+            panel(
+              'Cards each day',
+              sub,
+              columnChart(items, 'card'),
+              h(
+                'ul',
+                { class: 'legend' },
+                UPCOMING_KINDS.map(([kind, label, colour]) => h('li', null, h('i', { class: `k-${colour}` }), h('span', null, label), h('b', null, sum(days.map((d) => d[kind])).toLocaleString()))),
+              ),
+            ),
+            panel(
+              'Day by day',
+              null,
+              h('div', { class: 'table-scroll' }, table),
+              h(
+                'p',
+                { class: 'panel-note' },
+                'New cards are counted at each deck’s daily limit, supposing you study every day. The cards you study will come back on later days too, so those days fill up as you go.',
+                reserve ? ' Cards on reserve are not counted until they are pulled in.' : '',
+              ),
+            ),
+          ]
+        : h(
+            'div',
+            { class: 'empty' },
+            h('h2', null, 'Nothing coming up'),
+            h('p', null, 'Add some cards and study them. The days they come back on will be listed here.'),
+            h('a', { class: 'btn primary', href: deck ? `#/deck/${deck.id}` : '#/' }, deck ? 'Go to deck' : 'Go to decks'),
+          ),
+    ),
+  );
+}
+
+// ---- Signing in -----------------------------------------------------------
+
+const AUTH_ERRORS = {
+  'bad-invite': 'That invite code doesn’t work. Check it with whoever sent it.',
+  'username-taken': 'That username is taken.',
+  'weak-password': 'Use at least 8 characters.',
+  'bad-username': 'Use 3–32 letters, numbers, dots, dashes or underscores.',
+  'bad-login': 'Wrong username or password.',
+  'rate-limited': 'Too many attempts. Try again in a few minutes.',
+};
+
+/** What to say when logging in or signing up fails with `error`. */
+function authMessage(error) {
+  if (error instanceof TypeError) return 'Can’t reach Recall. Check your connection.';
+  return AUTH_ERRORS[error.message] ?? 'Something went wrong. Try again.';
+}
+
+/** A labelled, required input. `plain` fields (usernames, codes) are not capitalised or corrected. */
+function authField(label, attrs, plain = false) {
+  const input = h('input', { required: true, ...attrs, ...(plain && { autocapitalize: 'none' }) });
+  if (plain) {
+    input.setAttribute('autocorrect', 'off');
+    input.setAttribute('spellcheck', 'false');
+  }
+  return h('label', { class: 'field' }, h('span', null, label), input);
+}
+
+/** The login form, or with `mode` 'signup' the form that creates an account from an invite code. */
+function renderAuth(mode) {
+  const signup = mode === 'signup';
+  const fields = signup
+    ? [
+        authField('Invite code', { name: 'code', autocomplete: 'off' }, true),
+        authField('Your name', { name: 'name', autocomplete: 'name', maxlength: 60 }),
+        authField('Username', { name: 'username', autocomplete: 'username' }, true),
+        authField('Password', { name: 'password', type: 'password', autocomplete: 'new-password' }),
+      ]
+    : [
+        authField('Username', { name: 'username', autocomplete: 'username' }, true),
+        authField('Password', { name: 'password', type: 'password', autocomplete: 'current-password' }),
+      ];
+  const error = h('p', { class: 'auth-error', role: 'alert' });
+  const submit = h('button', { class: 'btn primary', type: 'submit' }, signup ? 'Create account' : 'Log in');
+  const form = h(
+    'form',
+    {
+      onsubmit: async (e) => {
+        e.preventDefault();
+        const values = Object.fromEntries(new FormData(form));
+        submit.disabled = true;
+        error.textContent = '';
+        try {
+          if (signup) await api.signUp(values);
+          else await api.logIn(values.username, values.password);
+          // A new account starts at home; logging in again stays where the session ended.
+          if (signup) history.replaceState(null, '', location.pathname + location.search);
+          location.reload();
+        } catch (err) {
+          error.textContent = authMessage(err);
+          submit.disabled = false;
+        }
+      },
+    },
+    fields,
+    error,
+    submit,
+  );
+  const sub = signup
+    ? 'You need an invite code from whoever runs this Recall.'
+    : store.storageInfo().signedOut
+      ? 'Your session ended. Log in again and nothing you did here is lost.'
+      : 'Pick up where you left off.';
+  app.replaceChildren(
+    h(
+      'main',
+      { class: 'auth', 'data-mode': mode },
+      h('p', { class: 'brand' }, 'Recall'),
+      h('h1', null, signup ? 'Create your account' : 'Log in'),
+      h('p', { class: 'sub' }, sub),
+      form,
+      h('p', { class: 'auth-switch' }, signup ? h('a', { href: '#/' }, 'Have an account? Log in') : h('a', { href: '#/signup' }, 'Have an invite code? Sign up')),
+    ),
+  );
+}
+
+/** Shown when the server cannot be reached at all as the app starts. */
+function renderOffline() {
+  app.replaceChildren(
+    h(
+      'main',
+      { class: 'auth offline' },
+      h('p', { class: 'brand' }, 'Recall'),
+      h('h1', null, 'Can’t reach Recall. Check your connection.'),
+      h('button', { class: 'btn primary', type: 'button', onclick: () => location.reload() }, 'Try again'),
+    ),
+  );
+}
+
+// ---- Admin ----------------------------------------------------------------
+// People, invite codes and the decks the admin gives. Loaded from the server on arrival and
+// after each change; `fresh` is cleared on leaving, so coming back loads it again.
+
+const adminState = { data: null, fresh: false, error: false };
+const listFormat = new Intl.ListFormat(undefined, { type: 'conjunction' });
+
+async function loadAdmin() {
+  adminState.fresh = true;
+  try {
+    const [users, invites, decks] = await Promise.all([api.admin.users(), api.admin.invites(), api.admin.decks()]);
+    adminState.data = { users, invites, decks };
+    adminState.error = false;
+  } catch (error) {
+    // The session ended, perhaps by resetting your own password: log in again.
+    if (error.message === 'signed-out') return location.reload();
+    adminState.error = true;
+  }
+  if (route().view === 'admin' && !document.querySelector('dialog[open]')) render();
+}
+
+/** Run an admin change, say `done` (or what `done` makes of its result), then load the screen again. */
+async function adminChange(change, done) {
+  let result;
+  try {
+    result = await change();
+  } catch {
+    toast('Could not save that. Try again.');
+    return;
+  }
+  toast(typeof done === 'function' ? done(result) : done);
+  await loadAdmin();
+}
+
+const adminRow = (main, meta, ...actions) =>
+  h('li', { class: 'admin-row' }, h('div', { class: 'admin-main' }, main, h('span', { class: 'admin-meta' }, meta)), h('div', { class: 'admin-actions' }, actions));
+
+function openResetDialog(user) {
+  const password = h('input', { type: 'password', name: 'password', required: true, minLength: 8, autocomplete: 'new-password' });
+  const error = h('p', { class: 'auth-error', role: 'alert' });
+  const submit = h('button', { class: 'btn primary', type: 'submit' }, 'Set password');
+  const form = h(
+    'form',
+    {
+      onsubmit: async (e) => {
+        e.preventDefault();
+        submit.disabled = true;
+        error.textContent = '';
+        try {
+          await api.admin.resetPassword(user.id, password.value);
+        } catch (err) {
+          error.textContent = err.message === 'not-found' ? 'That account no longer exists.' : authMessage(err);
+          submit.disabled = false;
+          return;
+        }
+        dialog.close();
+        toast(`Password changed for ${user.name}`);
+      },
+    },
+    h('label', { class: 'field' }, h('span', null, 'New password'), password, h('small', null, `${user.name} is logged out everywhere and logs in with this password.`)),
+    error,
+    h('div', { class: 'modal-foot' }, h('button', { class: 'btn', type: 'button', onclick: () => dialog.close() }, 'Cancel'), submit),
+  );
+  const dialog = modal(`Reset password for ${user.name}`, form, { narrow: true, onclose: render });
+  password.focus();
+}
+
+function openGiveDialog(deck, users) {
+  const people = users.filter((u) => u.id !== account.id);
+  const had = new Set(deck.recipients.filter((r) => r.active).map((r) => r.userId));
+  const boxes = people.map((u) => h('input', { type: 'checkbox', value: u.id, checked: had.has(u.id) }));
+  const nameOf = (id) => people.find((u) => u.id === id).name;
+  const form = h(
+    'form',
+    {
+      onsubmit: async (e) => {
+        e.preventDefault();
+        const now = new Set(boxes.filter((box) => box.checked).map((box) => box.value));
+        const added = [...now].filter((id) => !had.has(id));
+        const removed = [...had].filter((id) => !now.has(id));
+        dialog.close();
+        if (!added.length && !removed.length) return;
+        const said = [
+          added.length && `Given to ${listFormat.format(added.map(nameOf))}`,
+          removed.length && `${added.length ? 'taken' : 'Taken'} back from ${listFormat.format(removed.map(nameOf))}`,
+        ].filter(Boolean);
+        await adminChange(async () => {
+          if (added.length) await api.admin.assign(deck.id, added);
+          if (removed.length) await api.admin.unassign(deck.id, removed);
+        }, said.join(', '));
+      },
+    },
+    people.length
+      ? [
+          h('p', { class: 'message' }, 'They study it with their own progress and cannot change its cards. Taking it back hides it from them and keeps their progress.'),
+          h('div', { class: 'give-list' }, people.map((u, i) => h('label', { class: 'check' }, boxes[i], h('span', null, u.name, ' ', h('span', { class: 'give-user' }, u.username))))),
+        ]
+      : h('p', { class: 'message' }, 'No one else has an account yet. Make an invite code and send it to them.'),
+    h(
+      'div',
+      { class: 'modal-foot' },
+      h('button', { class: 'btn', type: 'button', onclick: () => dialog.close() }, 'Cancel'),
+      people.length > 0 && h('button', { class: 'btn primary', type: 'submit' }, 'Save'),
+    ),
+  );
+  const dialog = modal(`Give “${deck.name}” to…`, form, { narrow: true, onclose: render });
+  boxes[0]?.focus();
+}
+
+function copyCode(code) {
+  const copied = navigator.clipboard?.writeText(code) ?? Promise.reject();
+  copied.then(() => toast(`Copied ${code}`), () => toast(`Could not copy. The code is ${code}`));
+}
+
+function peopleSection({ users }) {
+  return h(
+    'section',
+    { class: 'admin-section', 'aria-label': 'People' },
+    h('div', { class: 'section-head' }, h('h2', null, 'People')),
+    h(
+      'ul',
+      { class: 'admin-list' },
+      users.map((u) =>
+        adminRow(
+          h('b', null, u.name),
+          u.role === 'admin' ? `${u.username} · admin` : u.username,
+          h('button', { class: 'btn', type: 'button', onclick: () => openResetDialog(u) }, icon('key'), 'Reset password'),
+        ),
+      ),
+    ),
+  );
+}
+
+function invitesSection({ invites }) {
+  const active = invites.filter((invite) => !invite.revoked && invite.usesLeft > 0);
+  const uses = h('input', { type: 'number', required: true, min: 1, max: 20, step: 1, value: 1, 'aria-label': 'Uses' });
+  return h(
+    'section',
+    { class: 'admin-section', 'aria-label': 'Invite codes' },
+    h(
+      'div',
+      { class: 'section-head' },
+      h('h2', null, 'Invite codes'),
+      h(
+        'form',
+        {
+          class: 'actions invite-new',
+          onsubmit: (e) => {
+            e.preventDefault();
+            adminChange(() => api.admin.createInvite(Number(uses.value)), ({ code }) => `Invite code ${code} made`);
+          },
+        },
+        h('label', { class: 'uses' }, h('span', null, 'Uses'), uses),
+        h('button', { class: 'btn primary', type: 'submit' }, icon('plus'), 'New invite code'),
+      ),
+    ),
+    h(
+      'ul',
+      { class: 'admin-list' },
+      active.length
+        ? active.map((invite) =>
+            adminRow(
+              h('b', { class: 'invite-code' }, invite.code),
+              `${plural(invite.usesLeft, 'use')} left · made ${shortDate.format(invite.created)}`,
+              iconButton('copy', `Copy ${invite.code}`, () => copyCode(invite.code)),
+              iconButton('close', `Revoke ${invite.code}`, () => adminChange(() => api.admin.revokeInvite(invite.code), `Invite code ${invite.code} revoked`), 'danger'),
+            ),
+          )
+        : h('li', { class: 'admin-empty' }, 'No active invite codes. Make one to let someone sign up.'),
+    ),
+  );
+}
+
+function decksSection({ decks, users }) {
+  const given = (deck) => {
+    const names = deck.recipients.filter((r) => r.active).map((r) => r.name);
+    return names.length ? `Given to ${listFormat.format(names)}` : 'Not given to anyone';
+  };
+  return h(
+    'section',
+    { class: 'admin-section', 'aria-label': 'Your decks' },
+    h('div', { class: 'section-head' }, h('h2', null, 'Your decks')),
+    h(
+      'ul',
+      { class: 'admin-list' },
+      decks.length
+        ? decks.map((deck) =>
+            adminRow(
+              h('b', null, deck.name),
+              `${plural(deck.cards, 'card')} · ${given(deck)}`,
+              h('button', { class: 'btn', type: 'button', onclick: () => openGiveDialog(deck, users) }, icon('share'), 'Give to…'),
+            ),
+          )
+        : h('li', { class: 'admin-empty' }, 'You have no decks yet.'),
+    ),
+  );
+}
+
+function renderAdmin() {
+  if (!adminState.fresh) loadAdmin();
+  const d = adminState.data;
+  const body = d
+    ? [peopleSection(d), invitesSection(d), decksSection(d)]
+    : adminState.error
+      ? h('div', { class: 'empty' }, h('h2', null, 'Could not load this page'), h('div', { class: 'row' }, h('button', { class: 'btn', type: 'button', onclick: loadAdmin }, 'Try again')))
+      : h('p', { class: 'admin-empty' }, 'Loading…');
+  app.replaceChildren(
+    h(
+      'div',
+      { class: 'page' },
+      topbar(),
+      h('div', { class: 'page-head' }, h('div', null, h('h1', null, 'Admin'), h('p', { class: 'sub' }, 'People, invite codes and the decks you give.'))),
+      body,
+    ),
+  );
+}
+
 // ---- Routing and shortcuts ------------------------------------------------
 
 function route() {
@@ -1395,15 +2684,35 @@ function route() {
 
 function render() {
   const { view, deck } = route();
+  if (offline) return;
+  if (!account || store.storageInfo().signedOut) {
+    session.deckId = session.cardId = null;
+    stopSpeaking();
+    // A dialog left open would sit over the login form.
+    for (const open of document.querySelectorAll('dialog[open]')) open.close();
+    const mode = view === 'signup' ? 'signup' : 'login';
+    // Leave a form being filled in alone when nothing about it changed.
+    if (app.querySelector(`.auth[data-mode="${mode}"]`)) return;
+    return renderAuth(mode);
+  }
   if (view !== 'study' && session.deckId) {
     session.deckId = null;
     stopSpeaking();
   }
-  if (view !== 'deck') query = '';
+  if (view !== 'deck') {
+    query = '';
+    filtersDeck = null;
+  }
+  if (view !== 'admin') adminState.fresh = false;
   tip.hidden = true;
-  if (view === 'deck' && deck) renderDeck(deck);
+  if (view === 'admin' && account.role !== 'admin') {
+    history.replaceState(null, '', '#/');
+    renderHome();
+  } else if (view === 'admin') renderAdmin();
+  else if (view === 'deck' && deck) renderDeck(deck);
   else if (view === 'study' && deck) renderStudy(deck);
   else if (view === 'stats') renderStats(deck);
+  else if (view === 'upcoming') renderUpcoming(deck);
   else renderHome();
 }
 
@@ -1425,7 +2734,7 @@ document.addEventListener('keydown', (e) => {
     const deck = store.deck(card.deckId);
     const side = deck.speak === 'front' || !session.revealed ? 'front' : 'back';
     speakSideOf(card, deck, side);
-  } else if (e.key.toLowerCase() === 'e') {
+  } else if (e.key.toLowerCase() === 'e' && store.editable(session.deckId)) {
     e.preventDefault();
     openCardDialog({ card: store.card(session.cardId) });
   }
@@ -1436,12 +2745,27 @@ window.addEventListener('hashchange', () => {
   render();
 });
 
-// Counts change as the day rolls over and learning steps come due.
+// Counts change as the day rolls over and learning steps come due. Another device may also have
+// changed the state meanwhile; when it is reloaded, the listener below renders it.
 document.addEventListener('visibilitychange', () => {
-  if (!document.hidden && !document.querySelector('dialog[open]') && route().view !== 'study') render();
+  if (document.hidden) return;
+  if (!document.querySelector('dialog[open]') && route().view !== 'study') render();
+  if (!document.querySelector('dialog[open]')) store.refresh();
 });
 
-await store.load();
-store.onStorageChange(render);
 applyTheme();
-render();
+try {
+  const [{ signedIn }, me] = await Promise.all([store.load(), api.me().catch(() => null)]);
+  // Signed in even if the name did not come back; the menu then just says "Account".
+  if (signedIn) account = me?.user ?? {};
+  store.onStorageChange((message) => {
+    render();
+    if (message) toast(message);
+  });
+  applyTheme();
+  render();
+} catch {
+  offline = true;
+  applyTheme();
+  renderOffline();
+}

@@ -1,8 +1,8 @@
-// App state: decks, cards, persistence and the study queue.
+// App state: decks, cards, saving to the server and the study queue.
 
+import * as api from './api.js';
+import { mergeCounts } from './counts.js';
 import { DAY, State, dayStart, newSchedule, nextDayAt, preview, schedule } from './fsrs.js';
-
-const KEY = 'recall.v1';
 
 // Per-deck settings.
 //   scheduler     'sm2' (Anki's default algorithm) or 'fsrs' (Anki with FSRS switched on)
@@ -13,6 +13,8 @@ const KEY = 'recall.v1';
 //   frontLang     language the front is read in, such as 'en-US'
 //   backLang      language the back is read in
 //   speechRate    playback speed of that audio, where 1 is the voice's natural pace
+//   saveAudio     whether the server keeps the audio it makes for the deck's cards; off, it
+//                 is made each time it is played, and `npm run cache-voice` leaves the deck out
 // A deck imported from Anki may also carry `fsrsParams`, its own FSRS parameters.
 export const DECK_DEFAULTS = {
   scheduler: 'sm2',
@@ -23,119 +25,332 @@ export const DECK_DEFAULTS = {
   frontLang: 'en-US',
   backLang: 'pt-PT',
   speechRate: 0.8,
+  saveAudio: true,
 };
 
 // `daily` counts the answers given on each day. `log` breaks the same answers down:
 // log[day][deckId] holds twelve counts, Again to Easy for each kind in ANSWER_KINDS.
 const emptyState = () => ({ version: 1, decks: [], cards: [], daily: {}, log: {}, settings: {} });
 
-const memory = new Map();
-const storage = (() => {
-  try {
-    const ls = globalThis.localStorage;
-    if (ls) return ls;
-  } catch {
-    // Storage blocked or unavailable; fall through to memory.
-  }
-  return {
-    getItem: (k) => (memory.has(k) ? memory.get(k) : null),
-    setItem: (k, v) => memory.set(k, v),
-  };
-})();
-
 let state = emptyState();
 
 // ---- Persistence ------------------------------------------------------------
-// When the app is served by server.js, everything is saved to a file on disk through
-// `api/state`. The browser's localStorage always holds a second copy, and is the only
-// store when there is no server (for example on a static host).
+// The state lives on the server, which keeps each user's own. It is loaded from `api/state`,
+// and each change sends `api/sync` only the decks, cards and figures that differ from what
+// the server last took, so a phone and a laptop used on the same day do not overwrite each
+// other's work. Until the server has them, those changes are also kept in the browser under
+// the user's id, so answers given with no signal survive the page being closed. Nothing else is
+// kept there, and logging out clears it.
 
-const API = 'api/state';
-const disk = { available: false, ok: true, file: null, voice: null };
+const server = { available: false, ok: true, signedOut: false, voice: null };
+// What the server holds, as last loaded or saved.
+let snapshot = snapshotOf(emptyState());
+let userId = null;
 let writing = false;
+// The save on its way, which resolves once it and any changes made meanwhile are sent or kept.
+let sending = Promise.resolve();
 let dirty = false;
 let retry = null;
 let notify = () => {};
 
-/** Where data is being kept, and the server's voice if any: `{ available, ok, file, voice }`. */
-export const storageInfo = () => ({ ...disk });
+/** Whether the state came from the server and saves reach it, and the server's voice. */
+export const storageInfo = () => ({ ...server });
 
-/** Call `listener` whenever saving to disk starts failing or recovers. */
+/**
+ * Call `listener` whenever saving starts failing or recovers, the session ends, or the state is
+ * reloaded from the server. A reload after refused changes passes the message to show.
+ */
 export function onStorageChange(listener) {
   notify = listener;
 }
 
-function readLocal() {
+/**
+ * Each deck and card as JSON, by id, and the daily figures, log and settings as JSON,
+ * so a later state can be compared with this one.
+ */
+export function snapshotOf(s) {
+  return {
+    decks: new Map(s.decks.map((d) => [d.id, JSON.stringify(d)])),
+    cards: new Map(s.cards.map((c) => [c.id, JSON.stringify(c)])),
+    daily: JSON.stringify(s.daily),
+    log: JSON.stringify(s.log),
+    settings: JSON.stringify(s.settings),
+  };
+}
+
+/** What differs from `before` in `after`, both snapshots, as the changes `api/sync` takes, or null. */
+function changesBetween(before, after, savedAt) {
+  const changes = {};
+  for (const kind of ['decks', 'cards']) {
+    const changed = [...after[kind]].filter(([id, json]) => before[kind].get(id) !== json).map(([, json]) => JSON.parse(json));
+    const gone = [...before[kind].keys()].filter((id) => !after[kind].has(id));
+    if (changed.length) changes[kind] = changed;
+    if (gone.length) changes[kind === 'decks' ? 'deletedDecks' : 'deletedCards'] = gone;
+  }
+  for (const key of ['daily', 'log', 'settings']) {
+    if (before[key] !== after[key]) changes[key] = JSON.parse(after[key]);
+  }
+  if (!Object.keys(changes).length) return null;
+  return { ...changes, savedAt: savedAt ?? Date.now() };
+}
+
+/**
+ * The changes that turn the state `snapshot` was taken of into `s`: decks and cards that are new
+ * or differ, the ids of those removed, and the daily figures, log and settings when they changed.
+ * Null when nothing changed.
+ */
+export const diffState = (snap, s) => changesBetween(snap, snapshotOf(s), s.savedAt);
+
+/** What the server has not taken yet, or null. */
+const unsent = () => changesBetween(snapshot, snapshotOf(state), state.savedAt);
+
+/** The ids of every deck and card a set of changes touches. */
+const idsOf = (changes) => [
+  ...(changes.decks ?? []).map((d) => d.id),
+  ...(changes.cards ?? []).map((c) => c.id),
+  ...(changes.deletedDecks ?? []),
+  ...(changes.deletedCards ?? []),
+];
+
+// ---- Changes not yet sent, kept in the browser
+
+const pendingKey = () => `recall.pending.${userId}`;
+
+function readPending() {
   try {
-    const raw = storage.getItem(KEY);
-    return raw ? normalize(JSON.parse(raw)) : null;
+    const raw = userId && globalThis.localStorage?.getItem(pendingKey());
+    return raw ? JSON.parse(raw) : null;
   } catch {
     return null;
   }
 }
 
-async function readDisk() {
+function writePending(changes) {
   try {
-    const res = await fetch(API, { cache: 'no-store' });
-    const file = res.headers.get('X-Data-File');
-    if (!file || (res.status !== 200 && res.status !== 204)) return null;
-    disk.available = true;
-    disk.file = decodeURIComponent(file);
-    disk.voice = decodeURIComponent(res.headers.get('X-Tts-Engine') ?? '') || null;
-    return res.status === 200 ? normalize(await res.json()) : null;
+    const storage = globalThis.localStorage;
+    if (!storage || !userId) return;
+    if (changes) storage.setItem(pendingKey(), JSON.stringify(changes));
+    else storage.removeItem(pendingKey());
   } catch {
-    return null;
+    // Browser storage full or blocked; the changes still go to the server when it can be reached.
   }
 }
 
+/** Keep what the server has not taken yet, so closing the page does not lose it. */
+const keepPending = () => writePending(unsent());
+
+/**
+ * Lay changes made here over the state, leaving out those to the ids in `skip`. Answer counts
+ * are merged, keeping the larger count, as the server does.
+ */
+function applyLocal(changes, skip = new Set()) {
+  const put = (list, items) => {
+    const at = new Map(list.map((x, i) => [x.id, i]));
+    for (const item of items ?? []) {
+      if (skip.has(item.id)) continue;
+      if (at.has(item.id)) list[at.get(item.id)] = item;
+      else list.push(item);
+    }
+  };
+  const gone = (ids) => new Set((ids ?? []).filter((id) => !skip.has(id)));
+  const deletedDecks = gone(changes.deletedDecks);
+  const deletedCards = gone(changes.deletedCards);
+  state.decks = state.decks.filter((d) => !deletedDecks.has(d.id));
+  state.cards = state.cards.filter((c) => !deletedCards.has(c.id) && !deletedDecks.has(c.deckId));
+  put(state.decks, changes.decks);
+  put(state.cards, changes.cards);
+  if (changes.daily) state.daily = mergeCounts(state.daily, changes.daily);
+  if (changes.log) state.log = mergeCounts(state.log, changes.log);
+  if (changes.settings) state.settings = changes.settings;
+}
+
+// ---- Talking to the server
+
+/** Fetch this user's state; null when signed out. Throws when the server cannot be reached. */
+async function fetchState() {
+  const res = await fetch('api/state', { cache: 'no-store' });
+  if (res.status === 401) return null;
+  if (!res.ok) throw new Error(`load failed: ${res.status}`);
+  server.voice = decodeURIComponent(res.headers.get('X-Tts-Engine') ?? '') || null;
+  return normalize(await res.json());
+}
+
+/** Take `data` as the state the server holds. */
+function useState(data) {
+  state = data;
+  // Taken after normalize, so the defaults it fills in are not sent back as changes.
+  snapshot = snapshotOf(state);
+}
+
+/** Who is signed in, or null. */
+async function whoAmI() {
+  try {
+    return (await api.me()).user;
+  } catch (error) {
+    if (error.message === 'signed-out') return null;
+    throw error;
+  }
+}
+
+/**
+ * Load the signed-in user's state from the server, then lay over it any changes this browser
+ * made for the same user that never reached the server, and send them. Throws when the server
+ * cannot be reached.
+ */
 export async function load() {
-  const local = readLocal();
-  const saved = await readDisk();
-  // The newer copy wins, so reviews done while the server was down are not lost.
-  const useLocal = local && (!saved || local.savedAt > saved.savedAt);
-  state = (useLocal ? local : saved) ?? emptyState();
-  if (disk.available && useLocal) flush();
+  const [user, data] = await Promise.all([whoAmI(), fetchState()]);
+  if (!user || !data) return { signedIn: false };
+  userId = user.id;
+  useState(data);
+  server.available = true;
+  server.signedOut = false;
+  server.ok = true;
+  const pending = readPending();
+  if (pending) {
+    applyLocal(pending);
+    flush();
+  }
+  return { signedIn: true };
 }
 
-function setDiskOk(ok) {
-  if (disk.ok === ok) return;
-  disk.ok = ok;
+/**
+ * Take the state from the server again, as another device may have changed it, unless changes
+ * made here are still on their way. Tells the listener when it did.
+ */
+export async function refresh() {
+  if (!server.available || server.signedOut || writing || unsent()) return false;
+  const before = snapshot;
+  let data;
+  try {
+    data = await fetchState();
+  } catch {
+    return false;
+  }
+  if (!data) {
+    signOut();
+    return false;
+  }
+  // Something was changed or saved while it loaded; that is newer than what came back.
+  if (writing || snapshot !== before || unsent()) return false;
+  useState(data);
+  notify();
+  return true;
+}
+
+/**
+ * Send what is left, waiting for a save already on its way, then log out and forget this user's
+ * changes kept in the browser. Throws Error('unsaved'), staying signed in with those changes
+ * kept, when the server has not taken them all, and Error('signed-out') when the session had
+ * already ended.
+ */
+export async function logOut() {
+  await flush();
+  if (server.signedOut) throw new Error('signed-out');
+  if (unsent()) throw new Error('unsaved');
+  await api.logOut();
+  // Anything changed while logging out stays kept for this user's next login.
+  keepPending();
+  userId = null;
+  server.available = false;
+  useState(emptyState());
+}
+
+function setOk(ok) {
+  if (server.ok === ok) return;
+  server.ok = ok;
   notify();
 }
 
-async function flush() {
+function signOut() {
+  server.signedOut = true;
+  notify();
+}
+
+/**
+ * Some changes were refused: start again from what the server holds, then lay over it the
+ * changes made since `sent` was sent, except those to the ids in `refused`. Returns whether
+ * the state was reloaded.
+ */
+async function reload(sent, refused) {
+  let data;
+  try {
+    data = await fetchState();
+  } catch {
+    return false;
+  }
+  if (!data) {
+    signOut();
+    return false;
+  }
+  const later = changesBetween(sent, snapshotOf(state), state.savedAt);
+  useState(data);
+  if (later) applyLocal(later, refused);
+  notify('Some changes could not be saved');
+  return true;
+}
+
+/**
+ * Send the server what changed since it last saved. Each change is read when it is sent, and
+ * only what was sent counts as saved, so edits made meanwhile go in the next request.
+ * A failure to reach the server is retried every 5 seconds. Resolves when nothing is on its way,
+ * waiting for a save already being sent.
+ */
+export function flush() {
+  if (!server.available || server.signedOut) return Promise.resolve();
   if (writing) {
     dirty = true;
-    return;
+    return sending;
   }
   writing = true;
+  sending = send();
+  return sending;
+}
+
+/** Send changes until none are left or sending fails. */
+async function send() {
   clearTimeout(retry);
   do {
     dirty = false;
+    const next = snapshotOf(state);
+    const changes = changesBetween(snapshot, next, state.savedAt);
+    if (!changes) break;
     try {
-      const res = await fetch(API, {
-        method: 'PUT',
+      const res = await fetch('api/sync', {
+        method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(state),
+        body: JSON.stringify(changes),
       });
-      if (!res.ok) throw new Error(`save failed: ${res.status}`);
-      setDiskOk(true);
+      if (res.status === 401) {
+        signOut();
+        break;
+      }
+      // Any other refusal of the whole request would only be refused again: start over.
+      const refusedAll = res.status >= 400 && res.status < 500 && res.status !== 429;
+      if (!res.ok && !refusedAll) throw new Error(`save failed: ${res.status}`);
+      const { rejected = [] } = refusedAll ? { rejected: idsOf(changes) } : await res.json();
+      if (!refusedAll) snapshot = next;
+      setOk(true);
+      if (refusedAll || rejected.length) {
+        if (!(await reload(next, new Set(rejected)))) {
+          if (server.signedOut) break;
+          throw new Error('reload failed');
+        }
+        dirty = true;
+      }
     } catch {
-      setDiskOk(false);
+      setOk(false);
       retry = setTimeout(flush, 5000);
+      break;
     }
-  } while (dirty);
+  } while (dirty && !server.signedOut);
   writing = false;
+  keepPending();
 }
 
 function save() {
   state.savedAt = Date.now();
-  try {
-    storage.setItem(KEY, JSON.stringify(state));
-  } catch {
-    // Browser storage full or blocked; the disk copy is what matters.
-  }
-  if (disk.available) flush();
+  keepPending();
+  flush();
 }
 
 function normalize(data) {
@@ -185,6 +400,18 @@ export function setSetting(name, value) {
 export const decks = () => state.decks;
 export const deck = (id) => state.decks.find((d) => d.id === id);
 
+// A deck given by the admin (`assigned: true`, from its owner `from`) is studied like any other,
+// but its name, languages and cards are the owner's. These deck fields come from the owner, as
+// listed in server/fields.js.
+const SHARED_DECK_KEYS = ['name', 'created', 'ankiId', 'frontLang', 'backLang', 'saveAudio'];
+
+/** Whether a deck's name and cards can be changed here: not for a deck given by the admin. */
+export const editable = (deckId) => !deck(deckId)?.assigned;
+
+function mustEdit(deckId) {
+  if (!editable(deckId)) throw new Error('read-only deck');
+}
+
 export function createDeck({ name, ...options }) {
   const d = { ...DECK_DEFAULTS, ...options, id: uid(), name, created: Date.now() };
   state.decks.push(d);
@@ -193,11 +420,13 @@ export function createDeck({ name, ...options }) {
 }
 
 export function updateDeck(id, patch) {
+  if (SHARED_DECK_KEYS.some((key) => key in patch)) mustEdit(id);
   Object.assign(deck(id), patch);
   save();
 }
 
 export function deleteDeck(id) {
+  mustEdit(id);
   state.decks = state.decks.filter((d) => d.id !== id);
   state.cards = state.cards.filter((c) => c.deckId !== id);
   save();
@@ -212,6 +441,7 @@ export const cardsIn = (deckId) => state.cards.filter((c) => c.deckId === deckId
 const reserveFlag = (reserved) => (reserved ? { reserved: true } : {});
 
 export function addCard(deckId, front, back, now = Date.now(), { reserved = false } = {}) {
+  mustEdit(deckId);
   const c = { id: uid(), deckId, front, back, created: now, updated: now, ...newSchedule(now), ...reserveFlag(reserved) };
   state.cards.push(c);
   save();
@@ -220,6 +450,7 @@ export function addCard(deckId, front, back, now = Date.now(), { reserved = fals
 
 /** Add many cards at once from `[front, back]` pairs. Returns how many were added. */
 export function addCards(deckId, pairs, now = Date.now(), { reserved = false } = {}) {
+  mustEdit(deckId);
   pairs.forEach(([front, back], i) => {
     // Stagger creation times so the cards keep the order they had in the file.
     const created = now + i;
@@ -231,21 +462,25 @@ export function addCards(deckId, pairs, now = Date.now(), { reserved = false } =
 
 /**
  * Add decks read from an Anki file by the server, with every card's schedule as it was.
- * Importing the same file again adds only the cards that are not here yet.
- * Returns how many cards were added.
+ * Importing the same file again adds only the cards that are not here yet. With `reserved`,
+ * the new cards go on their deck's reserve, in Anki's order; cards already being studied keep
+ * their schedule. Returns how many cards were added.
  */
-export function importAnkiDecks(imported, now = Date.now()) {
+export function importAnkiDecks(imported, now = Date.now(), { reserved = false } = {}) {
   const known = ankiCardIds();
   let added = 0;
   for (const { ankiId, name, settings, cards } of imported) {
     const fresh = cards.filter((c) => !known.has(c.ankiId));
     if (!fresh.length) continue;
-    let d = state.decks.find((x) => x.ankiId === ankiId);
+    // A given deck from the same file is the owner's; the import makes a deck of your own.
+    let d = state.decks.find((x) => x.ankiId === ankiId && editable(x.id));
     if (!d) {
       d = { ...DECK_DEFAULTS, ...settings, id: uid(), name, ankiId, created: now };
       state.decks.push(d);
     }
-    for (const c of fresh) state.cards.push({ ...newSchedule(now), ...c, id: uid(), deckId: d.id });
+    for (const c of fresh) {
+      state.cards.push({ ...newSchedule(now), ...c, id: uid(), deckId: d.id, ...reserveFlag(reserved && c.state === State.New) });
+    }
     added += fresh.length;
   }
   if (added) save();
@@ -256,22 +491,199 @@ export function importAnkiDecks(imported, now = Date.now()) {
 export const ankiCardIds = () => new Set(state.cards.map((c) => c.ankiId).filter(Boolean));
 
 export function updateCard(id, patch) {
-  Object.assign(card(id), patch, { updated: Date.now() });
+  const c = card(id);
+  if (['front', 'back', 'deckId'].some((key) => key in patch)) {
+    mustEdit(c.deckId);
+    if (patch.deckId) mustEdit(patch.deckId);
+  }
+  const moved = patch.deckId && patch.deckId !== c.deckId;
+  Object.assign(c, patch, { updated: Date.now() });
+  // A place in the reserve does not outlast leaving it, or changing deck.
+  if (!c.reserved || moved) delete c.order;
   save();
 }
 
-/** A deck's reserve, oldest first: the order cards are pulled in. */
-export const reserveIn = (deckId) => cardsIn(deckId).filter((c) => c.reserved).sort((a, b) => a.created - b.created);
+// Once a reserve has been rearranged its cards carry their place in `order`. Cards added
+// after that have none, and wait behind the rest, oldest first.
+const byReserveOrder = (a, b) => {
+  const placed = (a.order ?? Infinity) - (b.order ?? Infinity);
+  return placed || a.created - b.created;
+};
 
-/** Move up to `n` cards from a deck's reserve in with its new cards. Returns how many moved. */
-export function pullFromReserve(deckId, n = Infinity) {
-  const pulled = reserveIn(deckId).slice(0, Math.max(0, n));
-  for (const c of pulled) delete c.reserved;
+/** A deck's reserve in the order its cards are pulled in: as arranged, otherwise oldest first. */
+export const reserveIn = (deckId) => cardsIn(deckId).filter((c) => c.reserved).sort(byReserveOrder);
+
+/**
+ * Move cards of a deck's reserve together to a new place in it, keeping their own order:
+ * just `before` or `after` the card with that id, or to the end when neither is given.
+ * Returns how many moved.
+ */
+export function moveInReserve(deckId, ids, { before, after } = {}) {
+  const moving = new Set(ids);
+  const all = reserveIn(deckId);
+  const moved = all.filter((c) => moving.has(c.id));
+  if (!moved.length) return 0;
+  const rest = all.filter((c) => !moving.has(c.id));
+  const anchor = rest.findIndex((c) => c.id === (before ?? after));
+  rest.splice(anchor < 0 ? rest.length : anchor + (before ? 0 : 1), 0, ...moved);
+  rest.forEach((c, i) => {
+    c.order = i;
+  });
+  save();
+  return moved.length;
+}
+
+/** Turn a deck's whole reserve around, so the last card is pulled in first. Returns how many cards it holds. */
+export function reverseReserve(deckId) {
+  const all = reserveIn(deckId).reverse();
+  all.forEach((c, i) => {
+    c.order = i;
+  });
+  save();
+  return all.length;
+}
+
+/**
+ * Move up to `n` cards from the front of a deck's reserve in with its new cards, where
+ * they wait behind the new cards already there, in the order they had. Returns how many moved.
+ */
+export function pullFromReserve(deckId, n = Infinity, now = Date.now()) {
+  return pullIn(reserveIn(deckId).slice(0, Math.max(0, n)), now);
+}
+
+/**
+ * Move the reserve cards named in with their decks' new cards, in the order they had on the
+ * reserve, behind the new cards already there. Cards not on reserve are skipped. Returns how many moved.
+ */
+export function pullCards(ids, now = Date.now()) {
+  const named = new Set(ids);
+  const deckIds = [...new Set(ids.map(card).filter((c) => c?.reserved).map((c) => c.deckId))];
+  return pullIn(deckIds.flatMap((deckId) => reserveIn(deckId).filter((c) => named.has(c.id))), now);
+}
+
+function pullIn(pulled, now) {
+  pulled.forEach((c, i) => {
+    delete c.reserved;
+    delete c.order;
+    c.pulled = now + i;
+  });
   if (pulled.length) save();
   return pulled.length;
 }
 
+/**
+ * Put the cards named back on their deck's reserve, at the end of it in the order given.
+ * A card already studied starts over as a new card, since the reserve holds only those.
+ * Cards already on reserve are skipped. Returns how many went back.
+ */
+export function returnToReserve(ids, now = Date.now()) {
+  const back = ids.map(card).filter((c) => c && !c.reserved);
+  for (const c of back) {
+    if (c.state !== State.New) Object.assign(c, newSchedule(now));
+    delete c.pulled;
+    c.reserved = true;
+    c.updated = now;
+  }
+  // Number them behind the rest of each reserve, so they wait at the end, whatever their age.
+  for (const deckId of new Set(back.map((c) => c.deckId))) {
+    const all = reserveIn(deckId).filter((c) => !back.includes(c));
+    all.push(...back.filter((c) => c.deckId === deckId));
+    all.forEach((c, i) => {
+      c.order = i;
+    });
+  }
+  if (back.length) save();
+  return back.length;
+}
+
+/**
+ * Add a reversed copy of each card named, its back as the front, to the end of its deck's
+ * reserve. A copy is marked `reversed`, so each side is still read in its own language.
+ * Cards whose reverse is already in their deck are skipped. Returns the cards added.
+ */
+export function addReversed(ids, now = Date.now()) {
+  const key = (deckId, front, back) => [deckId, front, back].map((text) => text.trim().toLowerCase()).join('\n');
+  const known = new Set(state.cards.map((c) => key(c.deckId, c.front, c.back)));
+  const named = ids.map(card).filter(Boolean);
+  for (const c of named) mustEdit(c.deckId);
+  const added = [];
+  for (const c of named) {
+    const copy = key(c.deckId, c.back, c.front);
+    if (known.has(copy)) continue;
+    known.add(copy);
+    // Stagger creation times so the copies keep the order of their originals.
+    const created = now + added.length;
+    added.push({ id: uid(), deckId: c.deckId, front: c.back, back: c.front, created, updated: created, ...newSchedule(now), reserved: true, ...(!c.reversed && { reversed: true }) });
+  }
+  state.cards.push(...added);
+  if (added.length) save();
+  return added;
+}
+
+/** Delete several cards at once. Returns how many were deleted. */
+export function deleteCards(ids) {
+  for (const c of ids.map(card).filter(Boolean)) mustEdit(c.deckId);
+  const doomed = new Set(ids);
+  const before = state.cards.length;
+  state.cards = state.cards.filter((c) => !doomed.has(c.id));
+  if (state.cards.length !== before) save();
+  return before - state.cards.length;
+}
+
+/** The group a card is listed under: 'reserve', 'new', 'learning', 'due' or 'later'. */
+export function cardGroup(c, now = Date.now()) {
+  if (c.reserved) return 'reserve';
+  if (c.state === State.New) return 'new';
+  if (isLearning(c)) return 'learning';
+  return c.due < nextDayAt(now) ? 'due' : 'later';
+}
+
+const SORTS = {
+  newest: (a, b) => b.created - a.created,
+  oldest: (a, b) => a.created - b.created,
+  front: (a, b) => a.front.localeCompare(b.front, undefined, { sensitivity: 'base' }),
+  lapses: (a, b) => b.lapses - a.lapses || b.created - a.created,
+  reserve: (a, b) => Boolean(b.reserved) - Boolean(a.reserved) || (a.reserved ? byReserveOrder(a, b) : b.created - a.created),
+};
+
+/**
+ * The cards of a deck that pass every filter given, sorted.
+ *   text    words to find on either side
+ *   groups  card groups to keep (see `cardGroup`); none means all of them
+ *   due     'overdue', 'today' (or earlier), 'week' or 'month': when the next review falls.
+ *           New and reserve cards have no review coming, so any of these leaves them out.
+ *   added   'today', 'week' or 'month': how recently the card was created
+ *   lapses  'some' (forgotten at least once) or 'many' (three times or more)
+ *   sort    'newest', 'oldest', 'due' (soonest first), 'front' (A to Z), 'lapses' or
+ *           'reserve' (the reserve first, in the order it is pulled in)
+ */
+export function findCards(deckId, { text = '', groups = [], due = 'any', added = 'any', lapses = 'any', sort = 'newest' } = {}, now = Date.now()) {
+  const q = text.trim().toLowerCase();
+  const today = dayStart(now);
+  const tomorrow = nextDayAt(now);
+  const wanted = new Set(groups);
+  const scheduled = (c) => !c.reserved && c.state !== State.New;
+  const dueBefore = { today: tomorrow, week: tomorrow + 6 * DAY, month: tomorrow + 29 * DAY }[due];
+  const addedSince = { today, week: today - 6 * DAY, month: today - 29 * DAY }[added];
+  const minLapses = { some: 1, many: 3 }[lapses] ?? 0;
+  const dueAt = (c) => (scheduled(c) ? c.due : Infinity);
+
+  return cardsIn(deckId)
+    .filter(
+      (c) =>
+        (!q || `${c.front}\n${c.back}`.toLowerCase().includes(q)) &&
+        (!wanted.size || wanted.has(cardGroup(c, now))) &&
+        (due !== 'overdue' || (c.state === State.Review && !c.reserved && c.due < today)) &&
+        (!dueBefore || (scheduled(c) && c.due < dueBefore)) &&
+        (!addedSince || c.created >= addedSince) &&
+        c.lapses >= minLapses,
+    )
+    .sort(sort === 'due' ? (a, b) => dueAt(a) - dueAt(b) || b.created - a.created : (SORTS[sort] ?? SORTS.newest));
+}
+
 export function deleteCard(id) {
+  const c = card(id);
+  if (c) mustEdit(c.deckId);
   state.cards = state.cards.filter((c) => c.id !== id);
   save();
 }
@@ -294,17 +706,63 @@ function queue(deckId, now) {
       .sort((a, b) => a.due - b.due),
     fresh: all
       .filter((c) => c.state === State.New)
-      .sort((a, b) => a.created - b.created)
+      .sort((a, b) => (a.pulled ?? a.created) - (b.pulled ?? b.created))
       .slice(0, allowance),
   };
 }
 
-/** How many cards are waiting in a deck today, by kind, and how many it holds in all and on reserve. */
+/**
+ * How many cards are waiting in a deck today, by kind, and how many it holds in all and on reserve.
+ * `tomorrow` counts the same kinds for tomorrow, as `upcoming` does.
+ */
 export function counts(deckId, now = Date.now()) {
   const q = queue(deckId, now);
   const n = { new: q.fresh.length, learning: q.learning.length, review: q.review.length };
   const all = cardsIn(deckId);
-  return { ...n, total: n.new + n.learning + n.review, cards: all.length, reserve: all.filter((c) => c.reserved).length };
+  const { start, ...tomorrow } = upcoming(deckId, 2, now)[1];
+  return {
+    ...n,
+    total: n.new + n.learning + n.review,
+    tomorrow,
+    cards: all.length,
+    reserve: all.filter((c) => c.reserved).length,
+  };
+}
+
+/**
+ * The cards coming up on each of the next `days` days, starting with today, for one deck or,
+ * without `deckId`, for all of them. Each day is `{ start, new, learning, review, total }`.
+ * Today is what the study queue holds now, overdue cards included. Later days suppose every
+ * day's cards are studied: the learning and review cards already scheduled for that day, and new
+ * cards at the deck's daily limit until none are left. The reserve is left out, as its cards only
+ * come in when pulled, and so are the reviews of cards not yet studied, as their days are not known.
+ */
+export function upcoming(deckId, days = 30, now = Date.now()) {
+  const out = [];
+  for (let i = 0, start = dayStart(now); i < days; i++, start = nextDayAt(start)) {
+    out.push({ start, new: 0, learning: 0, review: 0, total: 0 });
+  }
+  for (const d of deckId ? [deck(deckId)] : state.decks) {
+    const q = queue(d.id, now);
+    out[0].new += q.fresh.length;
+    out[0].learning += q.learning.length;
+    out[0].review += q.review.length;
+    const studied = cardsIn(d.id).filter((c) => !c.reserved);
+    let waiting = studied.filter((c) => c.state === State.New).length - q.fresh.length;
+    for (const day of out.slice(1)) {
+      const n = Math.min(d.newPerDay, waiting);
+      day.new += n;
+      waiting -= n;
+    }
+    for (const c of studied) {
+      if (c.state === State.New) continue;
+      // Rounded, as a day can be an hour short or long when the clocks change.
+      const i = Math.round((dayStart(c.due) - out[0].start) / DAY);
+      if (i > 0 && i < days) out[i][isLearning(c) ? 'learning' : 'review']++;
+    }
+  }
+  for (const day of out) day.total = day.new + day.learning + day.review;
+  return out;
 }
 
 /** The next card to study, or `undefined` when the deck is done for today. */
@@ -368,6 +826,15 @@ function streakOf(perDay, now) {
 }
 
 export const stats = (now = Date.now()) => streakOf(state.daily, now);
+
+/** Reviews on each of the last `n` days, oldest first and ending today, as `{ date, n }`. */
+export function recentDays(n, now = Date.now()) {
+  const day = new Date(dayStart(now));
+  day.setDate(day.getDate() - (n - 1));
+  const days = [];
+  for (let i = 0; i < n; i++, day.setDate(day.getDate() + 1)) days.push({ date: new Date(day), n: state.daily[dayKey(day)] ?? 0 });
+  return days;
+}
 
 /**
  * Figures for the statistics page, for one deck or, without `deckId`, for all of them.

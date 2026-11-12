@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 
 import { DAY, MINUTE, Rating, State } from '../js/fsrs.js';
 import * as store from '../js/store.js';
+import { DECK_SHARED } from '../server/fields.js';
 
 const T0 = new Date(2026, 0, 1, 9, 0, 0).getTime();
 
@@ -51,6 +52,62 @@ test('new cards per day limit is enforced', () => {
   assert.equal(store.counts(deck.id, T0 + DAY).new, 2);
 });
 
+test('tomorrow counts the new cards left after today, up to the daily limit', () => {
+  const deck = setup({ newPerDay: 2 });
+  for (let i = 0; i < 3; i++) store.addCard(deck.id, `q${i}`, `a${i}`, T0 + i);
+  store.addCard(deck.id, 'kept', 'back', T0, { reserved: true });
+  assert.equal(store.counts(deck.id, T0).tomorrow.new, 1);
+
+  store.addCard(deck.id, 'q3', 'a3', T0 + 3);
+  store.addCard(deck.id, 'q4', 'a4', T0 + 4);
+  assert.equal(store.counts(deck.id, T0).tomorrow.new, 2);
+
+  // Studying today's new cards does not change tomorrow's.
+  store.answerCard(store.nextCard(deck.id, T0).id, Rating.Easy, T0);
+  assert.equal(store.counts(deck.id, T0).tomorrow.new, 2);
+
+  store.deleteCards(store.cardsIn(deck.id).filter((c) => c.state === State.New && !c.reserved).map((c) => c.id));
+  assert.equal(store.counts(deck.id, T0).tomorrow.new, 0);
+});
+
+test('tomorrow counts the learning and review cards scheduled for that day', () => {
+  const deck = setup({ newPerDay: 0 });
+  const [learning, dueTomorrow, dueLater, dueToday] = ['l', 't', 'x', 'd'].map((f) => store.addCard(deck.id, f, f, T0));
+  const tomorrow = T0 + DAY;
+  store.updateCard(learning.id, { state: State.Relearning, due: tomorrow });
+  store.updateCard(dueTomorrow.id, { state: State.Review, due: tomorrow });
+  store.updateCard(dueLater.id, { state: State.Review, due: T0 + 2 * DAY });
+  store.updateCard(dueToday.id, { state: State.Review, due: T0 });
+
+  assert.deepEqual(store.counts(deck.id, T0).tomorrow, { new: 0, learning: 1, review: 1, total: 2 });
+});
+
+test('upcoming lists each day: overdue cards today, then the reviews and new cards to come', () => {
+  const deck = setup({ newPerDay: 2 });
+  for (let i = 0; i < 5; i++) store.addCard(deck.id, `n${i}`, `n${i}`, T0 + i);
+  store.addCard(deck.id, 'kept', 'kept', T0, { reserved: true });
+  const [overdue, inThree, tooFar] = ['o', 't', 'f'].map((f) => store.addCard(deck.id, f, f, T0));
+  store.updateCard(overdue.id, { state: State.Review, due: T0 - 5 * DAY });
+  store.updateCard(inThree.id, { state: State.Review, due: T0 + 3 * DAY });
+  store.updateCard(tooFar.id, { state: State.Review, due: T0 + 9 * DAY });
+
+  const days = store.upcoming(deck.id, 7, T0);
+  assert.equal(days.length, 7);
+  assert.deepEqual(days.map((d) => d.new), [2, 2, 1, 0, 0, 0, 0]);
+  assert.deepEqual(days.map((d) => d.review), [1, 0, 0, 1, 0, 0, 0]);
+  assert.deepEqual(days.map((d) => d.total), [3, 2, 1, 1, 0, 0, 0]);
+  assert.equal(days[1].start - days[0].start, DAY);
+  assert.deepEqual(store.upcoming(deck.id, 7, T0)[1], { start: days[1].start, ...store.counts(deck.id, T0).tomorrow });
+});
+
+test('upcoming for all decks adds up each deck, with its own daily limit', () => {
+  const a = setup({ newPerDay: 1 });
+  const b = store.createDeck({ name: 'Other', newPerDay: 3 });
+  for (let i = 0; i < 3; i++) store.addCard(a.id, `a${i}`, 'a', T0 + i);
+  for (let i = 0; i < 4; i++) store.addCard(b.id, `b${i}`, 'b', T0 + i);
+  assert.deepEqual(store.upcoming(undefined, 4, T0).map((d) => d.new), [4, 2, 1, 0]);
+});
+
 test('queue order: due learning, then reviews, then new, then waiting learning', () => {
   const deck = setup();
   const learning = store.addCard(deck.id, 'learning', '-', T0);
@@ -92,6 +149,17 @@ test('stats track reviews today and the streak', () => {
   assert.deepEqual(store.stats(T0 + DAY), { reviewedToday: 1, streak: 2 });
   assert.deepEqual(store.stats(T0 + 2 * DAY), { reviewedToday: 0, streak: 2 });
   assert.deepEqual(store.stats(T0 + 3 * DAY), { reviewedToday: 0, streak: 0 });
+});
+
+test('recent days list the reviews on each day, ending today', () => {
+  const deck = setup();
+  const a = store.addCard(deck.id, 'a', 'a', T0);
+  const b = store.addCard(deck.id, 'b', 'b', T0);
+  store.answerCard(a.id, Rating.Good, T0);
+  store.answerCard(b.id, Rating.Good, T0 + 2 * DAY);
+  const days = store.recentDays(4, T0 + 2 * DAY);
+  assert.deepEqual(days.map((day) => day.n), [0, 1, 0, 1]);
+  assert.equal(store.dayKey(days[3].date), store.dayKey(T0 + 2 * DAY));
 });
 
 test('statistics count cards, the forecast and answers by kind', () => {
@@ -166,6 +234,190 @@ test('reserve cards stay out of study until they are pulled', () => {
   assert.equal(store.counts(deck.id, T0).reserve, 1);
 });
 
+test('chosen cards can be pulled from the reserve, in reserve order', () => {
+  const deck = setup();
+  store.addCards(deck.id, [['a', '-'], ['b', '-'], ['c', '-'], ['d', '-']], T0, { reserved: true });
+  const studying = store.addCard(deck.id, 'studying', '-', T0 + 10);
+  const id = Object.fromEntries(store.cardsIn(deck.id).map((c) => [c.front, c.id]));
+
+  // Only reserve cards count; the rest are skipped. Pulled in reserve order, not the order given.
+  assert.equal(store.pullCards([id.d, id.b, studying.id, 'no-such-card'], T0 + 100), 2);
+  assert.deepEqual(store.reserveIn(deck.id).map((c) => c.front), ['a', 'c']);
+  assert.ok(store.card(id.b).pulled < store.card(id.d).pulled);
+  assert.equal(store.counts(deck.id, T0 + 100).new, 3);
+
+  // They come up after the new card already waiting.
+  const order = [];
+  for (let card; (card = store.nextCard(deck.id, T0 + 200)); ) {
+    order.push(card.front);
+    store.deleteCard(card.id);
+  }
+  assert.deepEqual(order, ['studying', 'b', 'd']);
+  assert.equal(store.pullCards([]), 0);
+});
+
+test('the reserve can be rearranged, and is pulled and studied in that order', () => {
+  const deck = setup();
+  store.addCards(deck.id, [['a', '-'], ['b', '-'], ['c', '-'], ['d', '-'], ['e', '-']], T0, { reserved: true });
+  const id = Object.fromEntries(store.cardsIn(deck.id).map((c) => [c.front, c.id]));
+  const order = () => store.reserveIn(deck.id).map((c) => c.front).join('');
+
+  // Cards moved together keep their own order.
+  assert.equal(store.moveInReserve(deck.id, [id.d, id.b], { before: id.a }), 2);
+  assert.equal(order(), 'bdace');
+  store.moveInReserve(deck.id, [id.b], { after: id.c });
+  assert.equal(order(), 'dacbe');
+  store.moveInReserve(deck.id, [id.d, id.c]);
+  assert.equal(order(), 'abedc');
+  assert.equal(store.moveInReserve(deck.id, ['no-such-card'], { before: id.a }), 0);
+
+  // Cards added later wait at the end, and the order survives a backup.
+  store.addCard(deck.id, 'f', '-', T0 + 100, { reserved: true });
+  store.importData(store.exportData());
+  assert.equal(order(), 'abedcf');
+  assert.deepEqual(store.findCards(deck.id, { sort: 'reserve' }, T0).map((c) => c.front).join(''), 'abedcf');
+
+  // Pulled cards come up after the new cards already waiting, in the order they had.
+  store.moveInReserve(deck.id, [id.e], { before: id.a });
+  store.addCard(deck.id, 'new', '-', T0 + 200);
+  assert.equal(store.pullFromReserve(deck.id, 2, T0 + 300), 2);
+  assert.equal(order(), 'bdcf');
+  const studied = [];
+  for (let card; (card = store.nextCard(deck.id, T0 + 400)); ) {
+    studied.push(card.front);
+    store.deleteCard(card.id);
+  }
+  assert.deepEqual(studied, ['new', 'e', 'a']);
+
+  // A card taken off the reserve and put back goes to the end.
+  store.updateCard(id.b, { reserved: undefined });
+  store.updateCard(id.b, { reserved: true });
+  assert.equal(order(), 'dcfb');
+});
+
+test('the whole reserve can be reversed, and reversed back', () => {
+  const deck = setup();
+  store.addCards(deck.id, [['a', '-'], ['b', '-'], ['c', '-'], ['d', '-']], T0, { reserved: true });
+  store.addCards(deck.id, [['studying', '-']], T0);
+  const id = Object.fromEntries(store.cardsIn(deck.id).map((c) => [c.front, c.id]));
+  const order = () => store.reserveIn(deck.id).map((c) => c.front).join('');
+
+  // A hand-arranged sequence flips as it stands, and cards not on reserve are left alone.
+  store.moveInReserve(deck.id, [id.d], { before: id.b });
+  assert.equal(order(), 'adbc');
+  assert.equal(store.reverseReserve(deck.id), 4);
+  assert.equal(order(), 'cbda');
+  assert.equal(store.card(id.studying).reserved, undefined);
+  assert.equal(store.card(id.studying).order, undefined);
+
+  // Cards added afterwards still join the end.
+  store.addCards(deck.id, [['e', '-']], T0 + 500, { reserved: true });
+  assert.equal(order(), 'cbdae');
+
+  store.reverseReserve(deck.id);
+  assert.equal(order(), 'eadbc');
+
+  // It is what gets pulled in first.
+  store.pullFromReserve(deck.id, 1, T0 + 600);
+  assert.equal(order(), 'adbc');
+});
+
+test('new, learning and due cards can go back on the reserve, starting over', () => {
+  const deck = setup();
+  store.addCards(deck.id, [['r1', '-'], ['r2', '-']], T0, { reserved: true });
+  const fresh = store.addCard(deck.id, 'fresh', '-', T0 + 1);
+  const learning = store.addCard(deck.id, 'learning', '-', T0 + 2);
+  const due = store.addCard(deck.id, 'due', '-', T0 + 3);
+  store.answerCard(learning.id, Rating.Good, T0 + 10);
+  store.answerCard(due.id, Rating.Easy, T0 + 10);
+  assert.notEqual(store.card(learning.id).state, State.New);
+  assert.equal(store.card(due.id).state, State.Review);
+  store.moveInReserve(deck.id, [store.reserveIn(deck.id)[1].id], { before: store.reserveIn(deck.id)[0].id });
+
+  const [r1] = store.reserveIn(deck.id).slice(-1);
+  assert.equal(store.returnToReserve([due.id, fresh.id, learning.id, r1.id, 'no-such-card'], T0 + DAY), 3);
+  // They join the end of the reserve in the order given, as new cards.
+  assert.deepEqual(store.reserveIn(deck.id).map((c) => c.front), ['r2', 'r1', 'due', 'fresh', 'learning']);
+  for (const id of [due.id, learning.id]) {
+    const c = store.card(id);
+    assert.deepEqual([c.state, c.reps, c.lapses, c.lastReview], [State.New, 0, 0, null]);
+  }
+  assert.equal(store.nextCard(deck.id, T0 + DAY), undefined);
+  assert.equal(store.counts(deck.id, T0 + DAY).reserve, 5);
+});
+
+test('reversed copies of cards go on the reserve, once', () => {
+  const deck = setup();
+  const hello = store.addCard(deck.id, 'hello', 'olá', T0);
+  const thanks = store.addCard(deck.id, 'thanks', 'obrigado', T0 + 1, { reserved: true });
+  const same = store.addCard(deck.id, 'taxi', 'Taxi ', T0 + 2);
+
+  const added = store.addReversed([thanks.id, hello.id, same.id, 'no-such-card'], T0 + 10);
+  assert.deepEqual(added.map((c) => [c.front, c.back, c.reserved, c.reversed, c.state]), [
+    ['obrigado', 'thanks', true, true, State.New],
+    ['olá', 'hello', true, true, State.New],
+  ]);
+  // They join the end of the reserve in the order given, and the originals are untouched.
+  assert.deepEqual(store.reserveIn(deck.id).map((c) => c.front), ['thanks', 'obrigado', 'olá']);
+  assert.equal(store.card(hello.id).reserved, undefined);
+
+  // Neither a card nor its copy gets a second one.
+  assert.deepEqual(store.addReversed([hello.id, added[1].id, thanks.id]), []);
+  // Reversing a copy whose original is gone gives an ordinary card back.
+  store.deleteCard(hello.id);
+  const [again] = store.addReversed([added[1].id]);
+  assert.deepEqual([again.front, again.back, again.reversed], ['hello', 'olá', undefined]);
+});
+
+test('findCards filters by group, text, dates and lapses, and sorts', () => {
+  const deck = setup();
+  const fresh = store.addCard(deck.id, 'Banana', 'yellow', T0);
+  const learning = store.addCard(deck.id, 'apple', 'red', T0 + 1);
+  const review = store.addCard(deck.id, 'Cherry', 'red too', T0 + 2);
+  const held = store.addCard(deck.id, 'date', 'brown', T0 + 3, { reserved: true });
+  store.answerCard(learning.id, Rating.Again, T0);
+  store.answerCard(review.id, Rating.Easy, T0);
+  const dueDay = store.card(review.id).due;
+  const ids = (filters, now = T0) => store.findCards(deck.id, filters, now).map((c) => c.id);
+
+  assert.deepEqual(ids(), [held.id, review.id, learning.id, fresh.id]);
+  assert.deepEqual(ids({ groups: ['new'] }), [fresh.id]);
+  assert.deepEqual(ids({ groups: ['reserve', 'learning'] }), [held.id, learning.id]);
+  assert.deepEqual(ids({ groups: ['later'] }), [review.id]);
+  assert.deepEqual(ids({ groups: ['due'] }), []);
+  assert.deepEqual(ids({ groups: ['due'] }, dueDay), [review.id]);
+  assert.equal(store.cardGroup(store.card(review.id), dueDay), 'due');
+
+  assert.deepEqual(ids({ text: ' RED ' }), [review.id, learning.id]);
+  assert.deepEqual(ids({ text: 'red', groups: ['learning'] }), [learning.id]);
+
+  // Only cards with a review coming have a due date.
+  assert.deepEqual(ids({ due: 'today' }), [learning.id]);
+  assert.deepEqual(ids({ due: 'week' }), [review.id, learning.id]);
+  assert.deepEqual(ids({ due: 'overdue' }, dueDay), []);
+  assert.deepEqual(ids({ due: 'overdue' }, dueDay + DAY), [review.id]);
+
+  assert.deepEqual(ids({ added: 'today' }, T0 + DAY), []);
+  assert.equal(ids({ added: 'week' }, T0 + DAY).length, 4);
+
+  store.answerCard(review.id, Rating.Again, dueDay);
+  assert.deepEqual(ids({ lapses: 'some' }, dueDay), [review.id]);
+  assert.deepEqual(ids({ lapses: 'many' }, dueDay), []);
+
+  assert.deepEqual(ids({ sort: 'oldest' }), [fresh.id, learning.id, review.id, held.id]);
+  assert.deepEqual(ids({ sort: 'front' }), [learning.id, fresh.id, review.id, held.id]);
+  assert.deepEqual(ids({ sort: 'due' }, dueDay).slice(2), [held.id, fresh.id]);
+  assert.equal(ids({ sort: 'lapses' }, dueDay)[0], review.id);
+});
+
+test('deleteCards removes only the cards named', () => {
+  const deck = setup();
+  const [a, b, c] = ['a', 'b', 'c'].map((text, i) => store.addCard(deck.id, text, text, T0 + i));
+  assert.equal(store.deleteCards([a.id, c.id, 'no-such-card']), 2);
+  assert.deepEqual(store.cardsIn(deck.id).map((card) => card.id), [b.id]);
+  assert.equal(store.deleteCards([]), 0);
+});
+
 test('export and import round-trip', () => {
   const deck = setup();
   store.addCard(deck.id, 'q', 'a', T0);
@@ -185,4 +437,101 @@ test('addCards adds many cards in file order as new cards', () => {
   assert.equal(store.counts(deck.id, T0).new, 3);
   assert.equal(store.nextCard(deck.id, T0).front, 'um');
   assert.deepEqual(store.cardsIn(deck.id).map((c) => c.back), ['one', 'two', 'three']);
+});
+
+// ---- Saving only what changed ---------------------------------------------
+
+/** A copy of the current state, as it would be saved. */
+const current = () => JSON.parse(store.exportData());
+
+test('diffState finds changed, new and deleted cards and decks only', () => {
+  const deck = setup();
+  const [a, b, c] = ['a', 'b', 'c'].map((text, i) => store.addCard(deck.id, text, text, T0 + i));
+  const snapshot = store.snapshotOf(current());
+
+  store.answerCard(a.id, Rating.Good, T0);
+  const answered = store.diffState(snapshot, current());
+  assert.deepEqual(answered.cards.map((card) => card.id), [a.id]);
+  assert.equal(answered.cards[0].reps, 1);
+  assert.equal(answered.decks, undefined);
+  assert.equal(answered.deletedCards, undefined);
+  assert.equal(answered.deletedDecks, undefined);
+  assert.equal(answered.settings, undefined);
+  assert.equal(typeof answered.savedAt, 'number');
+
+  store.deleteCard(b.id);
+  const other = store.createDeck({ name: 'Other' });
+  store.updateDeck(deck.id, { newPerDay: 5 });
+  const changes = store.diffState(snapshot, current());
+  assert.deepEqual(changes.deletedCards, [b.id]);
+  assert.deepEqual(changes.decks.map((d) => d.id).sort(), [deck.id, other.id].sort());
+  assert.ok(!changes.cards.some((card) => card.id === c.id));
+
+  store.deleteDeck(deck.id);
+  assert.deepEqual(store.diffState(snapshot, current()).deletedDecks, [deck.id]);
+});
+
+test('diffState is null when nothing changed', () => {
+  const deck = setup();
+  store.addCard(deck.id, 'q', 'a', T0);
+  assert.equal(store.diffState(store.snapshotOf(current()), current()), null);
+});
+
+test('daily and log are sent only when they change', () => {
+  const deck = setup();
+  const card = store.addCard(deck.id, 'q', 'a', T0);
+  const snapshot = store.snapshotOf(current());
+
+  store.updateCard(card.id, { front: 'changed' });
+  const edited = store.diffState(snapshot, current());
+  assert.equal(edited.daily, undefined);
+  assert.equal(edited.log, undefined);
+
+  store.answerCard(card.id, Rating.Good, T0);
+  const answered = store.diffState(snapshot, current());
+  assert.deepEqual(answered.daily, { [store.dayKey(T0)]: 1 });
+  assert.ok(answered.log[store.dayKey(T0)][deck.id]);
+
+  store.setSetting('theme', 'dark');
+  assert.deepEqual(store.diffState(snapshot, current()).settings, { theme: 'dark' });
+});
+
+test("a given deck's content cannot be edited, but it can be studied and its reserve used", () => {
+  store.importData(JSON.stringify({
+    decks: [{ id: 'given', name: 'Words', assigned: true, from: 'Ana', newPerDay: 20 }],
+    cards: ['one', 'two', 'three'].map((front, i) => ({ id: `g${i}`, deckId: 'given', front, back: '-', created: T0 + i, reserved: true, order: i })),
+  }));
+  const own = store.createDeck({ name: 'Mine' });
+  assert.equal(store.editable('given'), false);
+  assert.equal(store.editable(own.id), true);
+
+  const readOnly = { message: 'read-only deck' };
+  assert.throws(() => store.addCard('given', 'q', 'a', T0), readOnly);
+  assert.throws(() => store.addCards('given', [['q', 'a']], T0), readOnly);
+  assert.throws(() => store.updateCard('g0', { front: 'changed' }), readOnly);
+  assert.throws(() => store.updateCard('g0', { deckId: own.id }), readOnly);
+  assert.throws(() => store.deleteCard('g0'), readOnly);
+  assert.throws(() => store.deleteCards(['g0']), readOnly);
+  assert.throws(() => store.addReversed(['g0'], T0), readOnly);
+  assert.throws(() => store.deleteDeck('given'), readOnly);
+  for (const key of DECK_SHARED) assert.throws(() => store.updateDeck('given', { [key]: 'x' }), readOnly);
+  assert.equal(store.card('g0').front, 'one');
+  assert.equal(store.cardsIn('given').length, 3);
+  assert.equal(store.decks().length, 2);
+
+  // Moving one of your own cards into a given deck is refused too.
+  const mine = store.addCard(own.id, 'q', 'a', T0);
+  assert.throws(() => store.updateCard(mine.id, { deckId: 'given' }), readOnly);
+
+  // Personal settings, the reserve and study all still work.
+  store.updateDeck('given', { newPerDay: 5, speak: 'front' });
+  assert.equal(store.deck('given').newPerDay, 5);
+  store.reverseReserve('given');
+  assert.deepEqual(store.reserveIn('given').map((c) => c.id), ['g2', 'g1', 'g0']);
+  store.moveInReserve('given', ['g0'], { before: 'g2' });
+  assert.equal(store.pullFromReserve('given', 1, T0), 1);
+  assert.equal(store.pullCards(['g2'], T0 + 1), 1);
+  assert.equal(store.returnToReserve(['g2'], T0 + 2), 1);
+  store.answerCard(store.nextCard('given', T0 + 3).id, Rating.Good, T0 + 3);
+  assert.equal(store.card('g0').reps, 1);
 });
