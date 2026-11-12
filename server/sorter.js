@@ -32,7 +32,7 @@ const obj = (properties) => ({
   additionalProperties: false,
 });
 const str = { type: 'string' };
-const nullableStr = { type: ['string', 'null'] };
+const nullableStr = { anyOf: [{ type: 'string' }, { type: 'null' }] };
 const list = (items) => ({ type: 'array', items });
 
 const PLACE_SCHEMA = obj({
@@ -103,9 +103,15 @@ export function createSorter({ client, model = DEFAULT_MODEL }) {
         .filter((t) => isObj(t) && nonEmpty(t.ref) && nonEmpty(t.name))
         .map((t) => ({ ref: t.ref, name: t.name.trim(), groupId: groupIds.has(t.groupId) ? t.groupId : null }));
       const refs = new Set(newTopics.map((t) => t.ref));
-      const placements = data.placements
-        .filter((p) => isObj(p) && cardIds.has(p.id) && (topicIds.has(p.topic) || refs.has(p.topic)))
-        .map((p) => ({ id: p.id, topic: p.topic }));
+      // One topic per card: keep the first placement for each card id.
+      const seen = new Set();
+      const placements = [];
+      for (const p of data.placements) {
+        if (!isObj(p) || !cardIds.has(p.id) || seen.has(p.id)) continue;
+        if (!topicIds.has(p.topic) && !refs.has(p.topic)) continue;
+        seen.add(p.id);
+        placements.push({ id: p.id, topic: p.topic });
+      }
       return { placements, newTopics };
     },
 

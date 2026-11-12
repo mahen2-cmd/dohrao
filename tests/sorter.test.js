@@ -57,6 +57,7 @@ test('ignores placements it cannot use', async () => {
       { id: 'c1', topic: 't1' },
       { id: 'c2', topic: 'new:1' },
       { id: 'c3', topic: 'new:9' },
+      { id: 'c1', topic: 't2' },
     ],
     newTopics: [{ ref: 'new:1', name: 'Travel', groupId: 'gX' }],
   }));
