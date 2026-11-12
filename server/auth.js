@@ -50,7 +50,7 @@ function cleanUser({ username, name, password, role = 'user' }) {
   }
   checkPassword(password);
   const trimmed = typeof name === 'string' ? name.trim() : '';
-  if (trimmed.length < 1 || trimmed.length > 60) throw new AuthError('bad-username', 'Name must be 1-60 characters');
+  if (trimmed.length < 1 || trimmed.length > 60) throw new AuthError('bad-name', 'Name must be 1-60 characters');
   return { username, name: trimmed, role };
 }
 
