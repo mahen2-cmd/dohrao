@@ -177,6 +177,17 @@ label {
   font-size: 17px;
   letter-spacing: -0.01em;
   margin-right: 28px;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.45em;
+}
+/* The Urdu name, in the phone's own Nastaliq font where it has one. */
+.brand-ur {
+  font-family: 'Noto Nastaliq Urdu', 'Jameel Noori Nastaleeq', 'Urdu Typesetting', 'Noto Naskh Arabic', serif;
+  font-weight: 400;
+  font-size: 0.95em;
+  letter-spacing: 0;
+  color: var(--muted);
 }
 
 .nav {

@@ -895,7 +895,7 @@ function pickImportFile(deck, toReserve = false) {
         if (images.size) {
           const result = await storeSheetImages(rows, images);
           rows = result.rows;
-          if (result.skipped) toast(`${plural(result.skipped, 'picture')} in a format Recall cannot show will be left out`);
+          if (result.skipped) toast(`${plural(result.skipped, 'picture')} in a format Dohrao cannot show will be left out`);
         }
         openImportDialog(deck, file.name, rows, toReserve);
       } catch (error) {
@@ -1042,14 +1042,14 @@ function openAnkiDialog(fileName, { decks, suspended, blank, sound, missingImage
       .join(', ');
   };
   const notes = [
-    existing && `${plural(existing, 'card')} already in Recall will be skipped.`,
+    existing && `${plural(existing, 'card')} already in Dohrao will be skipped.`,
     suspended && `${plural(suspended, 'suspended card')} will be left out.`,
     blank && `${plural(blank, 'card')} with no text on the front will be left out.`,
     sound && 'Audio is not imported. Images and maths are.',
-    missingImages && `${plural(missingImages, 'image')} named on cards ${missingImages === 1 ? 'is' : 'are'} missing from the file or in a format Recall cannot show, and will be left out.`,
+    missingImages && `${plural(missingImages, 'image')} named on cards ${missingImages === 1 ? 'is' : 'are'} missing from the file or in a format Dohrao cannot show, and will be left out.`,
     ...incoming
       .filter((deck) => deck.custom.length)
-      .map((deck) => `“${deck.name}” has its own ${deck.custom.join(', ')} in Anki. Recall uses Anki’s defaults for these, so some intervals will differ.`),
+      .map((deck) => `“${deck.name}” has its own ${deck.custom.join(', ')} in Anki. Dohrao uses Anki’s defaults for these, so some intervals will differ.`),
   ].filter(Boolean);
 
   const form = h(
@@ -1125,7 +1125,7 @@ function storageChip() {
   if (store.storageInfo().ok) return h('span', { class: 'save-chip', title: 'Your changes are saved' }, icon('check'), h('span', null, 'Saved'));
   return h(
     'span',
-    { class: 'save-chip error', title: 'Cannot reach Recall. Your changes are kept on this device and are sent when the connection is back.' },
+    { class: 'save-chip error', title: 'Cannot reach Dohrao. Your changes are kept on this device and are sent when the connection is back.' },
     icon('alert'),
     h('span', null, 'Not saved, retrying'),
   );
@@ -1166,6 +1166,11 @@ function accountMenu() {
   return el;
 }
 
+/** The app's name, Dohrao ("revise!"), with its Urdu spelling beside it. */
+function brand(tag, attrs = {}) {
+  return h(tag, { ...attrs, class: 'brand' }, 'Dohrao', h('span', { class: 'brand-ur', lang: 'ur', dir: 'rtl' }, 'دہراؤ'));
+}
+
 function topbar() {
   const dark = document.documentElement.dataset.theme === 'dark';
   const here = location.hash.split('/')[1] || '';
@@ -1175,7 +1180,7 @@ function topbar() {
   return h(
     'header',
     { class: 'topbar' },
-    h('a', { class: 'brand', href: '#/' }, 'Recall'),
+    brand('a', { href: '#/' }),
     h('nav', { class: 'nav', 'aria-label': 'Main' }, tab('', 'Decks', 'decks'), tab('upcoming', 'Upcoming', 'calendar'), tab('stats', 'Statistics', 'chart')),
     h('span', { class: 'spacer' }),
     storageChip(),
@@ -1304,7 +1309,7 @@ function renderHome() {
         'div',
         { class: 'empty' },
         h('h2', null, 'Create your first deck'),
-        h('p', null, 'Decks group related cards. Add a few cards, then study a little every day. Recall schedules each review for you.'),
+        h('p', null, 'Decks group related cards. Add a few cards, then study a little every day. Dohrao schedules each review for you.'),
         h(
           'div',
           { class: 'row' },
@@ -2106,7 +2111,7 @@ function answersPanel(s) {
   const max = Math.max(...s.answers.flat());
   const since = s.partial && s.loggedFrom && `Recorded since ${sinceDate(s.loggedFrom)}; reviews before that are not broken down.`;
   if (!max) {
-    const message = s.partial && !s.loggedFrom ? 'Recall has only just started recording which button you press. Study some cards to see the breakdown here.' : `No answers in the past ${span}.`;
+    const message = s.partial && !s.loggedFrom ? 'Dohrao has only just started recording which button you press. Study some cards to see the breakdown here.' : `No answers in the past ${span}.`;
     return panel('Answer buttons', null, h('p', { class: 'panel-empty' }, message));
   }
   return panel(
@@ -2373,7 +2378,7 @@ const AUTH_ERRORS = {
 
 /** What to say when logging in or signing up fails with `error`. */
 function authMessage(error) {
-  if (error instanceof TypeError) return 'Can’t reach Recall. Check your connection.';
+  if (error instanceof TypeError) return 'Can’t reach Dohrao. Check your connection.';
   return AUTH_ERRORS[error.message] ?? 'Something went wrong. Try again.';
 }
 
@@ -2428,7 +2433,7 @@ function renderAuth(mode) {
     submit,
   );
   const sub = signup
-    ? 'You need an invite code from whoever runs this Recall.'
+    ? 'You need an invite code from whoever invited you to Dohrao.'
     : store.storageInfo().signedOut
       ? 'Your session ended. Log in again and nothing you did here is lost.'
       : 'Pick up where you left off.';
@@ -2436,7 +2441,7 @@ function renderAuth(mode) {
     h(
       'main',
       { class: 'auth', 'data-mode': mode },
-      h('p', { class: 'brand' }, 'Recall'),
+      brand('p'),
       h('h1', null, signup ? 'Create your account' : 'Log in'),
       h('p', { class: 'sub' }, sub),
       form,
@@ -2451,8 +2456,8 @@ function renderOffline() {
     h(
       'main',
       { class: 'auth offline' },
-      h('p', { class: 'brand' }, 'Recall'),
-      h('h1', null, 'Can’t reach Recall. Check your connection.'),
+      brand('p'),
+      h('h1', null, 'Can’t reach Dohrao. Check your connection.'),
       h('button', { class: 'btn primary', type: 'button', onclick: () => location.reload() }, 'Try again'),
     ),
   );
