@@ -535,3 +535,94 @@ test("a given deck's content cannot be edited, but it can be studied and its res
   store.answerCard(store.nextCard('given', T0 + 3).id, Rating.Good, T0 + 3);
   assert.equal(store.card('g0').reps, 1);
 });
+
+test('importing a topic file creates the topic once and joins its prefix group', () => {
+  const deck = setup();
+  const verbs = store.createGroup(deck.id, 'Verbs', T0);
+  store.addCards(deck.id, [['to be', 'ser']], T0, { topicKey: 'verb_ser' });
+  store.moveTopic(deck.id, store.deck(deck.id).topics[0].id, verbs.id, T0);
+  store.addCards(deck.id, [['to go', 'ir']], T0, { topicKey: 'verb_ir' });
+  store.addCards(deck.id, [['I am', 'sou']], T0, { topicKey: 'verb_ser' });
+  const topics = store.deck(deck.id).topics;
+  assert.equal(topics.length, 2);
+  assert.ok(topics.every((t) => t.groupId === verbs.id));
+  assert.ok(store.cardsIn(deck.id).every((c) => c.topicBy === 'file' && c.topicAt === T0));
+  assert.equal(topics[0].name, 'Ser');
+  assert.equal(topics[0].by, 'file');
+});
+
+test('groups and topics can be created, renamed, moved and deleted', () => {
+  const deck = setup();
+  const g = store.createGroup(deck.id, 'Food', T0);
+  store.renameGroup(deck.id, g.id, 'Eating', T0 + 1);
+  assert.equal(store.deck(deck.id).groups[0].name, 'Eating');
+  const t = store.createTopic(deck.id, 'Cafe', g.id, T0 + 2);
+  assert.equal(t.by, 'admin');
+  store.renameTopic(deck.id, t.id, 'Cafe ordering', T0 + 3);
+  store.moveTopic(deck.id, t.id, null, T0 + 4);
+  assert.equal(store.deck(deck.id).topics[0].name, 'Cafe ordering');
+  assert.equal(store.deck(deck.id).topics[0].groupId, null);
+  store.moveTopic(deck.id, t.id, g.id, T0 + 5);
+  store.deleteGroup(deck.id, g.id, T0 + 6);
+  assert.equal(store.deck(deck.id).groups.length, 0);
+  assert.equal(store.deck(deck.id).topics.length, 1);
+  assert.equal(store.deck(deck.id).topics[0].groupId, null);
+  assert.equal(store.deck(deck.id).topicsAt, T0 + 6);
+});
+
+test('deleting a topic makes its cards sortable again', () => {
+  const deck = setup();
+  store.addCards(deck.id, [['a', 'b'], ['c', 'd']], T0, { topicKey: 'verb_ser' });
+  assert.equal(store.unsortedCount(deck.id), 0);
+  store.deleteTopic(deck.id, store.deck(deck.id).topics[0].id, T0 + 5);
+  assert.equal(store.deck(deck.id).topics.length, 0);
+  assert.equal(store.unsortedCount(deck.id), 2);
+  for (const c of store.cardsIn(deck.id)) {
+    assert.ok(!('topic' in c) && !('topicBy' in c));
+    assert.equal(c.topicAt, T0 + 5);
+  }
+});
+
+test('moving cards by hand marks them manual and they are not counted as unsorted', () => {
+  const deck = setup();
+  store.addCards(deck.id, [['a', 'b'], ['c', 'd']], T0);
+  assert.equal(store.unsortedCount(deck.id), 2);
+  const ids = store.cardsIn(deck.id).map((c) => c.id);
+  assert.equal(store.setCardsTopic(ids, null, T0 + 1), 2);
+  assert.equal(store.unsortedCount(deck.id), 0);
+  assert.ok(store.cardsIn(deck.id).every((c) => c.topicBy === 'manual' && !('topic' in c)));
+  const t = store.createTopic(deck.id, 'X', null, T0);
+  store.setCardsTopic(ids, t.id, T0 + 2);
+  assert.ok(store.cardsIn(deck.id).every((c) => c.topic === t.id && c.topicAt === T0 + 2));
+});
+
+test('topic edits on a given deck are refused', () => {
+  store.importData(JSON.stringify({
+    decks: [{ id: 'given', name: 'Words', assigned: true, from: 'Ana', newPerDay: 20, groups: [{ id: 'g1', name: 'G' }], topics: [{ id: 't1', key: 'a_b', name: 'B', groupId: null, by: 'file' }] }],
+    cards: [{ id: 'g0', deckId: 'given', front: 'q', back: 'a', created: T0 }],
+  }));
+  const readOnly = { message: 'read-only deck' };
+  assert.throws(() => store.createGroup('given', 'X', T0), readOnly);
+  assert.throws(() => store.renameGroup('given', 'g1', 'X', T0), readOnly);
+  assert.throws(() => store.deleteGroup('given', 'g1', T0), readOnly);
+  assert.throws(() => store.ensureTopic('given', 'new_key', T0), readOnly);
+  assert.throws(() => store.createTopic('given', 'X', null, T0), readOnly);
+  assert.throws(() => store.renameTopic('given', 't1', 'X', T0), readOnly);
+  assert.throws(() => store.moveTopic('given', 't1', null, T0), readOnly);
+  assert.throws(() => store.deleteTopic('given', 't1', T0), readOnly);
+  assert.throws(() => store.setCardsTopic(['g0'], 't1', T0), readOnly);
+  assert.throws(() => store.addCards('given', [['q', 'a']], T0, { topicKey: 'a_b' }), readOnly);
+});
+
+test('topic edits never touch scheduling fields', () => {
+  const deck = setup();
+  store.addCards(deck.id, [['a', 'b']], T0, { topicKey: 'verb_ser' });
+  const c = store.cardsIn(deck.id)[0];
+  const sched = () => JSON.stringify(['due', 'state', 'ease', 'stability', 'difficulty', 'reps', 'lapses', 'scheduledDays'].map((k) => store.card(c.id)[k]));
+  const before = sched();
+  const t = store.createTopic(deck.id, 'Other', null, T0);
+  store.setCardsTopic([c.id], t.id, T0 + 1);
+  store.moveTopic(deck.id, t.id, null, T0 + 2);
+  store.deleteTopic(deck.id, t.id, T0 + 3);
+  assert.equal(sched(), before);
+});

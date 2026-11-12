@@ -3,6 +3,7 @@
 import * as api from './api.js';
 import { mergeCounts } from './counts.js';
 import { dayKey, streakOf } from './progress.js';
+import { readableTopicName, prefixGroup } from './topics.js';
 import { DAY, State, dayStart, newSchedule, nextDayAt, preview, schedule } from './fsrs.js';
 
 // Per-deck settings.
@@ -444,13 +445,17 @@ export function addCard(deckId, front, back, now = Date.now(), { reserved = fals
   return c;
 }
 
-/** Add many cards at once from `[front, back]` pairs. Returns how many were added. */
-export function addCards(deckId, pairs, now = Date.now(), { reserved = false } = {}) {
+/**
+ * Add many cards at once from `[front, back]` pairs. Returns how many were added. With `topicKey`
+ * (from a topic file's name), every card is placed in that topic, which is made if it is new.
+ */
+export function addCards(deckId, pairs, now = Date.now(), { reserved = false, topicKey } = {}) {
   mustEdit(deckId);
+  const place = topicKey ? { topic: ensureTopic(deckId, topicKey, now).id, topicBy: 'file', topicAt: now } : {};
   pairs.forEach(([front, back], i) => {
     // Stagger creation times so the cards keep the order they had in the file.
     const created = now + i;
-    state.cards.push({ id: uid(), deckId, front, back, created, updated: created, ...newSchedule(now), ...reserveFlag(reserved) });
+    state.cards.push({ id: uid(), deckId, front, back, created, updated: created, ...newSchedule(now), ...reserveFlag(reserved), ...place });
   });
   save();
   return pairs.length;
@@ -700,6 +705,117 @@ export function deleteCard(id) {
   state.cards = state.cards.filter((c) => c.id !== id);
   save();
 }
+
+// ---- Topics ---------------------------------------------------------------
+// A deck's cards sit in topics, and topics sit in groups (or on their own). Both are the owner's
+// content, so none of this can change in a given deck. None of it touches a card's schedule.
+
+// Stamp a change to the deck's groups or topics, and save.
+function touchTopics(d, now) {
+  d.topicsAt = now;
+  save();
+}
+
+export function createGroup(deckId, name, now = Date.now()) {
+  mustEdit(deckId);
+  const d = deck(deckId);
+  const group = { id: uid(), name };
+  (d.groups ??= []).push(group);
+  touchTopics(d, now);
+  return group;
+}
+
+export function renameGroup(deckId, groupId, name, now = Date.now()) {
+  mustEdit(deckId);
+  const d = deck(deckId);
+  const group = (d.groups ?? []).find((g) => g.id === groupId);
+  if (!group) return;
+  group.name = name;
+  touchTopics(d, now);
+}
+
+/** Remove a group. Its topics are kept, outside any group. */
+export function deleteGroup(deckId, groupId, now = Date.now()) {
+  mustEdit(deckId);
+  const d = deck(deckId);
+  d.groups = (d.groups ?? []).filter((g) => g.id !== groupId);
+  for (const t of d.topics ?? []) if (t.groupId === groupId) t.groupId = null;
+  touchTopics(d, now);
+}
+
+/** The topic with this file key, made (named from the key, in its prefix's group) if it is new. */
+export function ensureTopic(deckId, key, now = Date.now()) {
+  mustEdit(deckId);
+  const d = deck(deckId);
+  const known = (d.topics ?? []).find((t) => t.key === key);
+  if (known) return known;
+  const topic = { id: uid(), key, name: readableTopicName(key), groupId: prefixGroup(d, key), by: 'file' };
+  (d.topics ??= []).push(topic);
+  touchTopics(d, now);
+  return topic;
+}
+
+export function createTopic(deckId, name, groupId = null, now = Date.now()) {
+  mustEdit(deckId);
+  const d = deck(deckId);
+  const topic = { id: uid(), name, groupId: groupId ?? null, by: 'admin' };
+  (d.topics ??= []).push(topic);
+  touchTopics(d, now);
+  return topic;
+}
+
+export function renameTopic(deckId, topicId, name, now = Date.now()) {
+  mustEdit(deckId);
+  const d = deck(deckId);
+  const topic = (d.topics ?? []).find((t) => t.id === topicId);
+  if (!topic) return;
+  topic.name = name;
+  touchTopics(d, now);
+}
+
+/** Put a topic in a group, or on its own with `null`. */
+export function moveTopic(deckId, topicId, groupId, now = Date.now()) {
+  mustEdit(deckId);
+  const d = deck(deckId);
+  const topic = (d.topics ?? []).find((t) => t.id === topicId);
+  if (!topic) return;
+  topic.groupId = groupId ?? null;
+  touchTopics(d, now);
+}
+
+/** Remove a topic. Its cards become unsorted again, and the clearing wins when decks sync. */
+export function deleteTopic(deckId, topicId, now = Date.now()) {
+  mustEdit(deckId);
+  const d = deck(deckId);
+  d.topics = (d.topics ?? []).filter((t) => t.id !== topicId);
+  for (const c of cardsIn(deckId)) {
+    if (c.topic !== topicId) continue;
+    delete c.topic;
+    delete c.topicBy;
+    c.topicAt = now;
+  }
+  touchTopics(d, now);
+}
+
+/**
+ * Place cards in a topic by hand, or with `null` take them out of any topic. Either way the
+ * placement is theirs to keep: the sorter leaves it alone. Returns how many cards changed.
+ */
+export function setCardsTopic(ids, topicId, now = Date.now()) {
+  const cards = ids.map(card).filter(Boolean);
+  for (const c of cards) mustEdit(c.deckId);
+  for (const c of cards) {
+    if (topicId) c.topic = topicId;
+    else delete c.topic;
+    c.topicBy = 'manual';
+    c.topicAt = now;
+  }
+  if (cards.length) save();
+  return cards.length;
+}
+
+/** How many cards in a deck have no topic and were not left that way by hand. */
+export const unsortedCount = (deckId) => cardsIn(deckId).filter((c) => !c.topic && c.topicBy !== 'manual').length;
 
 // ---- Study queue ----------------------------------------------------------
 
