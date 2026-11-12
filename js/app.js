@@ -4,7 +4,7 @@ import { DAY, MINUTE, Rating, State, dayStart } from './fsrs.js';
 import { parseSpreadsheet } from './importer.js';
 import { recentStudy, rightShare } from './progress.js';
 import * as store from './store.js';
-import { filterLabel, inFilter, resolveFilter } from './topics.js';
+import { filterLabel, inFilter, readableTopicName, resolveFilter, topicKeyFromFileName } from './topics.js';
 
 const app = document.getElementById('app');
 const toasts = document.getElementById('toasts');
@@ -749,6 +749,7 @@ function openCardDialog({ card, deckId }) {
         // Stay open so several cards can be added in a row.
         const added = store.addCard(deckSelect.value, values.front, values.back, Date.now(), { reserved: reserved.checked });
         if (topic) store.setCardsTopic([added.id], topic, Date.now());
+        else requestSort(deckSelect.value);
         prepareCardSpeech(added);
         front.value = back.value = '';
         for (const box of [front, back]) box.dispatchEvent(new Event('input'));
@@ -905,6 +906,189 @@ async function storeSheetImages(rows, images) {
   return { rows: cells, skipped: [...stored.values()].filter((name) => !name).length };
 }
 
+// ---- Sorting into topics (admin, own decks) -------------------------------
+
+// Decks being sorted now; one poll loop each. Sorting runs in the background, and studying carries on.
+const sorting = new Set();
+const proposing = new Set();
+let sortingOffShown = false;
+const newId = () => globalThis.crypto?.randomUUID?.() ?? Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
+
+const sortingOff = () => {
+  if (sortingOffShown) return;
+  sortingOffShown = true;
+  toast('Sorting is off: no API key on the server');
+};
+
+/** Only the admin's own decks are ever sorted. */
+const canSort = (deckId) => account?.role === 'admin' && !!store.deck(deckId) && store.editable(deckId);
+
+/**
+ * Sort a deck's unsorted cards into its topics, and wait for it to finish. Quiet unless it fails.
+ * A deck with no topics is never sorted this way; it gets a proposal first. With `started`,
+ * the server has already begun (after Approve) and only the waiting is done here.
+ */
+async function requestSort(deckId, { started = false } = {}) {
+  if (!canSort(deckId) || sorting.has(deckId)) return;
+  if (!started && !(store.deck(deckId).topics ?? []).length) return;
+  sorting.add(deckId);
+  try {
+    await store.flush();
+    const before = store.unsortedCount(deckId);
+    if (!started) {
+      try {
+        await api.admin.sort(deckId);
+      } catch (error) {
+        if (error.message === 'no-sorter') sortingOff();
+        else toast('Could not start sorting. Try again in a moment.');
+        return;
+      }
+    }
+    render();
+    let failures = 0;
+    for (;;) {
+      await new Promise((resolve) => setTimeout(resolve, 5000));
+      try {
+        if (!(await api.admin.sortStatus(deckId)).running) break;
+        failures = 0;
+      } catch {
+        if (++failures >= 3) {
+          toast('Lost track of the sort. Reload to see where it got to.');
+          return;
+        }
+      }
+    }
+    await store.refresh();
+    const done = before - store.unsortedCount(deckId);
+    toast(done > 0 ? `Sorted ${plural(done, 'card')}` : 'Sorting finished');
+  } finally {
+    sorting.delete(deckId);
+    render();
+  }
+}
+
+/** The deck's saved proposal for groups and topics, or a new one. The AI call can take a while. */
+async function startProposal(deck) {
+  if (proposing.has(deck.id)) return;
+  proposing.add(deck.id);
+  render();
+  try {
+    await store.flush();
+    let proposal;
+    try {
+      proposal = await api.admin.proposal(deck.id);
+    } catch (error) {
+      if (error.message !== 'not-found') throw error;
+      proposal = await api.admin.propose(deck.id);
+    }
+    openProposalDialog(deck, proposal);
+  } catch (error) {
+    if (error.message === 'no-sorter') sortingOff();
+    else toast('Could not make a proposal. Try again in a moment.');
+  } finally {
+    proposing.delete(deck.id);
+    render();
+  }
+}
+
+/** Review a proposed set of groups and topics, change it, and approve it. No card moves before Approve. */
+function openProposalDialog(deck, proposal) {
+  const groups = proposal.groups.map((g) => ({ ...g }));
+  const topics = proposal.topics.map((t) => ({ ...t, groupId: groups.some((g) => g.id === t.groupId) ? t.groupId : null }));
+  const box = h('div', { class: 'topics-edit' });
+  const note = h('span', { class: 'note' });
+  const nameInput = (item, label) =>
+    h('input', { type: 'text', value: item.name, maxlength: 60, 'aria-label': label, oninput: (e) => (item.name = e.target.value) });
+  const topicRow = (t) =>
+    h(
+      'div',
+      { class: 'topic-row' },
+      nameInput(t, 'Topic name'),
+      h(
+        'select',
+        { 'aria-label': 'Group of this topic', onchange: (e) => ((t.groupId = e.target.value || null), draw()) },
+        h('option', { value: '', selected: !t.groupId }, 'No group'),
+        groups.map((g) => h('option', { value: g.id, selected: g.id === t.groupId }, g.name || 'Unnamed group')),
+      ),
+      iconButton('trash', 'Delete topic', () => (topics.splice(topics.indexOf(t), 1), draw()), 'danger'),
+    );
+  function draw() {
+    box.replaceChildren(
+      ...groups.map((g) =>
+        h(
+          'div',
+          { class: 'topic-group' },
+          h(
+            'div',
+            { class: 'topic-group-head' },
+            nameInput(g, 'Group name'),
+            iconButton(
+              'trash',
+              'Delete group, its topics stay without a group',
+              () => {
+                groups.splice(groups.indexOf(g), 1);
+                topics.forEach((t) => t.groupId === g.id && (t.groupId = null));
+                draw();
+              },
+              'danger',
+            ),
+          ),
+          topics.filter((t) => t.groupId === g.id).map(topicRow),
+        ),
+      ),
+      topics.some((t) => !t.groupId) && h('div', { class: 'topic-group' }, h('div', { class: 'topic-group-head' }, h('strong', null, 'No group')), topics.filter((t) => !t.groupId).map(topicRow)),
+      h('button', { class: 'btn', type: 'button', onclick: () => (groups.push({ id: newId(), name: 'New group' }), draw()) }, icon('plus'), 'Add group'),
+    );
+  }
+  draw();
+  const approve = h('button', { class: 'btn primary', type: 'submit' }, 'Approve and sort');
+  const dialog = modal(
+    `Topics for ${deck.name}`,
+    h(
+      'form',
+      {
+        onsubmit: async (e) => {
+          e.preventDefault();
+          for (const item of [...groups, ...topics]) item.name = item.name.trim();
+          if (!topics.length) return void (note.textContent = 'Keep at least one topic.');
+          if ([...groups, ...topics].some((item) => !item.name || item.name.length > 60)) return void (note.textContent = 'Every name needs 1 to 60 characters.');
+          approve.disabled = true;
+          try {
+            await api.admin.approve(deck.id, { groups: groups.map(({ id, name }) => ({ id, name })), topics: topics.map(({ id, name, groupId }) => ({ id, name, groupId })) });
+          } catch (error) {
+            approve.disabled = false;
+            if (error.message === 'no-sorter') sortingOff();
+            else note.textContent = 'Could not approve. Try again in a moment.';
+            return;
+          }
+          dialog.close();
+          toast('Sorting started. You can keep studying.');
+          requestSort(deck.id, { started: true });
+        },
+      },
+      h('p', { class: 'message', style: 'margin-bottom: 12px' }, 'This is how Dohrao would sort the deck. Nothing moves until you approve. Rename, move or delete anything first.'),
+      box,
+      h('div', { class: 'modal-foot' }, note, h('button', { class: 'btn', type: 'button', onclick: () => dialog.close() }, 'Cancel'), approve),
+    ),
+  );
+}
+
+/** On a deck page: the unsorted count with Sort now, or the way in to a first sort. */
+function sortBar(deck) {
+  if (!canSort(deck.id)) return null;
+  const hasTopics = (deck.topics ?? []).length > 0;
+  const unsorted = store.unsortedCount(deck.id);
+  if (sorting.has(deck.id)) return h('p', { class: 'message', role: 'status' }, 'Sorting cards into topics. You can keep studying.');
+  if (proposing.has(deck.id)) return h('p', { class: 'message', role: 'status' }, 'Reading the cards to suggest topics. This can take a minute.');
+  if (hasTopics && unsorted > 0) {
+    return h('p', { class: 'message' }, `${unsorted.toLocaleString()} unsorted · `, h('button', { class: 'btn', type: 'button', onclick: () => requestSort(deck.id) }, 'Sort now'));
+  }
+  if (!hasTopics && store.cardsIn(deck.id).length > 0) {
+    return h('p', { class: 'message' }, h('button', { class: 'btn', type: 'button', onclick: () => startProposal(deck) }, 'Sort this deck into topics'));
+  }
+  return null;
+}
+
 function pickImportFile(deck, toReserve = false) {
   const input = h('input', {
     type: 'file',
@@ -949,6 +1133,8 @@ function openImportDialog(deck, fileName, rows, toReserve = false) {
   const header = h('input', { type: 'checkbox', onchange: () => update() });
   const skipExisting = h('input', { type: 'checkbox', checked: true, onchange: () => update() });
   const reserved = h('input', { type: 'checkbox', checked: toReserve });
+  // A file named like a topic file puts all its cards in that topic.
+  const topicKey = topicKeyFromFileName(fileName);
   const preview = h('div', { class: 'import-preview' });
   const summary = h('p', { class: 'import-summary' });
   const submit = h('button', { class: 'btn primary', type: 'submit' });
@@ -993,8 +1179,9 @@ function openImportDialog(deck, fileName, rows, toReserve = false) {
         e.preventDefault();
         const { cards } = plan();
         if (!cards.length) return;
-        store.addCards(deck.id, cards, Date.now(), { reserved: reserved.checked });
+        store.addCards(deck.id, cards, Date.now(), { reserved: reserved.checked, ...(topicKey && { topicKey }) });
         dialog.close();
+        if (!topicKey) requestSort(deck.id);
         toast(`Imported ${plural(cards.length, 'card')} into ${reserved.checked ? `the reserve of ${deck.name}` : deck.name}`);
       },
     },
@@ -1005,6 +1192,7 @@ function openImportDialog(deck, fileName, rows, toReserve = false) {
       h('label', { class: 'field' }, h('span', null, 'Front'), front),
       h('label', { class: 'field' }, h('span', null, 'Back'), back),
     ),
+    topicKey && h('p', { class: 'message', style: 'margin-bottom: 12px' }, `Cards go into the topic ${readableTopicName(topicKey)}`),
     h('label', { class: 'check' }, header, 'The first row is a header, skip it'),
     h('label', { class: 'check' }, skipExisting, 'Skip cards already in this deck'),
     h('label', { class: 'check' }, reserved, 'Put these cards on reserve, to pull in when you want them'),
@@ -1084,6 +1272,7 @@ function openAnkiDialog(fileName, { decks, suspended, blank, sound, missingImage
         e.preventDefault();
         const added = store.importAnkiDecks(incoming, Date.now(), { reserved: reserved.checked });
         dialog.close();
+        for (const d of store.decks()) if (store.unsortedCount(d.id) > 0) requestSort(d.id);
         const onReserve = !reserved.checked ? '' : fresh === added ? ' onto the reserve' : `, ${fresh.toLocaleString()} of them on reserve`;
         toast(`Imported ${plural(added, 'card')} from Anki${onReserve}`);
       },
@@ -2046,6 +2235,7 @@ function renderDeck(deck) {
           c.total > 0 && h('a', { class: 'btn primary', href: `#/study/${deck.id}` }, icon('play'), `Study ${c.total}`),
         ),
       ),
+      sortBar(deck),
       content,
     ),
   );
