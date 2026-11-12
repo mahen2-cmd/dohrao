@@ -4,7 +4,7 @@
 //   --files <dir with new_cards_*.csv> [--dry-run]
 // It saves a copy of the database in <dir>/backups first (not on a dry run).
 
-import { readFileSync, readdirSync, existsSync, mkdirSync } from 'node:fs';
+import { readFileSync, readdirSync, existsSync, mkdirSync, statSync } from 'node:fs';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { randomUUID } from 'node:crypto';
@@ -68,17 +68,23 @@ export function backupBefore(db, dataDir, date = new Date()) {
   return path;
 }
 
+/** The named deck row of the named user; throws a clear error if either is missing. */
+export function findDeck(db, ownerUsername, deckName) {
+  const user = db.prepare('SELECT id FROM users WHERE username = ?').get(ownerUsername);
+  if (!user) throw new Error(`No user named ${ownerUsername}`);
+  const deckRow = db.prepare('SELECT id, data FROM decks WHERE owner_id = ?').all(user.id)
+    .find((d) => JSON.parse(d.data).name === deckName);
+  if (!deckRow) throw new Error(`No deck named "${deckName}" belongs to ${ownerUsername}`);
+  return deckRow;
+}
+
 /**
  * Put the deck's unsorted cards into the topics whose file lists them. A row matches a card as
  * front|back or reversed. A card found in two topics is left unsorted.
  * Returns { matched, ambiguous, unmatched }.
  */
 export function assignTopics(db, { ownerUsername, deckName, files, groups, now = Date.now(), dryRun = false }) {
-  const user = db.prepare('SELECT id FROM users WHERE username = ?').get(ownerUsername);
-  if (!user) throw new Error(`No user named ${ownerUsername}`);
-  const deckRow = db.prepare('SELECT id, data FROM decks WHERE owner_id = ?').all(user.id)
-    .find((d) => JSON.parse(d.data).name === deckName);
-  if (!deckRow) throw new Error(`No deck named "${deckName}" belongs to ${ownerUsername}`);
+  const deckRow = findDeck(db, ownerUsername, deckName);
   const deck = JSON.parse(deckRow.data);
 
   // Groups and topics: add what is missing, keep what is there.
@@ -158,9 +164,11 @@ function main(args) {
   let db;
   try {
     const groups = JSON.parse(readFileSync(join(here, 'portuguese-groups.json'), 'utf8'));
+    if (!existsSync(resolve(filesDir)) || !statSync(resolve(filesDir)).isDirectory()) throw new Error(`${resolve(filesDir)} is not a folder`);
     const { files, skipped } = parseTopicFiles(resolve(filesDir), groups);
     if (skipped.length) console.log(`Skipped files with unknown topics: ${skipped.join(', ')}`);
     db = openDb(dbFile);
+    findDeck(db, username, deckName); // a typo fails here, before a backup is written
     if (!dryRun) console.log(`Backup: ${backupBefore(db, resolve(dataDir))}`);
     const { matched, ambiguous, unmatched } = assignTopics(db, { ownerUsername: username, deckName, files, groups, dryRun });
     console.log(`${dryRun ? 'Dry run. Would sort' : 'Sorted'} ${matched}; ambiguous ${ambiguous}; unmatched ${unmatched}.`);

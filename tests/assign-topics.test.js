@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, rmSync, existsSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { mkdtempSync, writeFileSync, rmSync, existsSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -106,5 +107,22 @@ test('backup copies the database to a dated file and will not overwrite it', asy
   assert.ok(existsSync(path));
   assert.throws(() => backupBefore(db, dir, new Date('2026-11-12T10:00:00Z')), /already exists/);
   db.close();
+  rmSync(dir, { recursive: true });
+});
+
+test('a wrong deck or folder fails before any backup is written', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'recall-cli-'));
+  const db = openDb(join(dir, 'recall.db'));
+  const user = await createUser(db, { username: 'admin', name: 'Admin', password: 'password-1', role: 'admin' }, NOW);
+  db.prepare('INSERT INTO decks (id, owner_id, data) VALUES (?, ?, ?)').run('d1', user.id, JSON.stringify({ id: 'd1', name: 'Portuguese A1' }));
+  db.close();
+  const cli = (deck, files) => spawnSync(process.execPath, ['scripts/assign-topics.js', '--data', dir, '--username', 'admin', '--deck', deck, '--files', files], { encoding: 'utf8' });
+  const bad = cli('Portugese A1', dir);
+  assert.equal(bad.status, 1);
+  assert.match(bad.stderr, /No deck named/);
+  assert.match(cli('Portuguese A1', join(dir, 'nope')).stderr, /not a folder/);
+  assert.ok(!existsSync(join(dir, 'backups')) || readdirSync(join(dir, 'backups')).length === 0);
+  assert.equal(cli('Portuguese A1', dir).status, 0);
+  assert.equal(readdirSync(join(dir, 'backups')).length, 1);
   rmSync(dir, { recursive: true });
 });
