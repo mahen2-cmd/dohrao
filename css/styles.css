@@ -2844,3 +2844,115 @@ table.upcoming {
     max-width: none;
   }
 }
+
+/* ---- See and change topics ----------------------------------------------- */
+
+.field[hidden] {
+  display: none;
+}
+.card-row .topic-name {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 12.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.card-row.has-topic {
+  grid-template-columns: auto minmax(0, 1fr) minmax(0, 1fr) minmax(0, 120px) 132px auto;
+}
+.topics-edit {
+  max-height: min(65vh, 520px);
+  overflow-y: auto;
+}
+.topic-group {
+  margin-bottom: 14px;
+}
+.topic-group-head,
+.topic-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  padding: 4px 2px;
+  border-bottom: 1px solid var(--border);
+}
+.topic-group-head {
+  padding-bottom: 6px;
+}
+.topic-row {
+  padding-left: 14px;
+}
+.topic-name {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.topic-group-head input,
+.topic-row input[type='text'],
+.topic-row select {
+  flex: 1;
+  min-width: 0;
+  height: 34px;
+  padding: 0 10px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text);
+}
+.topic-row select {
+  flex: 0 1 140px;
+  border-color: var(--border-strong);
+  background: var(--surface);
+}
+.topic-group-head input {
+  font-weight: 600;
+}
+.topic-group-head input:hover,
+.topic-row input[type='text']:hover {
+  border-color: var(--border-strong);
+}
+.topic-group-head input:focus,
+.topic-row input[type='text']:focus,
+.topic-row select:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.topic-row .pick-count {
+  white-space: nowrap;
+}
+.topic-row.topic-add {
+  padding-left: 2px;
+  border-bottom: 0;
+}
+.topic-row.topic-add input[type='text'] {
+  border-color: var(--border-strong);
+}
+.topics-sub {
+  margin: 14px 0 4px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 550;
+}
+@media (max-width: 640px) {
+  .card-row.has-topic {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+  }
+  .card-row.has-topic .pick {
+    grid-row: 1 / span 4;
+  }
+  .card-row.has-topic .topic-name {
+    grid-column: 2;
+    grid-row: 3;
+  }
+  .card-row.has-topic .due {
+    grid-row: 4;
+  }
+  .card-row.has-topic .row-actions {
+    grid-row: 1 / span 4;
+  }
+  .topic-row {
+    flex-wrap: wrap;
+  }
+}

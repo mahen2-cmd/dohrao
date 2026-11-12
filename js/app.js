@@ -18,7 +18,7 @@ let offline = false;
 let query = '';
 
 // Filters on a deck's card list, reset whenever a different deck is opened.
-const NO_FILTERS = { groups: [], due: 'any', added: 'any', lapses: 'any', sort: 'newest' };
+const NO_FILTERS = { groups: [], due: 'any', added: 'any', lapses: 'any', topics: [], sort: 'newest' };
 let filters = { ...NO_FILTERS };
 let filtersDeck = null;
 // Whether the filter and sort selects are open on a phone, where they start folded away.
@@ -704,6 +704,17 @@ function openCardDialog({ card, deckId }) {
   const reserved = h('input', { type: 'checkbox', checked: Boolean(card?.reserved) });
   const canReserve = !card || card.state === State.New;
   const note = h('span', { class: 'note' }, 'Ctrl + Enter to save');
+  // Topics belong to a deck, so the choices follow the deck chosen.
+  const currentTopic = (deck) => (card && deck?.topics?.some((t) => t.id === card.topic) && card.deckId === deck.id ? card.topic : '');
+  const topicSelect = h('select', { 'aria-label': 'Topic' });
+  const topicField = h('label', { class: 'field' }, h('span', null, 'Topic'), topicSelect);
+  const fillTopics = () => {
+    const d = store.deck(deckSelect.value);
+    topicSelect.replaceChildren(...topicChoices(d, currentTopic(d)).flat(Infinity).filter(Boolean));
+    topicField.hidden = !(d?.topics ?? []).length;
+  };
+  deckSelect.addEventListener('change', fillTopics);
+  fillTopics();
 
   const submitOnCtrlEnter = (e) => {
     if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
@@ -722,14 +733,23 @@ function openCardDialog({ card, deckId }) {
         const values = { front: front.value.trim(), back: back.value.trim() };
         if (!values.front) return front.focus();
         if (!values.back) return back.focus();
+        const topic = topicField.hidden ? '' : topicSelect.value;
         if (card) {
-          store.updateCard(card.id, { ...values, deckId: deckSelect.value, reserved: (canReserve && reserved.checked) || undefined });
+          const wasIn = currentTopic(store.deck(deckSelect.value));
+          const moved = deckSelect.value !== card.deckId;
+          const chosen = topic !== wasIn || (moved && topic);
+          // A topic from the old deck means nothing in the new one.
+          const drop = moved && !chosen && card.topic ? { topic: undefined, topicBy: undefined } : {};
+          store.updateCard(card.id, { ...values, ...drop, deckId: deckSelect.value, reserved: (canReserve && reserved.checked) || undefined });
+          if (chosen) store.setCardsTopic([card.id], topic || null, Date.now());
           prepareCardSpeech(store.card(card.id));
           dialog.close();
           return;
         }
         // Stay open so several cards can be added in a row.
-        prepareCardSpeech(store.addCard(deckSelect.value, values.front, values.back, Date.now(), { reserved: reserved.checked }));
+        const added = store.addCard(deckSelect.value, values.front, values.back, Date.now(), { reserved: reserved.checked });
+        if (topic) store.setCardsTopic([added.id], topic, Date.now());
+        prepareCardSpeech(added);
         front.value = back.value = '';
         for (const box of [front, back]) box.dispatchEvent(new Event('input'));
         note.textContent = reserved.checked ? 'Card added to the reserve' : 'Card added';
@@ -742,6 +762,7 @@ function openCardDialog({ card, deckId }) {
     sideEditor('Back', back),
     h('small', { class: 'field-note', style: 'margin: -6px 0 14px' }, 'Paste or drop images into a side. Press Maths to write an equation, or click one in the preview to change it. Maths can also be typed as LaTeX: \\( x^2 \\) within a line, \\[ x^2 \\] on its own line.'),
     h('label', { class: 'field' }, h('span', null, 'Deck'), deckSelect),
+    topicField,
     canReserve && h('label', { class: 'check' }, reserved, 'Keep on reserve, out of study until pulled in'),
     h(
       'div',
@@ -1452,20 +1473,194 @@ function openTopicPicker(deck) {
   );
 }
 
-/** The topic choices for a select: Everything, each group, each topic, then Unsorted. Values are filter entries; the count is cards on reserve. */
-function topicOptions(deck, totals) {
+/**
+ * The topic choices for a select: everything, each group, each topic, then Unsorted. Values are
+ * filter entries. With `totals` each shows how many cards are on reserve; without, just the name.
+ */
+function topicOptions(deck, totals, everything = 'Everything') {
   const groups = deck.groups ?? [];
   const topics = deck.topics ?? [];
   const reserveOf = (ids) => ids.reduce((a, id) => a + (totals.get(id)?.reserve ?? 0), 0);
-  const opt = (value, label, n) => h('option', { value }, `${label} (${n.toLocaleString()})`);
-  const out = [opt('', 'Everything', reserveOf([...totals.keys()]))];
-  for (const g of groups) out.push(opt(`g:${g.id}`, g.name, reserveOf(topics.filter((t) => t.groupId === g.id).map((t) => t.id))));
+  const opt = (value, label, ids) => h('option', { value }, totals ? `${label} (${reserveOf(ids).toLocaleString()})` : label);
+  const out = [opt('', everything, totals ? [...totals.keys()] : [])];
+  for (const g of groups) out.push(opt(`g:${g.id}`, g.name, topics.filter((t) => t.groupId === g.id).map((t) => t.id)));
   for (const t of topics) {
     const group = groups.find((g) => g.id === t.groupId);
-    out.push(opt(`t:${t.id}`, group ? `${group.name}: ${t.name}` : t.name, reserveOf([t.id])));
+    out.push(opt(`t:${t.id}`, group ? `${group.name}: ${t.name}` : t.name, [t.id]));
   }
-  if (totals.has('')) out.push(opt('unsorted', 'Unsorted', reserveOf([''])));
+  if (!totals || totals.has('')) out.push(opt('unsorted', 'Unsorted', ['']));
   return out;
+}
+
+/** Options to put one card in one topic: Unsorted, then each topic (grouped). The value is a topic id, or '' for Unsorted. */
+function topicChoices(deck, value) {
+  const groups = deck?.groups ?? [];
+  const topics = deck?.topics ?? [];
+  const opt = (t) => h('option', { value: t.id, selected: t.id === value }, t.name);
+  return [
+    h('option', { value: '', selected: !value }, 'Unsorted'),
+    groups.map((g) => {
+      const own = topics.filter((t) => t.groupId === g.id);
+      return own.length > 0 && h('optgroup', { label: g.name }, own.map(opt));
+    }),
+    topics.filter((t) => !groups.some((g) => g.id === t.groupId)).map(opt),
+  ];
+}
+
+/** The topic a card sits in, if that topic still exists. */
+const topicOf = (deck, card) => (deck?.topics ?? []).find((t) => t.id === card.topic);
+
+/** Move ticked cards into a topic, or out of any topic. */
+function openMoveToTopic(deck, ids) {
+  const select = h('select', { 'aria-label': 'Topic' }, topicChoices(deck, ''));
+  const dialog = modal(
+    `Move ${plural(ids.length, 'card')} to a topic`,
+    h(
+      'form',
+      {
+        onsubmit: (e) => {
+          e.preventDefault();
+          const moved = store.setCardsTopic(ids, select.value || null, Date.now());
+          const where = select.value ? `“${select.selectedOptions[0].textContent}”` : 'Unsorted';
+          dialog.close();
+          toast(`${plural(moved, 'card')} moved to ${where}`);
+          render();
+        },
+      },
+      h('label', { class: 'field' }, h('span', null, 'Topic'), select),
+      h('div', { class: 'modal-foot' }, h('button', { class: 'btn', type: 'button', onclick: () => dialog.close() }, 'Cancel'), h('button', { class: 'btn primary', type: 'submit' }, 'Move')),
+    ),
+    { narrow: true },
+  );
+  select.focus();
+}
+
+/** Manage a deck's groups and topics. A deck given by the admin is shown but not changed. */
+function openTopicsDialog(deck) {
+  const editable = store.editable(deck.id);
+  const box = h('div', { class: 'topics-edit' });
+  const cardsIn = (topicId) => store.cardsIn(deck.id).filter((c) => c.topic === topicId).length;
+  const nameInput = (value, label, save) => {
+    const input = h('input', {
+      type: 'text',
+      value,
+      required: true,
+      maxlength: 80,
+      'aria-label': label,
+      onchange: () => {
+        const name = input.value.trim();
+        if (!name) input.value = value;
+        else {
+          value = name;
+          input.value = name;
+          save(name);
+        }
+      },
+    });
+    return input;
+  };
+  const groupSelect = (value, label, onchange) => {
+    const select = h(
+      'select',
+      { 'aria-label': label, onchange: () => onchange(select.value || null) },
+      h('option', { value: '', selected: !value }, 'No group'),
+      (deck.groups ?? []).map((g) => h('option', { value: g.id, selected: g.id === value }, g.name)),
+    );
+    return select;
+  };
+  const removeTopic = async (t) => {
+    const n = cardsIn(t.id);
+    const ok = await confirmDialog({
+      title: `Delete “${t.name}”?`,
+      message: n ? `${plural(n, 'card')} in this topic will become Unsorted.` : 'No cards are in this topic.',
+      confirmLabel: 'Delete topic',
+    });
+    if (!ok) return;
+    store.deleteTopic(deck.id, t.id, Date.now());
+    draw();
+  };
+  const removeGroup = async (g) => {
+    const n = (deck.topics ?? []).filter((t) => t.groupId === g.id).length;
+    const ok = await confirmDialog({
+      title: `Delete the group “${g.name}”?`,
+      message: n ? `Its ${plural(n, 'topic')} stay, with no group. No cards change.` : 'The group is empty.',
+      confirmLabel: 'Delete group',
+    });
+    if (!ok) return;
+    store.deleteGroup(deck.id, g.id, Date.now());
+    draw();
+  };
+  const topicRow = (t) => {
+    const n = cardsIn(t.id);
+    if (!editable) return h('div', { class: 'topic-row' }, h('span', { class: 'topic-name' }, t.name), h('span', { class: 'pick-count' }, plural(n, 'card')));
+    return h(
+      'div',
+      { class: 'topic-row' },
+      nameInput(t.name, `Name of the topic ${t.name}`, (name) => store.renameTopic(deck.id, t.id, name, Date.now())),
+      (deck.groups ?? []).length > 0 &&
+        groupSelect(t.groupId, `Group of ${t.name}`, (groupId) => {
+          store.moveTopic(deck.id, t.id, groupId, Date.now());
+          draw();
+        }),
+      h('span', { class: 'pick-count' }, plural(n, 'card')),
+      iconButton('trash', `Delete the topic ${t.name}`, () => removeTopic(t), 'danger'),
+    );
+  };
+  const add = (placeholder, label, onadd, withGroup) => {
+    const input = h('input', { type: 'text', required: true, maxlength: 80, placeholder, 'aria-label': label });
+    const group = withGroup && (deck.groups ?? []).length > 0 ? groupSelect(null, 'Group for the new topic', () => {}) : null;
+    return h(
+      'form',
+      {
+        class: 'topic-row topic-add',
+        onsubmit: (e) => {
+          e.preventDefault();
+          const name = input.value.trim();
+          if (!name) return input.focus();
+          onadd(name, group?.value || null);
+          draw();
+        },
+      },
+      input,
+      group,
+      h('button', { class: 'btn', type: 'submit' }, icon('plus'), 'Add'),
+    );
+  };
+
+  const draw = () => {
+    deck = store.deck(deck.id);
+    const groups = deck.groups ?? [];
+    const topics = deck.topics ?? [];
+    const loose = topics.filter((t) => !groups.some((g) => g.id === t.groupId));
+    const unsorted = store.cardsIn(deck.id).filter((c) => !topics.some((t) => t.id === c.topic)).length;
+    box.replaceChildren(
+      !editable && h('p', { class: 'pick-note' }, `${deck.from ? `${deck.from} sets` : 'The owner sets'} this deck's topics. You can see them here, but not change them.`),
+      !topics.length && !groups.length && h('p', { class: 'pick-note' }, editable ? 'This deck has no topics yet. Add one below, then move cards into it.' : 'This deck has no topics.'),
+      groups.map((g) =>
+        h(
+          'section',
+          { class: 'topic-group' },
+          h(
+            'div',
+            { class: 'topic-group-head' },
+            editable ? nameInput(g.name, `Name of the group ${g.name}`, (name) => store.renameGroup(deck.id, g.id, name, Date.now())) : h('b', null, g.name),
+            editable && iconButton('trash', `Delete the group ${g.name}`, () => removeGroup(g), 'danger'),
+          ),
+          topics.filter((t) => t.groupId === g.id).map(topicRow),
+        ),
+      ),
+      loose.length > 0 && h('section', { class: 'topic-group' }, groups.length > 0 && h('div', { class: 'topic-group-head' }, h('b', null, 'No group')), loose.map(topicRow)),
+      topics.length > 0 && h('p', { class: 'pick-note' }, `${plural(unsorted, 'card')} Unsorted.`),
+      editable && [
+        h('h3', { class: 'topics-sub' }, 'Add a topic'),
+        add('Topic name', 'Name of the new topic', (name, groupId) => store.createTopic(deck.id, name, groupId, Date.now()), true),
+        h('h3', { class: 'topics-sub' }, 'Add a group'),
+        add('Group name', 'Name of the new group', (name) => store.createGroup(deck.id, name, Date.now()), false),
+      ],
+    );
+  };
+  draw();
+  const dialog = modal('Topics', [box, h('div', { class: 'pick-actions' }, h('button', { class: 'btn primary', type: 'button', onclick: () => dialog.close() }, 'Done'))], { onclose: render });
 }
 
 /** A deck's reserve: how many cards are waiting, and the controls to pull some in or rearrange them. */
@@ -1522,6 +1717,9 @@ function renderDeck(deck) {
     filtersDeck = deck.id;
     selected = new Set();
   }
+  const hasTopics = (deck.topics ?? []).length > 0;
+  // A topic filter that no longer exists (deleted, or the deck changed) is dropped.
+  if (filters.topics.length && !topicOptions(deck, null).some((o) => o.value === filters.topics[0])) filters = { ...filters, topics: [] };
   const filtering = Object.keys(NO_FILTERS).some((key) => key !== 'sort' && String(filters[key]) !== String(NO_FILTERS[key]));
   const setFilters = (patch) => {
     filters = { ...filters, ...patch };
@@ -1576,6 +1774,15 @@ function renderDeck(deck) {
         );
         return h('label', { class: key !== 'sort' && filters[key] !== NO_FILTERS[key] ? 'on' : '' }, h('span', null, label), select);
       }),
+      hasTopics &&
+        (() => {
+          const select = h(
+            'select',
+            { onchange: () => setFilters({ topics: select.value ? [select.value] : [] }) },
+            topicOptions(deck, null, 'All topics').map((o) => (o.value === (filters.topics[0] ?? '') ? Object.assign(o, { selected: true }) : o)),
+          );
+          return h('label', { class: filters.topics.length ? 'on' : '' }, h('span', null, 'Topic'), select);
+        })(),
       filtering && h('button', { class: 'btn ghost', type: 'button', onclick: () => setFilters({ ...NO_FILTERS, sort: filters.sort }) }, icon('close'), 'Clear filters'),
     ),
   ];
@@ -1684,6 +1891,8 @@ function renderDeck(deck) {
                 'Back to reserve',
               ),
             editable && [
+              hasTopics &&
+                h('button', { class: 'btn', type: 'button', title: 'Put the ticked cards in a topic, or take them out of one', onclick: () => openMoveToTopic(deck, [...selected]) }, 'Move to topic…'),
               h(
                 'button',
                 { class: 'btn', type: 'button', title: 'Add a copy of each ticked card with its front and back swapped, on the reserve', onclick: () => addReversedCards([...selected]) },
@@ -1710,7 +1919,7 @@ function renderDeck(deck) {
           const row = h(
             'div',
             {
-              class: `card-row ${selected.has(card.id) ? 'selected' : ''} ${editable ? '' : 'read-only'}`,
+              class: `card-row ${selected.has(card.id) ? 'selected' : ''} ${editable ? '' : 'read-only'} ${hasTopics ? 'has-topic' : ''}`,
               onclick: editable && (() => openCardDialog({ card })),
               ...(sortable && {
                 draggable: true,
@@ -1744,6 +1953,7 @@ function renderDeck(deck) {
             ),
             h('div', { class: 'text' }, rich(card.front)),
             h('div', { class: 'text back-text' }, rich(card.back)),
+            hasTopics && h('div', { class: 'topic-name' }, topicOf(deck, card)?.name ?? 'Unsorted'),
             statusMark(status, status.label, 'due'),
             editable &&
               h(
@@ -1827,6 +2037,7 @@ function renderDeck(deck) {
             h('a', { href: `#/upcoming/${deck.id}` }, icon('calendar'), 'Upcoming cards'),
             h('a', { href: `#/stats/${deck.id}` }, icon('chart'), 'Statistics'),
             editable && h('button', { type: 'button', title: 'Import cards from an Excel or CSV file', onclick: () => pickImportFile(deck) }, icon('upload'), 'Import from Excel'),
+            (hasTopics || editable) && h('button', { type: 'button', title: 'See the deck\'s groups and topics', onclick: () => openTopicsDialog(deck) }, icon('check'), 'Topics…'),
             h('button', { type: 'button', onclick: () => openDeckDialog(deck) }, icon('edit'), 'Deck settings'),
             editable && h('button', { type: 'button', class: 'danger', onclick: () => removeDeck(deck) }, icon('trash'), 'Delete deck'),
           ]),
