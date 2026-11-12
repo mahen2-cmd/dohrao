@@ -29,5 +29,6 @@ rsync -rlptz --delete --chmod=D755,F644 \
   --exclude='potential_words*' \
   ./ "$target:/opt/recall/"
 
+ssh "$target" 'cd /opt/recall && npm ci --omit=dev'
 ssh "$target" 'sudo systemctl restart recall && sleep 2 && systemctl is-active recall'
 echo "Deployed to $target."

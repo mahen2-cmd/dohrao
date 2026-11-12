@@ -13,3 +13,4 @@ data/*.db*
 
 # Brainstorm and plan-execution scratch from Claude Code
 .superpowers/
+node_modules/
