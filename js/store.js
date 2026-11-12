@@ -399,7 +399,7 @@ export const deck = (id) => state.decks.find((d) => d.id === id);
 // A deck given by the admin (`assigned: true`, from its owner `from`) is studied like any other,
 // but its name, languages and cards are the owner's. These deck fields come from the owner, as
 // listed in server/fields.js.
-const SHARED_DECK_KEYS = ['name', 'created', 'ankiId', 'frontLang', 'backLang', 'saveAudio'];
+const SHARED_DECK_KEYS = ['name', 'created', 'ankiId', 'frontLang', 'backLang', 'saveAudio', 'groups', 'topics', 'topicsAt'];
 
 /** Whether a deck's name and cards can be changed here: not for a deck given by the admin. */
 export const editable = (deckId) => !deck(deckId)?.assigned;

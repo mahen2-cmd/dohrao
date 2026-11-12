@@ -215,3 +215,79 @@ test('daily and log from two devices are merged, keeping the larger count', asyn
   assert.deepEqual(view.daily, { '2026-01-01': 5, '2026-01-02': 3, '2026-01-03': 1 });
   assert.deepEqual(view.log, { '2026-01-02': { d1: [3, 2, 0, 0], d2: [1] } });
 });
+
+const setStored = (db, table, id, patch) => {
+  const row = db.prepare(`SELECT data FROM ${table} WHERE id = ?`).get(id);
+  db.prepare(`UPDATE ${table} SET data = ? WHERE id = ?`).run(JSON.stringify({ ...JSON.parse(row.data), ...patch }), id);
+};
+
+test('topic fields are shared with people the deck is given to', async () => {
+  const { db, ana, ben, deck } = await seed();
+  const groups = [{ id: 'g1', name: 'Verbs' }];
+  const topics = [{ id: 't1', name: 'Ser', groupId: 'g1', by: 'admin' }];
+  applyChanges(db, ana.id, { decks: [{ ...deck, groups, topics, topicsAt: NOW + 1 }],
+    cards: [cardOf('c1', { topic: 't1', topicBy: 'manual', topicAt: NOW + 1 })] }, NOW);
+  give(db, 'd1', ben.id);
+  const view = buildView(db, ben.id, NOW);
+  assert.deepEqual(view.decks[0].topics, topics);
+  assert.deepEqual(view.decks[0].groups, groups);
+  assert.equal(view.cards.find((c) => c.id === 'c1').topic, 't1');
+});
+
+test('stale card content keeps the newer topic', async () => {
+  const { db, ana } = await seed();
+  setStored(db, 'cards', 'c1', { topic: 't9', topicBy: 'ai', topicAt: NOW + 50 });
+  applyChanges(db, ana.id, { cards: [cardOf('c1', { reps: 1 })] }, NOW);   // an answer from an old copy
+  const c1 = buildView(db, ana.id, NOW).cards.find((c) => c.id === 'c1');
+  assert.equal(c1.topic, 't9');
+  assert.equal(c1.topicBy, 'ai');
+  assert.equal(c1.topicAt, NOW + 50);
+  assert.equal(c1.reps, 1);
+});
+
+test('a newer manual topic wins over the stored one', async () => {
+  const { db, ana } = await seed();
+  setStored(db, 'cards', 'c1', { topic: 't9', topicBy: 'ai', topicAt: NOW + 50 });
+  applyChanges(db, ana.id, { cards: [cardOf('c1', { topic: 't2', topicBy: 'manual', topicAt: NOW + 60 })] }, NOW);
+  const c1 = buildView(db, ana.id, NOW).cards.find((c) => c.id === 'c1');
+  assert.equal(c1.topic, 't2');
+  assert.equal(c1.topicBy, 'manual');
+  assert.equal(c1.topicAt, NOW + 60);
+});
+
+test('stale deck content keeps the newer groups and topics', async () => {
+  const { db, ana, deck } = await seed();
+  const groups = [{ id: 'g9', name: 'Nouns' }];
+  const topics = [{ id: 't9', name: 'Food', groupId: 'g9', by: 'ai' }];
+  setStored(db, 'decks', 'd1', { groups, topics, topicsAt: NOW + 50 });
+  applyChanges(db, ana.id, { decks: [{ ...deck, name: 'Spanish 2' }] }, NOW);   // an old copy renames the deck
+  const d = buildView(db, ana.id, NOW).decks[0];
+  assert.equal(d.name, 'Spanish 2');
+  assert.deepEqual(d.groups, groups);
+  assert.deepEqual(d.topics, topics);
+  assert.equal(d.topicsAt, NOW + 50);
+});
+
+test('a newer deck topic list replaces the stored one', async () => {
+  const { db, ana, deck } = await seed();
+  setStored(db, 'decks', 'd1', { groups: [{ id: 'g9', name: 'Old' }], topics: [], topicsAt: NOW + 50 });
+  applyChanges(db, ana.id, { decks: [{ ...deck, topics: [{ id: 't2', name: 'New', groupId: null, by: 'admin' }], topicsAt: NOW + 60 }] }, NOW);
+  const d = buildView(db, ana.id, NOW).decks[0];
+  assert.equal(d.topics[0].id, 't2');
+  assert.equal(d.groups, undefined);   // absent in the winner, absent in the result
+});
+
+test('a recipient cannot change topics of a given deck', async () => {
+  const { db, ana, ben, deck } = await seed();
+  const topics = [{ id: 't1', name: 'Ser', groupId: null, by: 'admin' }];
+  applyChanges(db, ana.id, { decks: [{ ...deck, topics, topicsAt: NOW + 1 }],
+    cards: [cardOf('c1', { topic: 't1', topicBy: 'manual', topicAt: NOW + 1 })] }, NOW);
+  give(db, 'd1', ben.id);
+  const before = buildView(db, ana.id, NOW);
+  const rejected = applyChanges(db, ben.id, {
+    decks: [{ ...deck, assigned: true, topics: [{ id: 't2', name: 'Mine', groupId: null, by: 'admin' }], topicsAt: NOW + 99 }],
+    cards: [cardOf('c1', { topic: 't2', topicBy: 'manual', topicAt: NOW + 99 })],
+  }, NOW);
+  assert.deepEqual(rejected, { rejected: [] });   // ignored, as with other content edits
+  assert.deepEqual(buildView(db, ana.id, NOW), before);
+});
