@@ -20,6 +20,8 @@ import {
 import { buildView, applyChanges } from './server/sync.js';
 import { listUsers, ownedDecks, assignDeck, unassignDeck, peopleProgress, personProgress } from './server/admin.js';
 import { backupDb } from './server/backup.js';
+import { loadSorter } from './server/sorter.js';
+import { ownedDeck, unsortedCards, sortDeck, proposeForDeck, approveProposal } from './server/topics.js';
 
 const ROOT = fileURLToPath(new URL('.', import.meta.url));
 // A big import arrives in one sync.
@@ -220,9 +222,13 @@ function clientIp(req) {
  * The Recall server. `origin` is the public address (e.g. https://recall.example) when it is
  * served through a proxy; `tts` replaces the speech engine (tests use a fake).
  */
-export function createRecallServer({ dataDir, origin, tts }) {
+export function createRecallServer({ dataDir, origin, tts, ...rest }) {
   mkdirSync(dataDir, { recursive: true });
   const db = openDb(join(dataDir, 'recall.db'));
+  // `sorter: null` means sorting is off; leaving the option out looks for a key.
+  const sorter = 'sorter' in rest ? rest.sorter : loadSorter(dataDir);
+  // Decks being sorted right now, so a second click does not start a second job.
+  const sorting = new Set();
   const voice = tts ?? createTts({ root: ROOT, dataDir });
   const mediaDir = join(dataDir, 'media');
   const ownOrigin = origin ? new URL(origin).origin : null;
@@ -274,9 +280,53 @@ export function createRecallServer({ dataDir, origin, tts }) {
     sendJson(res, 200, buildView(db, user.id, Date.now()), { 'X-Tts-Engine': encodeURIComponent(engine) });
   }
 
+  /** Sort a deck in the background; a failure is logged and ends the job. */
+  function startSort(deckId) {
+    if (sorting.has(deckId)) return;
+    sorting.add(deckId);
+    sortDeck(db, sorter, deckId, Date.now())
+      .catch((error) => console.error('Sorting failed:', error?.message ?? error))
+      .finally(() => sorting.delete(deckId));
+  }
+
+  /** Admin routes for one deck's topics. Only the deck's owner gets past the 404. */
+  async function topicsRoute(req, res, user, deckId, action) {
+    const method = req.method;
+    if (!ownedDeck(db, user.id, deckId)) throw new HttpError(404, 'not-found');
+    if (method === 'GET' && action === 'sort') {
+      return sendJson(res, 200, { running: sorting.has(deckId), unsorted: unsortedCards(db, deckId).length });
+    }
+    if (method === 'GET' && action === 'proposal') {
+      const row = db.prepare('SELECT data FROM topic_proposals WHERE deck_id = ?').get(deckId);
+      if (!row) throw new HttpError(404, 'not-found');
+      return sendJson(res, 200, JSON.parse(row.data));
+    }
+    if (method !== 'POST') throw new HttpError(404, 'not-found');
+    if (!sorter) throw new HttpError(503, 'no-sorter');
+    if (action === 'sort') {
+      startSort(deckId);
+      return sendJson(res, 202, { running: true });
+    }
+    if (action === 'propose') return sendJson(res, 200, await proposeForDeck(db, sorter, deckId, Date.now()));
+    if (action === 'proposal/approve') {
+      const { groups, topics } = await readJson(req, MAX_FORM);
+      try {
+        approveProposal(db, deckId, { groups, topics }, Date.now());
+      } catch (error) {
+        throw error.message === 'bad-request' ? new HttpError(400, 'bad-request') : error;
+      }
+      startSort(deckId);
+      return noContent(res);
+    }
+    throw new HttpError(404, 'not-found');
+  }
+
   async function admin(req, res, user, path) {
     const method = req.method;
     let m;
+    if ((m = path.match(/^\/api\/admin\/decks\/([^/]+)\/(sort|propose|proposal|proposal\/approve)$/))) {
+      return topicsRoute(req, res, user, m[1], m[2]);
+    }
     if (method === 'GET' && path === '/api/admin/users') return sendJson(res, 200, listUsers(db));
     if (method === 'GET' && path === '/api/admin/invites') return sendJson(res, 200, listInvites(db));
     if (method === 'POST' && path === '/api/admin/invites') {

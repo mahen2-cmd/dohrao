@@ -57,6 +57,10 @@ CREATE TABLE IF NOT EXISTS user_state (
   settings TEXT NOT NULL,
   saved_at INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS topic_proposals (
+  deck_id TEXT PRIMARY KEY REFERENCES decks(id) ON DELETE CASCADE,
+  data TEXT NOT NULL
+);
 CREATE INDEX IF NOT EXISTS cards_deck ON cards(deck_id);
 CREATE INDEX IF NOT EXISTS progress_card ON progress(card_id);
 `;
