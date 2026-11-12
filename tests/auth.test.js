@@ -81,6 +81,9 @@ test('input is validated', async () => {
   await assert.rejects(createUser(db, person({ username: 'a b' }), NOW), { code: 'bad-username' });
   await assert.rejects(createUser(db, person({ username: 'ab' }), NOW), { code: 'bad-username' });
   await assert.rejects(createUser(db, person({ password: '1234567' }), NOW), { code: 'weak-password' });
+  // A bad name has its own code, so the app does not blame the username for it.
+  await assert.rejects(createUser(db, person({ name: '   ' }), NOW), { code: 'bad-name' });
+  await assert.rejects(createUser(db, person({ name: 'x'.repeat(61) }), NOW), { code: 'bad-name' });
   const user = await createUser(db, person({ name: '  Ann  ', role: 'admin' }), NOW);
   assert.equal(user.name, 'Ann');
   assert.equal(user.role, 'admin');

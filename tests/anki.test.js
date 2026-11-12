@@ -349,6 +349,17 @@ test('importing into Recall adds decks once and makes the cards due as in Anki',
   assert.equal(store.cardsIn(deck.id).length, 8);
 });
 
+test('an Anki import says which decks already hold its cards', async () => {
+  store.reset();
+  const { decks } = await readAnkiCollection(legacy(), NOW);
+  assert.deepEqual(store.ankiDuplicates(decks), []);
+  store.importAnkiDecks(decks, NOW);
+  assert.deepEqual(store.ankiDuplicates(decks), [{ deck: 'Languages::Portuguese', cards: 8 }]);
+  // A file whose cards reuse those ids under another deck's name still points at where they are.
+  const clash = decks.map((deck) => ({ ...deck, name: 'Networking', cards: deck.cards.slice(0, 3) }));
+  assert.deepEqual(store.ankiDuplicates(clash), [{ deck: 'Languages::Portuguese', cards: 3 }]);
+});
+
 test('an Anki import can put its new cards on reserve, in Anki’s order, leaving studied ones alone', async () => {
   store.reset();
   const { decks } = await readAnkiCollection(legacy(), NOW);

@@ -287,6 +287,15 @@ test('the session cookie is Secure when served over https', async (t) => {
   assert.match(res.setCookie, /; Secure$/);
 });
 
+test('sign-up says which field is wrong', async (t) => {
+  const { port, invite } = await start(t);
+  const signUpWith = (over) =>
+    call(port, 'POST', 'api/signup', { body: { code: invite, username: 'ben', name: 'Ben', password: 'ben-password', ...over } });
+  assert.deepEqual([(await signUpWith({ name: ' ' })).status, (await signUpWith({ name: ' ' })).json], [400, { error: 'bad-name' }]);
+  assert.deepEqual((await signUpWith({ username: 'Ben Smith' })).json, { error: 'bad-username' });
+  assert.deepEqual((await signUpWith({ password: 'short' })).json, { error: 'weak-password' });
+});
+
 test("the admin sees everyone's progress, and one person's cards", async (t) => {
   const { port, invite } = await start(t);
   const admin = (await logIn(port, 'admin', 'admin-password')).cookie;

@@ -35,7 +35,7 @@ const COOKIE_AGE = 15552000; // 180 days, as long as a session
 const HOUR = 60 * 60 * 1000;
 const LOOPBACK_HOSTS = ['localhost', '127.0.0.1', '[::1]'];
 const LOOPBACK_ADDRESSES = ['127.0.0.1', '::1', '::ffff:127.0.0.1'];
-const AUTH_STATUS = { 'bad-invite': 400, 'bad-username': 400, 'weak-password': 400, 'username-taken': 409, 'bad-login': 401 };
+const AUTH_STATUS = { 'bad-invite': 400, 'bad-username': 400, 'bad-name': 400, 'weak-password': 400, 'username-taken': 409, 'bad-login': 401 };
 
 const TYPES = {
   '.html': 'text/html; charset=utf-8',

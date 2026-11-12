@@ -486,6 +486,23 @@ export function importAnkiDecks(imported, now = Date.now(), { reserved = false }
 /** Anki's ids of the cards already imported. */
 export const ankiCardIds = () => new Set(state.cards.map((c) => c.ankiId).filter(Boolean));
 
+/**
+ * Where the cards of an Anki file that are already here live: `[{ deck, cards }]`, one entry
+ * per deck holding some, by that deck's name here. A file whose cards reuse another deck's
+ * ids is otherwise silently skipped.
+ */
+export function ankiDuplicates(imported) {
+  const deckOf = new Map(state.cards.filter((c) => c.ankiId).map((c) => [c.ankiId, c.deckId]));
+  const counts = new Map();
+  for (const { cards } of imported) {
+    for (const c of cards) {
+      const deckId = deckOf.get(c.ankiId);
+      if (deckId) counts.set(deckId, (counts.get(deckId) ?? 0) + 1);
+    }
+  }
+  return [...counts].map(([deckId, cards]) => ({ deck: state.decks.find((d) => d.id === deckId)?.name ?? 'a deleted deck', cards }));
+}
+
 export function updateCard(id, patch) {
   const c = card(id);
   if (['front', 'back', 'deckId'].some((key) => key in patch)) {

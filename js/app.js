@@ -1027,7 +1027,8 @@ function openAnkiDialog(fileName, { decks, suspended, blank, sound, missingImage
     .map((deck) => ({ ...deck, cards: deck.cards.filter((card) => !known.has(card.ankiId)) }))
     .filter((deck) => deck.cards.length);
   const total = incoming.reduce((sum, deck) => sum + deck.cards.length, 0);
-  const existing = decks.reduce((sum, deck) => sum + deck.cards.length, 0) - total;
+  // Cards already here are skipped; say which decks hold them, as a file can reuse another deck's ids.
+  const duplicates = store.ankiDuplicates(decks);
   const fresh = incoming.reduce((sum, deck) => sum + deck.cards.filter((card) => card.state === State.New).length, 0);
   const reserved = h('input', { type: 'checkbox' });
 
@@ -1043,7 +1044,7 @@ function openAnkiDialog(fileName, { decks, suspended, blank, sound, missingImage
       .join(', ');
   };
   const notes = [
-    existing && `${plural(existing, 'card')} already in Dohrao will be skipped.`,
+    ...duplicates.map(({ deck, cards }) => `${plural(cards, 'card')} ${cards === 1 ? 'is' : 'are'} already in “${deck}” and will be skipped.`),
     suspended && `${plural(suspended, 'suspended card')} will be left out.`,
     blank && `${plural(blank, 'card')} with no text on the front will be left out.`,
     sound && 'Audio is not imported. Images and maths are.',
@@ -2371,8 +2372,9 @@ function renderUpcoming(deck) {
 const AUTH_ERRORS = {
   'bad-invite': 'That invite code doesn’t work. Check it with whoever sent it.',
   'username-taken': 'That username is taken.',
-  'weak-password': 'Use at least 8 characters.',
-  'bad-username': 'Use 3–32 letters, numbers, dots, dashes or underscores.',
+  'weak-password': 'Your password needs at least 8 characters.',
+  'bad-username': 'Your username can only use 3–32 letters, numbers, dots, dashes or underscores, with no spaces.',
+  'bad-name': 'Enter your name, up to 60 characters.',
   'bad-login': 'Wrong username or password.',
   'rate-limited': 'Too many attempts. Try again in a few minutes.',
 };
@@ -2383,14 +2385,17 @@ function authMessage(error) {
   return AUTH_ERRORS[error.message] ?? 'Something went wrong. Try again.';
 }
 
-/** A labelled, required input. `plain` fields (usernames, codes) are not capitalised or corrected. */
-function authField(label, attrs, plain = false) {
+/**
+ * A labelled, required input. `plain` fields (usernames, codes) are not capitalised or corrected.
+ * A `hint` under the field says what it takes before anyone gets it wrong.
+ */
+function authField(label, attrs, plain = false, hint = null) {
   const input = h('input', { required: true, ...attrs, ...(plain && { autocapitalize: 'none' }) });
   if (plain) {
     input.setAttribute('autocorrect', 'off');
     input.setAttribute('spellcheck', 'false');
   }
-  return h('label', { class: 'field' }, h('span', null, label), input);
+  return h('label', { class: 'field' }, h('span', null, label), input, hint && h('small', null, hint));
 }
 
 /** The login form, or with `mode` 'signup' the form that creates an account from an invite code. */
@@ -2400,8 +2405,8 @@ function renderAuth(mode) {
     ? [
         authField('Invite code', { name: 'code', autocomplete: 'off' }, true),
         authField('Your name', { name: 'name', autocomplete: 'name', maxlength: 60 }),
-        authField('Username', { name: 'username', autocomplete: 'username' }, true),
-        authField('Password', { name: 'password', type: 'password', autocomplete: 'new-password' }),
+        authField('Username', { name: 'username', autocomplete: 'username', maxlength: 32 }, true, 'Letters, numbers, dots, dashes or underscores, with no spaces.'),
+        authField('Password', { name: 'password', type: 'password', autocomplete: 'new-password', minLength: 8 }, false, 'At least 8 characters.'),
       ]
     : [
         authField('Username', { name: 'username', autocomplete: 'username' }, true),
