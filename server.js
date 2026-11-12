@@ -5,7 +5,7 @@
 import { createHash } from 'node:crypto';
 import { mkdirSync } from 'node:fs';
 import { createServer } from 'node:http';
-import { access, mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { access, mkdir, readFile, rename, stat, writeFile } from 'node:fs/promises';
 import { extname, join, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
@@ -27,7 +27,8 @@ const MAX_BODY = 100 * 1024 * 1024;
 // Sign-up, login and admin forms are small; this keeps huge passwords from burning CPU.
 const MAX_FORM = 16 * 1024;
 // An Anki package carries its images, so it may be much larger.
-const MAX_PACKAGE = 1024 * 1024 * 1024;
+// It is held in memory while it is read, so it is capped well below the server's memory.
+const MAX_PACKAGE = 300 * 1024 * 1024;
 const MAX_IMAGE = 20 * 1024 * 1024;
 const COOKIE = 'recall_session';
 const COOKIE_AGE = 15552000; // 180 days, as long as a session
@@ -146,7 +147,10 @@ async function image(mediaDir, name, res) {
  * saved here; the cards are added by the app once they are confirmed.
  */
 async function anki(mediaDir, req, res) {
-  const decks = await readAnkiPackage(await readBody(req, MAX_PACKAGE), { saveImage: (bytes) => saveImage(mediaDir, bytes) });
+  const bytes = await readBody(req, MAX_PACKAGE).catch(() => {
+    throw new Error('That package is larger than 300 MB.');
+  });
+  const decks = await readAnkiPackage(bytes, { saveImage: (image) => saveImage(mediaDir, image) });
   sendJson(res, 200, decks);
 }
 
@@ -160,7 +164,7 @@ async function fileRoute(res, task) {
   }
 }
 
-async function staticFile(path, res) {
+async function staticFile(path, req, res) {
   if (path === '/') path = '/index.html';
   // Only the app itself is served; the data folder is not reachable by URL. The file is
   // resolved first and must then lie inside one of the served folders.
@@ -169,12 +173,31 @@ async function staticFile(path, res) {
   const allowed = file === join(ROOT, 'index.html')
     || ['js', 'css', 'vendor'].some((dir) => file.startsWith(join(ROOT, dir) + sep));
   if (!allowed) throw new Error('not found');
+  const info = await stat(file);
+  if (!info.isFile()) throw new Error('not found');
+  // The phone keeps its copy and asks each time whether it changed; vendor/ only changes with
+  // a release, so its libraries are kept for a week without asking.
+  const etag = `"${info.size.toString(36)}-${Math.trunc(info.mtimeMs).toString(36)}"`;
+  const headers = {
+    'Cache-Control': file.startsWith(join(ROOT, 'vendor') + sep) ? 'public, max-age=604800' : 'no-cache',
+    ETag: etag,
+  };
+  if (etagMatches(req.headers['if-none-match'], etag)) return res.writeHead(304, headers).end();
   const body = await readFile(file);
-  res.writeHead(200, {
-    'Content-Type': TYPES[extname(file)] ?? 'application/octet-stream',
-    'Cache-Control': 'no-store',
-  });
+  res.writeHead(200, { ...headers, 'Content-Type': TYPES[extname(file)] ?? 'application/octet-stream' });
   res.end(body);
+}
+
+/**
+ * Whether an If-None-Match header names `etag`. Caddy hands out a compressed copy's ETag as a
+ * weak one with the encoding added (W/"abc-gzip"), so those count as the same.
+ */
+function etagMatches(header, etag) {
+  if (!header) return false;
+  return header.split(',').some((tag) => {
+    const plain = tag.trim().replace(/^W\//, '').replace(/-(gzip|zstd|br)"$/, '"');
+    return plain === '*' || plain === etag;
+  });
 }
 
 function sessionToken(req) {
@@ -342,7 +365,7 @@ export function createRecallServer({ dataDir, origin, tts }) {
       if (isApi && site && site !== 'same-origin' && site !== 'none') throw new HttpError(403, 'forbidden');
       if (foreignOrigin(req)) throw new HttpError(403, 'forbidden');
       if (isApi) await api(req, res, path);
-      else await staticFile(path, res);
+      else await staticFile(path, req, res);
     } catch (error) {
       if (res.headersSent) return res.end();
       if (error instanceof HttpError) return sendJson(res, error.status, { error: error.code });

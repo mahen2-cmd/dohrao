@@ -215,6 +215,45 @@ test('static files stay inside the folders they are served from', async (t) => {
   assert.equal((await call(port, 'GET', 'api/media/..%2F..%2Fpackage.json', { cookie: (await logIn(port, 'admin', 'admin-password')).cookie })).status, 404);
 });
 
+test('the app files are cached by the phone and revalidated with an ETag', async (t) => {
+  const { port, invite } = await start(t);
+  const first = await call(port, 'GET', 'js/app.js');
+  assert.equal(first.status, 200);
+  assert.equal(first.headers['cache-control'], 'no-cache');
+  const etag = first.headers.etag;
+  assert.match(etag, /^"[^"]+"$/);
+  assert.equal((await call(port, 'GET', 'js/app.js')).headers.etag, etag);
+
+  const again = await call(port, 'GET', 'js/app.js', { headers: { 'If-None-Match': etag } });
+  assert.equal(again.status, 304);
+  assert.equal(again.text, '');
+  assert.equal(again.headers.etag, etag);
+  // The ETag Caddy hands out for a compressed copy matches too.
+  const gzipped = `W/${etag.slice(0, -1)}-gzip"`;
+  assert.equal((await call(port, 'GET', 'js/app.js', { headers: { 'If-None-Match': gzipped } })).status, 304);
+  assert.equal((await call(port, 'GET', 'js/app.js', { headers: { 'If-None-Match': '"other"' } })).status, 200);
+
+  const page = await call(port, 'GET', '');
+  assert.equal(page.status, 200);
+  assert.equal(page.headers['cache-control'], 'no-cache');
+  assert.ok(page.headers.etag);
+  assert.equal((await call(port, 'GET', 'index.html', { headers: { 'If-None-Match': page.headers.etag } })).status, 304);
+
+  // Libraries in vendor/ change only with a release, so they are kept for longer.
+  const library = await call(port, 'GET', 'vendor/katex/katex.min.js');
+  assert.equal(library.status, 200);
+  assert.match(library.headers['cache-control'], /^public, max-age=\d+$/);
+  assert.ok(library.headers.etag);
+
+  // A matching ETag never opens files outside the served folders, and the API is never cached.
+  assert.equal((await call(port, 'GET', 'server.js', { headers: { 'If-None-Match': etag } })).status, 404);
+  assert.equal((await call(port, 'GET', 'data/recall.db', { headers: { 'If-None-Match': '*' } })).status, 404);
+  const { cookie } = await signUp(port, invite);
+  const state = await call(port, 'GET', 'api/state', { cookie });
+  assert.equal(state.headers['cache-control'], 'no-store');
+  assert.equal(state.headers.etag, undefined);
+});
+
 test('tts audio is cacheable on the phone', async (t) => {
   const { port, invite } = await start(t);
   const { cookie } = await signUp(port, invite);
