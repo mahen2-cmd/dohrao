@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { openDb } from '../server/db.js';
 import { createUser } from '../server/auth.js';
 import { buildView, applyChanges } from '../server/sync.js';
-import { listUsers, ownedDecks, assignDeck, unassignDeck } from '../server/admin.js';
+import { listUsers, ownedDecks, assignDeck, unassignDeck, peopleProgress, personProgress } from '../server/admin.js';
 import { newSchedule, State } from '../js/fsrs.js';
 
 const NOW = 1_700_000_000_000;
@@ -121,4 +121,42 @@ test('ownedDecks counts cards and lists recipients; listUsers is ordered by name
   assert.deepEqual(d.recipients, [{ userId: ben.id, name: 'Ben', active: true }, { userId: cal.id, name: 'Cal', active: false }]);
   assert.deepEqual(listUsers(db).map((u) => u.name), ['Ana', 'Ben', 'Cal']);
   assert.deepEqual(Object.keys(listUsers(db)[0]).sort(), ['created', 'id', 'name', 'role', 'username']);
+});
+
+test("progress shows each person's decks, statuses and study days, and only cards they have started", async () => {
+  const { db, ana, ben } = await seed();
+  assignDeck(db, { ownerId: ana.id, deckId: 'd1', userIds: [ben.id] }, NOW);
+  const mine = cardsOf(db, ben);
+  const s1 = mine.find((c) => c.id === 's1');
+  const s2 = mine.find((c) => c.id === 's2');
+  applyChanges(db, ben.id, {
+    cards: [
+      { ...s1, reserved: false, order: undefined, state: State.Review, reps: 6, scheduledDays: 30 },
+      { ...s2, reserved: false, order: undefined },
+    ],
+    daily: { '2023-11-14': 12 },
+  }, NOW);
+
+  const people = peopleProgress(db, NOW);
+  assert.deepEqual(people.map((p) => p.user.name), ['Ana', 'Ben', 'Cal']);
+  const benRow = people.find((p) => p.user.id === ben.id);
+  assert.deepEqual(benRow.daily, { '2023-11-14': 12 });
+  assert.equal(benRow.cards, undefined);
+  assert.equal(benRow.decks.length, 1);
+  assert.equal(benRow.decks[0].name, 'Spanish');
+  assert.equal(benRow.decks[0].assigned, true);
+  assert.equal(benRow.decks[0].from, 'Ana');
+  assert.equal(benRow.decks[0].total, 4);
+  assert.equal(benRow.decks[0].reserve, 2);
+  assert.equal(benRow.decks[0].known, 1);
+  assert.equal(benRow.decks[0].waiting, 1);
+  assert.equal(benRow.decks[0].learned, 1);
+  assert.equal(people.find((p) => p.user.id === ana.id).decks[0].assigned, false);
+
+  const detail = personProgress(db, ben.id, NOW);
+  assert.equal(detail.user.username, 'ben');
+  assert.deepEqual(detail.cards.map((c) => [c.id, c.status, c.deckId]), [['s1', 'known', 'd1']]);
+  assert.equal(detail.cards[0].front, 'front s1');
+  assert.equal(detail.cards[0].pass, undefined);
+  assert.equal(personProgress(db, 'no-such-user', NOW), null);
 });

@@ -40,4 +40,6 @@ export const admin = {
   assign: (deckId, userIds) => call('POST', `api/admin/decks/${part(deckId)}/assign`, { userIds }),
   unassign: (deckId, userIds) => call('POST', `api/admin/decks/${part(deckId)}/unassign`, { userIds }),
   resetPassword: (userId, password) => call('POST', `api/admin/users/${part(userId)}/password`, { password }),
+  progress: () => call('GET', 'api/admin/progress'),
+  personProgress: (userId) => call('GET', `api/admin/progress/${part(userId)}`),
 };

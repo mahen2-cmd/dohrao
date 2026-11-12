@@ -2,6 +2,7 @@
 
 import * as api from './api.js';
 import { mergeCounts } from './counts.js';
+import { dayKey, streakOf } from './progress.js';
 import { DAY, State, dayStart, newSchedule, nextDayAt, preview, schedule } from './fsrs.js';
 
 // Per-deck settings.
@@ -379,12 +380,7 @@ const uid = () =>
   globalThis.crypto?.randomUUID?.() ??
   Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
 
-// Days roll over at 4am, as in Anki.
-export function dayKey(t) {
-  const d = new Date(dayStart(t));
-  const pad = (n) => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-}
+export { dayKey };
 
 // ---- Settings -------------------------------------------------------------
 
@@ -812,18 +808,6 @@ const MATURE_DAYS = 21;
 
 /** The kinds of card an answer is logged under, in the order `statistics` reports them. */
 export const ANSWER_KINDS = ['Learning', 'Young', 'Mature'];
-
-function streakOf(perDay, now) {
-  const reviewedToday = perDay[dayKey(now)] ?? 0;
-  let streak = 0;
-  const day = new Date(dayStart(now));
-  if (!reviewedToday) day.setDate(day.getDate() - 1);
-  while (perDay[dayKey(day)] > 0) {
-    streak++;
-    day.setDate(day.getDate() - 1);
-  }
-  return { reviewedToday, streak };
-}
 
 export const stats = (now = Date.now()) => streakOf(state.daily, now);
 

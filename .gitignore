@@ -10,3 +10,6 @@ decks/
 .impeccable/scratch/
 # Databases from running the app locally (data/ above covers them; named for clarity)
 data/*.db*
+
+# Brainstorm and plan-execution scratch from Claude Code
+.superpowers/

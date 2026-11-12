@@ -127,6 +127,7 @@ test('admin endpoints refuse ordinary users', async (t) => {
     ['GET', 'api/admin/users'], ['GET', 'api/admin/invites'], ['POST', 'api/admin/invites'],
     ['DELETE', 'api/admin/invites/ABC'], ['GET', 'api/admin/decks'], ['POST', 'api/admin/decks/d1/assign'],
     ['POST', 'api/admin/decks/d1/unassign'], ['POST', 'api/admin/users/x/password'],
+    ['GET', 'api/admin/progress'], ['GET', 'api/admin/progress/x'],
   ]) {
     const res = await call(port, method, path, { cookie, body: {} });
     assert.equal(res.status, 403, `${method} ${path}`);
@@ -284,4 +285,22 @@ test('the session cookie is Secure when served over https', async (t) => {
   });
   assert.equal(res.status, 201);
   assert.match(res.setCookie, /; Secure$/);
+});
+
+test("the admin sees everyone's progress, and one person's cards", async (t) => {
+  const { port, invite } = await start(t);
+  const admin = (await logIn(port, 'admin', 'admin-password')).cookie;
+  const ben = await signUp(port, invite);
+  await call(port, 'POST', 'api/sync', { cookie: admin, body: { decks: [deck], cards: [card] } });
+  await call(port, 'POST', 'api/admin/decks/d1/assign', { cookie: admin, body: { userIds: [ben.json.user.id] } });
+
+  const all = await call(port, 'GET', 'api/admin/progress', { cookie: admin });
+  assert.equal(all.status, 200);
+  const row = all.json.find((p) => p.user.username === 'ben');
+  assert.deepEqual([row.decks[0].id, row.decks[0].total, row.decks[0].reserve], ['d1', 1, 1]);
+
+  const one = await call(port, 'GET', `api/admin/progress/${ben.json.user.id}`, { cookie: admin });
+  assert.equal(one.status, 200);
+  assert.deepEqual(one.json.cards, []);
+  assert.equal((await call(port, 'GET', 'api/admin/progress/nobody', { cookie: admin })).status, 404);
 });

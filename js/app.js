@@ -2,6 +2,7 @@ import * as api from './api.js';
 import { hasRichContent, imageToken, mathSpans, mathToken, parseContent, speechText } from './content.js';
 import { DAY, MINUTE, Rating, State, dayStart } from './fsrs.js';
 import { parseSpreadsheet } from './importer.js';
+import { recentStudy, rightShare } from './progress.js';
 import * as store from './store.js';
 
 const app = document.getElementById('app');
@@ -2433,7 +2434,7 @@ function renderAuth(mode) {
     submit,
   );
   const sub = signup
-    ? 'You need an invite code from whoever invited you to Dohrao.'
+    ? 'You need an invite code from whoever invited you to Dohrao. They can see your study progress.'
     : store.storageInfo().signedOut
       ? 'Your session ended. Log in again and nothing you did here is lost.'
       : 'Pick up where you left off.';
@@ -2473,8 +2474,8 @@ const listFormat = new Intl.ListFormat(undefined, { type: 'conjunction' });
 async function loadAdmin() {
   adminState.fresh = true;
   try {
-    const [users, invites, decks] = await Promise.all([api.admin.users(), api.admin.invites(), api.admin.decks()]);
-    adminState.data = { users, invites, decks };
+    const [users, invites, decks, progress] = await Promise.all([api.admin.users(), api.admin.invites(), api.admin.decks(), api.admin.progress()]);
+    adminState.data = { users, invites, decks, progress };
     adminState.error = false;
   } catch (error) {
     // The session ended, perhaps by resetting your own password: log in again.
@@ -2661,11 +2662,204 @@ function decksSection({ decks, users }) {
   );
 }
 
+// ---- Progress (admin only) -----------------------------------------------
+// How each person is getting on. Days are counted in this device's time, like Stats.
+
+const STATUS_LABELS = { known: 'known well', learning: 'learning', struggling: 'struggling', waiting: 'waiting', reserve: 'on reserve' };
+const relativeDays = new Intl.RelativeTimeFormat(undefined, { numeric: 'auto' });
+
+/** "today", "yesterday", "5 days ago" or "never", for a day key like '2026-01-31'. */
+function lastStudiedText(key) {
+  if (!key) return 'never';
+  const [y, m, d] = key.split('-').map(Number);
+  const days = Math.round((dayStart(Date.now()) - dayStart(new Date(y, m - 1, d, 12).getTime())) / DAY);
+  return relativeDays.format(-days, 'day');
+}
+
+/** A row of small squares, one per day, filled on days with answers. */
+function dayStrip(days) {
+  return h(
+    'span',
+    { class: 'day-strip', role: 'img', 'aria-label': `Studied on ${plural(days.filter((d) => d.n).length, 'day')} of the last ${days.length}` },
+    days.map((d) => withTip(h('i', { class: d.n ? 'on' : '' }), d.n ? plural(d.n, 'answer') : 'No answers', d.key)),
+  );
+}
+
+/** One bar split by status: known well, learning, struggling, waiting, then the reserve. */
+function progressBar(p) {
+  const parts = ['known', 'learning', 'struggling', 'waiting', 'reserve'];
+  return h(
+    'span',
+    { class: 'prog-bar', role: 'img', 'aria-label': `${p.known} known well, ${p.learning} learning, ${p.struggling} struggling, ${p.waiting} waiting, ${p.reserve} on reserve` },
+    parts.map((part) => p[part] > 0 && h('i', { class: `prog-${part}`, style: `flex-grow: ${p[part]}` })),
+  );
+}
+
+function progressSection({ progress }) {
+  return h(
+    'section',
+    { class: 'admin-section', 'aria-label': 'Progress' },
+    h('div', { class: 'section-head' }, h('h2', null, 'Progress')),
+    h(
+      'ul',
+      { class: 'admin-list progress-list' },
+      progress.map((p) => {
+        const r = recentStudy(p.daily, Date.now());
+        const learned = sum(p.decks.map((d) => d.learned));
+        const total = sum(p.decks.map((d) => d.total));
+        return h(
+          'li',
+          null,
+          h(
+            'a',
+            { class: 'progress-row', href: `#/admin/${encodeURIComponent(p.user.id)}` },
+            h('b', { class: 'progress-name' }, p.user.name),
+            dayStrip(r.last14),
+            h('span', { class: 'progress-fact' }, r.streak ? `${r.streak}-day streak` : 'no streak'),
+            h('span', { class: 'progress-fact' }, total ? `${learned.toLocaleString()} of ${total.toLocaleString()} learned` : 'no decks yet'),
+            h('span', { class: 'progress-fact muted' }, `last studied ${lastStudiedText(r.lastStudied)}`),
+          ),
+        );
+      }),
+    ),
+  );
+}
+
+const personState = { id: null, data: null, error: false, query: '' };
+
+async function loadPerson(id) {
+  personState.id = id;
+  personState.data = null;
+  personState.error = false;
+  personState.query = '';
+  try {
+    personState.data = await api.admin.personProgress(id);
+  } catch (error) {
+    if (error.message === 'signed-out') return location.reload();
+    personState.error = true;
+  }
+  if (route().view === 'admin' && personState.id === id) render();
+}
+
+function renderPerson(id) {
+  if (account.role !== 'admin') return;
+  if (personState.id !== id) loadPerson(id);
+  const p = personState.data;
+  const back = h('a', { class: 'btn', href: '#/admin' }, icon('back'), 'Admin');
+  if (!p) {
+    app.replaceChildren(
+      h(
+        'div',
+        { class: 'page' },
+        topbar(),
+        h('div', { class: 'page-head' }, h('div', null, h('h1', null, 'Progress')), back),
+        personState.error
+          ? h('div', { class: 'empty' }, h('h2', null, 'Could not load this person'), h('div', { class: 'row' }, h('button', { class: 'btn', type: 'button', onclick: () => loadPerson(id) }, 'Try again')))
+          : h('p', { class: 'admin-empty' }, 'Loading…'),
+      ),
+    );
+    return;
+  }
+  const now = Date.now();
+  const r = recentStudy(p.daily, now);
+  const right = rightShare(p.log, null, now);
+  const summary = [
+    `Studied ${r.daysIn30} of the last 30 days`,
+    r.streak ? `${r.streak}-day streak` : 'no streak',
+    `${plural(r.answersIn7, 'answer')} this week`,
+    `${plural(r.answersIn30, 'answer')} in 30 days`,
+    right !== null && `right ${Math.round(right * 100)}% of the time`,
+    `last studied ${lastStudiedText(r.lastStudied)}`,
+  ].filter(Boolean);
+
+  const decks = p.decks.map((d) => {
+    const share = rightShare(p.log, d.id, now);
+    return h(
+      'div',
+      { class: 'person-deck' },
+      h('h3', null, d.name, d.assigned ? h('span', { class: 'muted' }, ' · given by ', d.from) : h('span', { class: 'muted' }, ' · their own')),
+      progressBar(d),
+      h(
+        'p',
+        { class: 'muted' },
+        [
+          `${d.known.toLocaleString()} known well`,
+          `${d.learning.toLocaleString()} learning`,
+          `${d.struggling.toLocaleString()} struggling`,
+          `${d.waiting.toLocaleString()} waiting`,
+          `${d.reserve.toLocaleString()} on reserve`,
+        ].join(' · '),
+        h('br'),
+        `Pulled in ${d.pulledIn.toLocaleString()} of ${d.total.toLocaleString()} cards`,
+        share !== null ? ` · right ${Math.round(share * 100)}% of the time in the last 30 days` : '',
+      ),
+    );
+  });
+
+  const deckName = Object.fromEntries(p.decks.map((d) => [d.id, d.name]));
+  const order = { struggling: 0, learning: 1, known: 2 };
+  const list = h('ul', { class: 'person-cards' });
+  const drawCards = () => {
+    const q = personState.query.trim().toLowerCase();
+    const shown = p.cards
+      .filter((c) => !q || `${speechText(c.front)} ${speechText(c.back)}`.toLowerCase().includes(q))
+      .sort((a, b) => order[a.status] - order[b.status] || b.lapses - a.lapses || a.due - b.due);
+    list.replaceChildren(
+      ...(shown.length
+        ? shown.map((c) =>
+            h(
+              'li',
+              null,
+              h('span', { class: 'person-card-text' }, speechText(c.front), h('span', { class: 'muted' }, ' → '), speechText(c.back)),
+              h(
+                'span',
+                { class: `person-card-status status-${c.status}` },
+                STATUS_LABELS[c.status],
+                c.lapses ? ` · forgot ${c.lapses}×` : '',
+                ` · due ${lastStudiedText(store.dayKey(c.due))}`,
+                p.decks.length > 1 ? ` · ${deckName[c.deckId] ?? ''}` : '',
+              ),
+            ),
+          )
+        : [h('li', { class: 'muted' }, p.cards.length ? 'No cards match.' : 'No cards started yet.')]),
+    );
+  };
+  drawCards();
+  const search = h('input', {
+    type: 'search',
+    placeholder: 'Search cards',
+    'aria-label': 'Search cards',
+    value: personState.query,
+    oninput: () => {
+      personState.query = search.value;
+      drawCards();
+    },
+  });
+
+  app.replaceChildren(
+    h(
+      'div',
+      { class: 'page' },
+      topbar(),
+      h('div', { class: 'page-head' }, h('div', null, h('h1', null, p.user.name), h('p', { class: 'sub' }, summary.join(' · '))), back),
+      activityPanel({ perDay: p.daily }, new Date(dayStart(now)), null).section,
+      h('section', { class: 'admin-section', 'aria-label': 'Decks' }, h('div', { class: 'section-head' }, h('h2', null, 'Decks')), decks.length ? decks : h('p', { class: 'muted' }, 'No decks yet.')),
+      h(
+        'section',
+        { class: 'admin-section', 'aria-label': 'Cards started' },
+        h('div', { class: 'section-head' }, h('h2', null, `Cards started (${p.cards.length.toLocaleString()})`)),
+        h('div', { class: 'search person-search' }, icon('search'), search),
+        list,
+      ),
+    ),
+  );
+}
+
 function renderAdmin() {
   if (!adminState.fresh) loadAdmin();
   const d = adminState.data;
   const body = d
-    ? [peopleSection(d), invitesSection(d), decksSection(d)]
+    ? [progressSection(d), peopleSection(d), invitesSection(d), decksSection(d)]
     : adminState.error
       ? h('div', { class: 'empty' }, h('h2', null, 'Could not load this page'), h('div', { class: 'row' }, h('button', { class: 'btn', type: 'button', onclick: loadAdmin }, 'Try again')))
       : h('p', { class: 'admin-empty' }, 'Loading…');
@@ -2684,11 +2878,11 @@ function renderAdmin() {
 
 function route() {
   const [, view = '', id] = location.hash.split('/');
-  return { view, deck: id && store.deck(id) };
+  return { view, id, deck: id && store.deck(id) };
 }
 
 function render() {
-  const { view, deck } = route();
+  const { view, id, deck } = route();
   if (offline) return;
   if (!account || store.storageInfo().signedOut) {
     session.deckId = session.cardId = null;
@@ -2709,11 +2903,13 @@ function render() {
     filtersDeck = null;
   }
   if (view !== 'admin') adminState.fresh = false;
+  if (view !== 'admin' || !id) personState.id = null;
   tip.hidden = true;
   if (view === 'admin' && account.role !== 'admin') {
     history.replaceState(null, '', '#/');
     renderHome();
-  } else if (view === 'admin') renderAdmin();
+  } else if (view === 'admin' && id) renderPerson(decodeURIComponent(id));
+  else if (view === 'admin') renderAdmin();
   else if (view === 'deck' && deck) renderDeck(deck);
   else if (view === 'study' && deck) renderStudy(deck);
   else if (view === 'stats') renderStats(deck);

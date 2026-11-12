@@ -1,5 +1,7 @@
 // Admin actions: listing people, and giving decks to them and taking them back.
 import { newSchedule } from '../js/fsrs.js';
+import { cardStatus, deckProgress } from '../js/progress.js';
+import { buildView } from './sync.js';
 
 const parse = (text) => (text ? JSON.parse(text) : {});
 
@@ -79,4 +81,34 @@ export function unassignDeck(db, { ownerId, deckId, userIds }) {
     db.exec('ROLLBACK');
     throw err;
   }
+}
+
+/** One person's decks with how far they have got in each, and their answers per day. */
+function progressOf(db, user, now) {
+  const view = buildView(db, user.id, now);
+  const decks = view.decks.map((d) => ({
+    id: d.id,
+    name: d.name,
+    assigned: d.assigned === true,
+    from: d.from ?? null,
+    ...deckProgress(view.cards.filter((c) => c.deckId === d.id)),
+  }));
+  return { view, row: { user: { id: user.id, username: user.username, name: user.name, role: user.role }, daily: view.daily, log: view.log, decks } };
+}
+
+/** Everyone's progress at a glance, for the admin. */
+export function peopleProgress(db, now) {
+  return listUsers(db).map((user) => progressOf(db, user, now).row);
+}
+
+/** One person's progress in full, with every card they have started; null for an unknown user. */
+export function personProgress(db, userId, now) {
+  const user = listUsers(db).find((u) => u.id === userId);
+  if (!user) return null;
+  const { view, row } = progressOf(db, user, now);
+  const cards = view.cards
+    .map((c) => ({ c, status: cardStatus(c) }))
+    .filter(({ status }) => status !== 'reserve' && status !== 'waiting')
+    .map(({ c, status }) => ({ id: c.id, deckId: c.deckId, front: c.front, back: c.back, status, lapses: c.lapses ?? 0, reps: c.reps ?? 0, due: c.due }));
+  return { ...row, cards };
 }

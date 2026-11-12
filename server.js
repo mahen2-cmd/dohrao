@@ -18,7 +18,7 @@ import {
   createInvite, listInvites, revokeInvite, createLimiter,
 } from './server/auth.js';
 import { buildView, applyChanges } from './server/sync.js';
-import { listUsers, ownedDecks, assignDeck, unassignDeck } from './server/admin.js';
+import { listUsers, ownedDecks, assignDeck, unassignDeck, peopleProgress, personProgress } from './server/admin.js';
 import { backupDb } from './server/backup.js';
 
 const ROOT = fileURLToPath(new URL('.', import.meta.url));
@@ -289,6 +289,12 @@ export function createRecallServer({ dataDir, origin, tts }) {
       return noContent(res);
     }
     if (method === 'GET' && path === '/api/admin/decks') return sendJson(res, 200, ownedDecks(db, user.id));
+    if (method === 'GET' && path === '/api/admin/progress') return sendJson(res, 200, peopleProgress(db, Date.now()));
+    if (method === 'GET' && (m = path.match(/^\/api\/admin\/progress\/([^/]+)$/))) {
+      const progress = personProgress(db, m[1], Date.now());
+      if (!progress) throw new HttpError(404, 'not-found');
+      return sendJson(res, 200, progress);
+    }
     if (method === 'POST' && (m = path.match(/^\/api\/admin\/decks\/([^/]+)\/(assign|unassign)$/))) {
       const { userIds } = await readJson(req, MAX_FORM);
       const known = db.prepare('SELECT 1 FROM users WHERE id = ?');
