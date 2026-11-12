@@ -23,6 +23,9 @@ export function unsortedCards(db, deckId) {
     .map((c) => ({ id: c.id, front: c.front ?? '', back: c.back ?? '' }));
 }
 
+/** A topicsAt that is never behind what is stored, so these writes always win a merge. */
+const stamp = (deck, now) => Math.max(now, (deck.topicsAt ?? 0) + 1);
+
 /** Put loose topics into the deck's groups (only when it has groups). */
 async function groupLooseTopics(db, sorter, deckId, now) {
   const deck = deckData(db, deckId);
@@ -33,17 +36,20 @@ async function groupLooseTopics(db, sorter, deckId, now) {
     groups: deck.groups,
     topics: loose.map((t) => ({ id: t.id, name: t.name })),
   });
+  // The deck may have changed during the call: re-read it and apply only what still fits.
+  const fresh = deckData(db, deckId);
+  const groupIds = new Set((fresh.groups ?? []).map((g) => g.id));
   const groupOf = new Map(answer.map((a) => [a.id, a.groupId]));
   let changed = false;
-  for (const t of deck.topics) {
-    if (!t.groupId && groupOf.has(t.id)) {
+  for (const t of fresh.topics ?? []) {
+    if (!t.groupId && groupIds.has(groupOf.get(t.id))) {
       t.groupId = groupOf.get(t.id);
       changed = true;
     }
   }
   if (!changed) return;
-  deck.topicsAt = now;
-  saveDeck(db, deckId, deck);
+  fresh.topicsAt = stamp(fresh, now);
+  saveDeck(db, deckId, fresh);
 }
 
 /**
@@ -94,7 +100,7 @@ export async function sortDeck(db, sorter, deckId, now, { batch = 100 } = {}) {
       const kept = added.filter((t) => placedIn.has(t.id));
       if (kept.length) {
         fresh.topics = [...(fresh.topics ?? []), ...kept];
-        fresh.topicsAt = now;
+        fresh.topicsAt = stamp(fresh, now);
         saveDeck(db, deckId, fresh);
         created += kept.length;
       }
@@ -139,7 +145,7 @@ export function approveProposal(db, deckId, { groups, topics }, now) {
   deck.topics = topics.map((t) => ({
     id: randomUUID(), name: t.name.trim(), groupId: t.groupId == null ? null : groupIds.get(t.groupId), by: 'admin',
   }));
-  deck.topicsAt = now;
+  deck.topicsAt = stamp(deck, now);
   const live = new Set(deck.topics.map((t) => t.id));
 
   db.exec('BEGIN');

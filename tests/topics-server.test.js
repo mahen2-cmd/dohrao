@@ -189,3 +189,29 @@ test('approveProposal refuses bad names and unknown groups', async () => {
   bad({ groups: [], topics: [{ id: 't', name: 'A', groupId: 'zzz' }] });
   bad({ groups: 'x', topics: [] });
 });
+
+test('a deck change made while topics are being grouped survives', async () => {
+  const { db } = await seed({ groups: [{ id: 'g1', name: 'Verbs' }], topics: [{ id: 't1', name: 'Ser', groupId: null, by: 'file' }] });
+  const sorter = fake({
+    group: () => {
+      const deck = storedDeck(db);
+      deck.name = 'Renamed';
+      deck.topics.push({ id: 't9', name: 'New', groupId: null, by: 'admin' });
+      db.prepare('UPDATE decks SET data = ? WHERE id = ?').run(JSON.stringify(deck), 'd1');
+      return [{ id: 't1', groupId: 'g1' }, { id: 'gone', groupId: 'g1' }, { id: 't9', groupId: 'nope' }];
+    },
+  });
+  await sortDeck(db, sorter, 'd1', LATER);
+  const deck = storedDeck(db);
+  assert.equal(deck.name, 'Renamed');
+  assert.deepEqual(deck.topics.map((t) => [t.id, t.groupId]), [['t1', 'g1'], ['t9', null]]);
+});
+
+test('topicsAt never goes backwards during a job', async () => {
+  const { db } = await seed({ topics: [{ id: 't1', name: 'Ser', groupId: null, by: 'file' }], topicsAt: LATER + 10_000 });
+  const sorter = fake({
+    place: () => ({ placements: [{ id: 'c3', topic: 'new:1' }], newTopics: [{ ref: 'new:1', name: 'Estar', groupId: null }] }),
+  });
+  await sortDeck(db, sorter, 'd1', LATER);
+  assert.ok(storedDeck(db).topicsAt > LATER + 10_000);
+});
