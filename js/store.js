@@ -7,7 +7,7 @@ import { readableTopicName, prefixGroup, resolveFilter, inFilter, effectiveTopic
 import { DAY, State, dayStart, newSchedule, nextDayAt, preview, schedule } from './fsrs.js';
 
 // Per-deck settings.
-//   scheduler     'sm2' (Anki's default algorithm) or 'fsrs' (Anki with FSRS switched on)
+//   scheduler     'fsrs' (Anki with FSRS switched on, the default) or 'sm2' (Anki's older algorithm)
 //   retention     desired retention, used by FSRS
 //   easyInterval  days until the next review when Easy is pressed on a card still being
 //                 learned for the first time, like Anki's "Easy interval"
@@ -19,7 +19,7 @@ import { DAY, State, dayStart, newSchedule, nextDayAt, preview, schedule } from 
 //                 is made each time it is played, and `npm run cache-voice` leaves the deck out
 // A deck imported from Anki may also carry `fsrsParams`, its own FSRS parameters.
 export const DECK_DEFAULTS = {
-  scheduler: 'sm2',
+  scheduler: 'fsrs',
   newPerDay: 20,
   retention: 0.9,
   easyInterval: 4,

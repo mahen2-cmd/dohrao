@@ -500,7 +500,7 @@ function openDeckDialog(deck) {
   const scheduler = h(
     'select',
     null,
-    [['sm2', 'Anki default'], ['fsrs', 'FSRS']].map(([value, label]) =>
+    [['fsrs', 'FSRS'], ['sm2', 'SM-2 (older Anki default)']].map(([value, label]) =>
       h('option', { value, selected: value === defaults.scheduler }, label),
     ),
   );

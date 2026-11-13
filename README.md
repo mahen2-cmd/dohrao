@@ -15,7 +15,7 @@ A small, fast flashcard app with Anki's scheduling and a cleaner interface, host
 - **Maths and images.** Build equations in a visual editor, or write them in LaTeX, and they are typeset on the card. Paste a screenshot, drop a picture or pick a file to put it on either side.
 - **Import from Excel.** Turn a spreadsheet of words into cards in one step, pictures and maths included.
 - **Import from Anki.** Bring in an `.apkg` file and carry on where you left off: every card keeps its due date, interval and ease, and its images and maths.
-- **Anki's scheduler.** Ported from Anki's source: its default algorithm (SM-2), and FSRS-6 as a per-deck option, with the same learning steps, relearning, interval fuzz and 4am day rollover.
+- **Anki's scheduler.** Ported from Anki's source: FSRS-6, the default for every deck at 90% retention, and its older algorithm (SM-2) as a per-deck option, with the same learning steps, relearning, interval fuzz and 4am day rollover.
 - **Intervals on the buttons.** Again, Hard, Good and Easy each show when the card would come back.
 - **A reserve.** Keep cards aside in a deck, out of study, and pull in as many as you like when you are ready for them, in an order you can rearrange. Fill it from a CSV or Excel file, or with reversed copies of cards you choose.
 - **Upcoming cards.** How many cards come up on each day of the next week, month or three months, new, learning and due, for one deck or all of them.

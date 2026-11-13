@@ -168,7 +168,7 @@ function checkDeck({ decks, suspended, blank }) {
   assert.equal(blank, 0);
   const [deck] = decks;
   assert.equal(deck.name, 'Languages::Portuguese');
-  assert.deepEqual(deck.settings, { scheduler: 'sm2', newPerDay: 15, retention: 0.9, easyInterval: 4 });
+  assert.deepEqual(deck.settings, { scheduler: 'fsrs', newPerDay: 15, retention: 0.9, easyInterval: 4 });
   assert.deepEqual(deck.custom, []);
   assert.equal(deck.cards.length, 8);
 

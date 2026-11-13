@@ -147,10 +147,12 @@ function deckSettings(options, fsrs) {
     ([key, , only]) => (!only || !fsrs) && JSON.stringify(options[key]) !== JSON.stringify(OPTION_DEFAULTS[key]),
   ).map(([, label]) => label);
 
+  // Recall schedules every deck with FSRS. A file with FSRS off comes in at 90% retention;
+  // one with FSRS on keeps its own retention and parameters.
   const settings = {
-    scheduler: fsrs ? 'fsrs' : 'sm2',
+    scheduler: 'fsrs',
     newPerDay: options.newPerDay,
-    retention: options.retention,
+    retention: fsrs ? options.retention : 0.9,
     // With FSRS on, Anki ignores the easy interval and lets FSRS choose.
     easyInterval: fsrs ? 0 : options.graduatingEasy,
   };

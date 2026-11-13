@@ -775,3 +775,11 @@ test('topicCounts reports due, fresh and reserve per topic', () => {
   assert.deepEqual(m.get(topicId(deck.id, 'verb_ser')), { due: 0, fresh: 2, reserve: 1 });
   assert.deepEqual(m.get(''), { due: 0, fresh: 1, reserve: 0 });
 });
+
+test('new decks default to FSRS at 90%', () => {
+  assert.equal(store.DECK_DEFAULTS.scheduler, 'fsrs');
+  assert.equal(store.DECK_DEFAULTS.retention, 0.9);
+  const deck = store.createDeck({ name: 'Fresh' });
+  assert.equal(deck.scheduler, 'fsrs');
+  assert.equal(deck.retention, 0.9);
+});
