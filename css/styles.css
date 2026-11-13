@@ -740,6 +740,54 @@ kbd {
   box-shadow: 0 0 0 3px var(--accent-soft);
 }
 
+/* On a wide screen the deck page is two columns: the reserve, and the cards being studied. */
+.page.deck-page {
+  max-width: 1200px;
+}
+.deck-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 18px;
+  margin-top: 10px;
+}
+.deck-line .counts {
+  margin: 0;
+}
+.deck-columns {
+  display: grid;
+  grid-template-columns: 380px minmax(0, 1fr);
+  gap: 28px;
+  align-items: start;
+}
+.column-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  min-height: 36px;
+  margin-bottom: 8px;
+}
+.column-head h2 {
+  font-size: 17px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+.column-head span {
+  color: var(--muted);
+  font-size: 13.5px;
+}
+.deck-studying .toolbar .search,
+.screen-drill .toolbar .search {
+  flex: 1;
+}
+.filter-open.on {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+.filter-panel {
+  margin-bottom: 16px;
+}
+
 .toolbar {
   display: flex;
   align-items: center;
@@ -2986,6 +3034,75 @@ table.upcoming {
 /* ---- Phone, thumb first ------------------------------------------------- */
 /* Everything pressed often sits low on the screen. Above 640px none of this applies. */
 
+/* ---- Deck page up to 899px: the phone's Cards / Reserve / Topics tabs ---- */
+
+@media (max-width: 899px) {
+  .deck-tabs {
+    display: grid;
+    grid-auto-flow: column;
+    grid-auto-columns: minmax(0, 1fr);
+    gap: 4px;
+    margin: 18px 0 12px;
+    padding: 4px;
+    border: 1px solid var(--border);
+    border-radius: 11px;
+    background: var(--surface);
+  }
+  .deck-tabs button {
+    height: 38px;
+    border: 0;
+    border-radius: 8px;
+    background: none;
+    color: var(--muted);
+    font-weight: 550;
+    white-space: nowrap;
+  }
+  .deck-tabs button[aria-selected='true'] {
+    background: var(--hover);
+    color: var(--text);
+  }
+  .deck-tabs b {
+    margin-left: 6px;
+    font-weight: 500;
+    color: var(--muted);
+  }
+  .deck-topics-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 12px;
+  }
+  .deck-topic-list {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    border-top: 1px solid var(--border);
+  }
+  .deck-topic-list button {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    min-height: 52px;
+    padding: 0;
+    border: 0;
+    border-bottom: 1px solid var(--border);
+    background: none;
+    text-align: left;
+  }
+  .deck-topic-list span {
+    flex: 1;
+    min-width: 0;
+  }
+  .deck-topic-list b {
+    color: var(--muted);
+    font-weight: 500;
+  }
+  .deck-topic-list .icon {
+    color: var(--muted);
+  }
+}
+
 @media (max-width: 640px) {
   /* The top bar is a slim line: a title or greeting on the left, theme and account on the right. */
   .topbar .brand {
@@ -3162,35 +3279,6 @@ table.upcoming {
     margin-left: auto;
     flex-wrap: nowrap;
   }
-  .deck-tabs.phone-only {
-    display: grid !important;
-    grid-auto-flow: column;
-    grid-auto-columns: minmax(0, 1fr);
-    gap: 4px;
-    margin: 18px 0 12px;
-    padding: 4px;
-    border: 1px solid var(--border);
-    border-radius: 11px;
-    background: var(--surface);
-  }
-  .deck-tabs button {
-    height: 38px;
-    border: 0;
-    border-radius: 8px;
-    background: none;
-    color: var(--muted);
-    font-weight: 550;
-    white-space: nowrap;
-  }
-  .deck-tabs button[aria-selected='true'] {
-    background: var(--hover);
-    color: var(--text);
-  }
-  .deck-tabs b {
-    margin-left: 6px;
-    font-weight: 500;
-    color: var(--muted);
-  }
   .page[data-tab='cards'] .reserve,
   .page[data-tab='cards'] .chip[data-group='reserve'],
   .page[data-tab='reserve'] .chips,
@@ -3234,41 +3322,6 @@ table.upcoming {
   }
   .page[data-tab='topics'] > .message {
     margin: 0 0 8px;
-  }
-  .deck-topics-actions {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
-    margin-bottom: 12px;
-  }
-  .deck-topic-list {
-    margin: 0;
-    padding: 0;
-    list-style: none;
-    border-top: 1px solid var(--border);
-  }
-  .deck-topic-list button {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    width: 100%;
-    min-height: 52px;
-    padding: 0;
-    border: 0;
-    border-bottom: 1px solid var(--border);
-    background: none;
-    text-align: left;
-  }
-  .deck-topic-list span {
-    flex: 1;
-    min-width: 0;
-  }
-  .deck-topic-list b {
-    color: var(--muted);
-    font-weight: 500;
-  }
-  .deck-topic-list .icon {
-    color: var(--muted);
   }
   /* The deck's docked bar: what Study will study, then Add card and Study. */
   .dock-topic {

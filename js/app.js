@@ -2,7 +2,7 @@ import * as api from './api.js';
 import { hasRichContent, imageToken, mathSpans, mathToken, parseContent, speechText } from './content.js';
 import { DAY, MINUTE, Rating, State, dayStart } from './fsrs.js';
 import { parseSpreadsheet } from './importer.js';
-import { ownTicks } from './deckpage.js';
+import { TABBED_DECK_QUERY, ownTicks } from './deckpage.js';
 import { HEAT_WEEKS, PHONE_QUERY, canSwipeFrom, classifySwipe, inTab, isRevealTap, swipeLeaning, tabFilters } from './phone.js';
 import { recentStudy, rightShare } from './progress.js';
 import * as store from './store.js';
@@ -15,6 +15,10 @@ const app = document.getElementById('app');
 const phoneQuery = matchMedia(PHONE_QUERY);
 const isPhone = () => phoneQuery.matches;
 phoneQuery.addEventListener('change', () => render());
+// Up to 899px the deck page shows tabs instead of the reserve beside the cards.
+const tabbedQuery = matchMedia(TABBED_DECK_QUERY);
+const isTabbedDeck = () => tabbedQuery.matches;
+tabbedQuery.addEventListener('change', () => render());
 const toasts = document.getElementById('toasts');
 
 // The card currently on screen in study mode.
@@ -1127,13 +1131,31 @@ function looseTopics(deck) {
 }
 
 /** On a deck page: the unsorted count with Sort now, or the way in to a first sort. */
+/** While the deck's cards are being sorted into topics, a line saying so; otherwise null. */
+function sortStatus(deck) {
+  if (sorting.has(deck.id)) return h('p', { class: 'message', role: 'status' }, 'Sorting cards into topics. You can keep studying.');
+  if (proposing.has(deck.id)) return h('p', { class: 'message', role: 'status' }, 'Reading the cards to suggest topics. This can take a minute.');
+  return null;
+}
+
+/** On a wide screen, sorting into topics is an item in the deck's ⋯ menu, when there is anything to sort. */
+function sortAction(deck) {
+  if (!canSort(deck.id) || sorting.has(deck.id) || proposing.has(deck.id)) return null;
+  const unsorted = store.unsortedCount(deck.id);
+  if ((deck.topics ?? []).length > 0) {
+    if (unsorted > 0) return h('button', { type: 'button', onclick: () => requestSort(deck.id) }, icon('check'), `Sort ${unsorted.toLocaleString()} unsorted`);
+    return looseTopics(deck) > 0 ? h('button', { type: 'button', onclick: () => requestSort(deck.id) }, icon('check'), 'Sort now') : null;
+  }
+  return store.cardsIn(deck.id).length > 0 ? h('button', { type: 'button', onclick: () => startProposal(deck) }, icon('check'), 'Sort into topics') : null;
+}
+
 function sortBar(deck) {
   if (!canSort(deck.id)) return null;
   const hasTopics = (deck.topics ?? []).length > 0;
   const unsorted = store.unsortedCount(deck.id);
   const loose = looseTopics(deck);
-  if (sorting.has(deck.id)) return h('p', { class: 'message', role: 'status' }, 'Sorting cards into topics. You can keep studying.');
-  if (proposing.has(deck.id)) return h('p', { class: 'message', role: 'status' }, 'Reading the cards to suggest topics. This can take a minute.');
+  const status = sortStatus(deck);
+  if (status) return status;
   if (hasTopics && (unsorted > 0 || loose > 0)) {
     const what = unsorted > 0 ? `${unsorted.toLocaleString()} unsorted` : `${plural(loose, 'topic')} without a group`;
     return h('p', { class: 'message' }, `${what} · `, h('button', { class: 'btn', type: 'button', onclick: () => requestSort(deck.id) }, 'Sort now'));
@@ -2244,11 +2266,16 @@ function renderDeck(deck) {
     const group = store.cardGroup(card, now);
     groupCounts[group] = (groupCounts[group] ?? 0) + 1;
   }
+  const phone = isPhone();
+  const tabbed = isTabbedDeck();
+  // Beside the reserve column, the studying cards' filters leave out the reserve's chip and order.
+  const groups = phone ? CARD_GROUPS : CARD_GROUPS.filter(([group]) => group !== 'reserve');
+  const selects = phone ? FILTER_SELECTS : FILTER_SELECTS.map(([key, label, options]) => [key, label, key === 'sort' ? options.filter(([value]) => value !== 'reserve') : options]);
   const filterBar = [
     h(
       'div',
       { class: 'chips', role: 'group', 'aria-label': 'Show cards that are' },
-      CARD_GROUPS.map(([group, label]) => {
+      groups.map(([group, label]) => {
         const on = filters.groups.includes(group);
         return h(
           'button',
@@ -2280,7 +2307,7 @@ function renderDeck(deck) {
     h(
       'div',
       { class: `filters ${filtersOpen || filtering ? 'open' : ''}` },
-      FILTER_SELECTS.map(([key, label, options]) => {
+      selects.map(([key, label, options]) => {
         const select = h(
           'select',
           { onchange: () => setFilters({ [key]: select.value }) },
@@ -2301,106 +2328,171 @@ function renderDeck(deck) {
     ),
   ];
 
-  const deckList = cardList(deck, isPhone() ? (deckTab === 'reserve' ? 'reserve' : 'cards') : 'all', { filters, filtering, editable, hasTopics, now });
-  const list = deckList.el;
-  const shown = deckList.count;
-  // On a phone the list is the panel of the Cards or Reserve tab.
-  if (isPhone()) {
-    list.id = 'deck-cards';
-    list.setAttribute('role', 'tabpanel');
-    list.setAttribute('aria-labelledby', `deck-tab-${deckTab}`);
+  const options = { filters, filtering, editable, hasTopics, now };
+  // Up to 899px one list fills the chosen tab; wider, the reserve and the studying cards sit side by side.
+  const lists = tabbed ? [cardList(deck, deckTab === 'reserve' ? 'reserve' : 'cards', options)] : [cardList(deck, 'reserve', options), cardList(deck, 'cards', options)];
+  if (tabbed) {
+    lists[0].el.id = 'deck-cards';
+    lists[0].el.setAttribute('role', 'tabpanel');
+    lists[0].el.setAttribute('aria-labelledby', `deck-tab-${deckTab}`);
   }
-  const drawList = deckList.draw;
+  const [reserveList, studyList] = tabbed ? [null, null] : lists;
 
   const search = h('input', {
     type: 'search',
-    placeholder: 'Search cards',
+    placeholder: tabbed ? 'Search cards' : `Search all ${cards.length.toLocaleString()} cards`,
     value: query,
     'aria-label': 'Search cards',
     oninput: () => {
       query = search.value;
-      drawList(true);
+      for (const list of lists) list.draw(true);
     },
   });
+  const searchBox = h('div', { class: 'search' }, icon('search'), search);
+  // Beside the search on a wide screen: the filters open from one button.
+  const filterButton = h(
+    'button',
+    {
+      class: `btn filter-open ${filtering ? 'on' : ''}`,
+      type: 'button',
+      'aria-expanded': String(filtersOpen || filtering),
+      onclick: () => {
+        filtersOpen = !(filtersOpen || filtering);
+        render();
+      },
+    },
+    icon('sliders'),
+    filtering ? 'Filters on' : 'Filter and sort',
+  );
+  // The chips and the dropdowns, shown together when the filters are open.
+  const filterPanel = (filtersOpen || filtering) && h('div', { class: 'filter-panel' }, filterBar[0], filterBar[2]);
 
-  const content = cards.length
-    ? [
-        reserveBar(deck, c.reserve),
-        h(
-          'div',
-          { class: 'toolbar' },
-          h('div', { class: 'search' }, icon('search'), search),
-          shown,
-          // On a phone the filters open from a button beside the search.
-          h(
-            'button',
-            {
-              class: `icon-btn filter-icon phone-only ${filtering ? 'on' : ''}`,
-              type: 'button',
-              title: 'Filter and sort',
-              'aria-label': 'Filter and sort',
-              'aria-expanded': String(filtersOpen || filtering),
-              onclick: () => {
-                filtersOpen = !(filtersOpen || filtering);
-                render();
-              },
-            },
-            icon('sliders'),
-          ),
-        ),
-        filterBar,
-        list,
-      ]
-    : h(
+  let content;
+  if (!cards.length) {
+    content = h(
+      'div',
+      { class: 'empty' },
+      h('h2', null, 'No cards yet'),
+      editable
+        ? [
+            h('p', null, 'Add a question on the front and its answer on the back, or import a list from an Excel file.'),
+            h(
+              'div',
+              { class: 'row' },
+              h('button', { class: 'btn primary', type: 'button', onclick: () => openCardDialog({ deckId: deck.id }) }, icon('plus'), 'Add card'),
+              h('button', { class: 'btn', type: 'button', onclick: () => pickImportFile(deck) }, icon('upload'), 'Import from Excel'),
+            ),
+          ]
+        : h('p', null, `Cards appear here when ${deck.from} adds them.`),
+    );
+  } else if (phone) {
+    content = [
+      reserveBar(deck, c.reserve),
+      h(
         'div',
-        { class: 'empty' },
-        h('h2', null, 'No cards yet'),
-        editable
-          ? [
-              h('p', null, 'Add a question on the front and its answer on the back, or import a list from an Excel file.'),
-              h(
-                'div',
-                { class: 'row' },
-                h('button', { class: 'btn primary', type: 'button', onclick: () => openCardDialog({ deckId: deck.id }) }, icon('plus'), 'Add card'),
-                h('button', { class: 'btn', type: 'button', onclick: () => pickImportFile(deck) }, icon('upload'), 'Import from Excel'),
-              ),
-            ]
-          : h('p', null, `Cards appear here when ${deck.from} adds them.`),
-      );
-  if (cards.length) drawList();
+        { class: 'toolbar' },
+        searchBox,
+        lists[0].count,
+        // On a phone the filters open from a button beside the search.
+        h(
+          'button',
+          {
+            class: `icon-btn filter-icon phone-only ${filtering ? 'on' : ''}`,
+            type: 'button',
+            title: 'Filter and sort',
+            'aria-label': 'Filter and sort',
+            'aria-expanded': String(filtersOpen || filtering),
+            onclick: () => {
+              filtersOpen = !(filtersOpen || filtering);
+              render();
+            },
+          },
+          icon('sliders'),
+        ),
+      ),
+      filterBar,
+      lists[0].el,
+    ];
+  } else if (tabbed) {
+    // A tablet or a narrow window: the phone's tabs, each drawing only what it needs.
+    content =
+      deckTab === 'topics'
+        ? null
+        : deckTab === 'reserve'
+          ? [reserveBar(deck, c.reserve), h('div', { class: 'toolbar' }, searchBox), lists[0].el]
+          : [h('div', { class: 'toolbar' }, searchBox, filterButton), filterPanel, lists[0].el];
+  } else {
+    content = h(
+      'div',
+      { class: 'deck-columns' },
+      reserveColumn(deck, c, editable, reserveList),
+      h(
+        'section',
+        { class: 'deck-studying', 'aria-label': 'Studying' },
+        h('div', { class: 'column-head' }, h('h2', null, 'Studying'), h('span', null, plural(cards.length - c.reserve, 'card'))),
+        h('div', { class: 'toolbar' }, searchBox, filterButton),
+        filterPanel,
+        studyList.el,
+      ),
+    );
+  }
+  if (cards.length) for (const list of lists) list.draw();
 
+  const status = !phone && sortStatus(deck);
   app.replaceChildren(
     h(
       'div',
-      { class: 'page screen-drill', 'data-tab': deckTab },
+      { class: `page screen-drill${tabbed ? '' : ' deck-page'}`, 'data-tab': deckTab },
       topbar(),
       h('a', { class: 'back', href: '#/' }, icon('back'), 'All decks'),
       h(
         'div',
         { class: 'page-head', style: 'margin-top: 14px' },
-        h('div', null, h('h1', null, deck.name), deckFrom(deck), countPills(c), h('div', { class: 'deck-meta tomorrow' }, tomorrowText(c), ' ', h('a', { href: `#/upcoming/${deck.id}` }, 'See the days ahead'))),
+        h(
+          'div',
+          null,
+          h('h1', null, deck.name),
+          deckFrom(deck),
+          phone
+            ? [countPills(c), h('div', { class: 'deck-meta tomorrow' }, tomorrowText(c), ' ', h('a', { href: `#/upcoming/${deck.id}` }, 'See the days ahead'))]
+            : h('div', { class: 'deck-line' }, countPills(c), c.tomorrow.total > 0 && h('span', { class: 'deck-meta' }, `${c.tomorrow.total.toLocaleString()} tomorrow`)),
+        ),
         h(
           'div',
           { class: 'actions' },
+          editable && h('button', { class: 'btn wide-only', type: 'button', onclick: () => openCardDialog({ deckId: deck.id }) }, icon('plus'), 'Add card'),
           menu('More for this deck', [
             h('a', { href: `#/upcoming/${deck.id}` }, icon('calendar'), 'Upcoming cards'),
             h('a', { href: `#/stats/${deck.id}` }, icon('chart'), 'Statistics'),
             editable && h('button', { type: 'button', title: 'Import cards from an Excel or CSV file', onclick: () => pickImportFile(deck) }, icon('upload'), 'Import from Excel'),
             (hasTopics || editable) && h('button', { type: 'button', title: 'See the deck\'s groups and topics', onclick: () => openTopicsDialog(deck) }, icon('check'), 'Topics…'),
+            !phone && sortAction(deck),
             h('button', { type: 'button', onclick: () => openDeckDialog(deck) }, icon('edit'), 'Deck settings'),
             editable && h('button', { type: 'button', class: 'danger', onclick: () => removeDeck(deck) }, icon('trash'), 'Delete deck'),
           ]),
-          editable && h('button', { class: 'btn wide-only', type: 'button', onclick: () => openCardDialog({ deckId: deck.id }) }, icon('plus'), 'Add card'),
-          (deck.topics ?? []).length > 0 && h('button', { class: 'btn topic-pick wide-only', type: 'button', title: 'Choose which topics to study', onclick: () => openTopicPicker(deck) }, h('span', null, filterLabel(deck, deck.studyFilter)), icon('chevron')),
-          c.total > 0 && h('a', { class: 'btn primary wide-only', href: `#/study/${deck.id}` }, icon('play'), `Study ${c.total}`),
+          hasTopics && h('button', { class: 'btn topic-pick wide-only', type: 'button', title: 'Choose which topics to study', onclick: () => openTopicPicker(deck) }, h('span', null, filterLabel(deck, deck.studyFilter)), icon('chevron')),
+          c.total > 0
+            ? h('a', { class: 'btn primary wide-only', href: `#/study/${deck.id}` }, icon('play'), `Study ${c.total}`)
+            : h('button', { class: 'btn primary wide-only', type: 'button', disabled: true }, 'Nothing due'),
         ),
       ),
-      cards.length > 0 && deckTabs(deck, c, cards, editable || hasTopics),
-      sortBar(deck),
-      cards.length > 0 && isPhone() && deckTab === 'topics' && topicsTab(deck, editable),
+      cards.length > 0 && tabbed && deckTabs(deck, c, cards, editable || hasTopics),
+      phone ? sortBar(deck) : status,
+      cards.length > 0 && tabbed && deckTab === 'topics' && topicsTab(deck, editable),
       content,
       deckDock(deck, c, editable),
     ),
+  );
+}
+
+/** On a wide screen, the reserve's own column: every reserve card in the order it is pulled in. */
+function reserveColumn(deck, c, editable, list) {
+  return h(
+    'section',
+    { class: 'deck-reserve', 'aria-label': 'Reserve' },
+    h('div', { class: 'column-head' }, h('h2', null, 'Reserve'), h('span', null, `${c.reserve.toLocaleString()} · pulled in from the top`)),
+    reserveBar(deck, c.reserve),
+    list.el,
   );
 }
 
@@ -2465,7 +2557,7 @@ function deckTabs(deck, c, cards, withTopics) {
   };
   return h(
     'div',
-    { class: 'deck-tabs phone-only', role: 'tablist', 'aria-label': 'Show', onkeydown },
+    { class: 'deck-tabs', role: 'tablist', 'aria-label': 'Show', onkeydown },
     tabs.map(([key, label, n]) =>
       h(
         'button',
