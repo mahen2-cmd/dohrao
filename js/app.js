@@ -125,8 +125,17 @@ document.addEventListener('click', (e) => {
   for (const open of document.querySelectorAll('details.menu[open]')) if (!open.contains(e.target) || e.target === open) open.removeAttribute('open');
 });
 document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape') for (const open of document.querySelectorAll('details.menu[open]')) open.removeAttribute('open');
+  if (e.key === 'Escape' && isPhone()) for (const open of document.querySelectorAll('details.menu[open]')) open.removeAttribute('open');
 });
+// A sheet takes the focus when it opens, so a keyboard or screen reader lands in it.
+document.addEventListener(
+  'toggle',
+  (e) => {
+    const menu = e.target;
+    if (isPhone() && menu.matches?.('details.menu') && menu.open) menu.querySelector('.menu-items > :is(a, button)')?.focus();
+  },
+  true,
+);
 
 const iconButton = (name, label, onclick, extra = '') =>
   h('button', { class: `icon-btn ${extra}`, type: 'button', title: label, 'aria-label': label, onclick }, icon(name));
@@ -2049,7 +2058,8 @@ function renderDeck(deck) {
     ),
   ];
 
-  const list = h('div', { class: 'deck-cards' });
+  // On a phone the list is the panel of the Cards or Reserve tab.
+  const list = h('div', isPhone() ? { class: 'deck-cards', id: 'deck-cards', role: 'tabpanel', 'aria-labelledby': `deck-tab-${deckTab}` } : { class: 'deck-cards' });
   const shown = h('span', { class: 'count' });
   // Ids of the reserve cards being dragged to a new place.
   let dragged = null;
@@ -2415,20 +2425,34 @@ function deckTabs(deck, c, cards, withTopics) {
     withTopics && ['topics', 'Topics', null],
   ].filter(Boolean);
   if (!withTopics && deckTab === 'topics') deckTab = 'cards';
+  const choose = (key, focus) => {
+    deckTab = key;
+    render();
+    if (focus) document.getElementById(`deck-tab-${key}`)?.focus();
+  };
+  // Arrow keys, Home and End move between the tabs, as in any tab list.
+  const onkeydown = (e) => {
+    const keys = tabs.map(([key]) => key);
+    const at = keys.indexOf(deckTab);
+    const to = { ArrowRight: at + 1, ArrowLeft: at - 1, Home: 0, End: keys.length - 1 }[e.key];
+    if (to === undefined) return;
+    e.preventDefault();
+    choose(keys[(to + keys.length) % keys.length], true);
+  };
   return h(
     'div',
-    { class: 'deck-tabs phone-only', role: 'tablist', 'aria-label': 'Show' },
+    { class: 'deck-tabs phone-only', role: 'tablist', 'aria-label': 'Show', onkeydown },
     tabs.map(([key, label, n]) =>
       h(
         'button',
         {
           type: 'button',
           role: 'tab',
+          id: `deck-tab-${key}`,
+          'aria-controls': key === 'topics' ? 'deck-topics' : 'deck-cards',
           'aria-selected': String(deckTab === key),
-          onclick: () => {
-            deckTab = key;
-            render();
-          },
+          tabindex: deckTab === key ? '0' : '-1',
+          onclick: () => choose(key, false),
         },
         label,
         n !== null && h('b', null, n.toLocaleString()),
@@ -2448,12 +2472,12 @@ function topicsTab(deck, editable) {
     : [];
   return h(
     'section',
-    { class: 'deck-topics' },
+    { class: 'deck-topics', id: 'deck-topics', role: 'tabpanel', 'aria-labelledby': 'deck-tab-topics' },
     h(
       'div',
       { class: 'deck-topics-actions' },
       hasTopics && h('button', { class: 'btn', type: 'button', onclick: () => openTopicPicker(deck) }, icon('play'), 'Choose what to study'),
-      h('button', { class: 'btn', type: 'button', onclick: () => openTopicsDialog(deck) }, icon('check'), 'Manage topics…'),
+      h('button', { class: 'btn', type: 'button', onclick: () => openTopicsDialog(deck) }, icon('check'), editable ? 'Manage topics…' : 'Topics…'),
     ),
     rows.length > 0 &&
       h(
@@ -2572,9 +2596,12 @@ function revealCount() {
 
 function reveal() {
   session.revealed = true;
-  try {
-    localStorage.setItem(HINT_KEY, String(revealCount() + 1));
-  } catch {}
+  const shown = revealCount();
+  if (shown < REVEAL_HINTS) {
+    try {
+      localStorage.setItem(HINT_KEY, String(shown + 1));
+    } catch {}
+  }
   render();
 }
 
@@ -2607,8 +2634,9 @@ function attachSwipe(card, options, now) {
   const resized = new ResizeObserver(() => (card.isConnected ? measure() : resized.disconnect()));
   for (const child of card.children) resized.observe(child);
   for (const img of card.querySelectorAll('img')) img.addEventListener('load', measure);
+  // The stamp sits on the screen above the card, so it shows however far the card is scrolled.
   const stamp = h('div', { class: 'swipe-stamp', 'aria-hidden': 'true' });
-  card.append(stamp);
+  card.after(stamp);
   const marks = [...app.querySelectorAll('.ruler .mark')];
   let start = null;
 
