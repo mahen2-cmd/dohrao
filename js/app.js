@@ -2,6 +2,7 @@ import * as api from './api.js';
 import { hasRichContent, imageToken, mathSpans, mathToken, parseContent, speechText } from './content.js';
 import { DAY, MINUTE, Rating, State, dayStart } from './fsrs.js';
 import { parseSpreadsheet } from './importer.js';
+import { ownTicks } from './deckpage.js';
 import { HEAT_WEEKS, PHONE_QUERY, canSwipeFrom, classifySwipe, inTab, isRevealTap, swipeLeaning, tabFilters } from './phone.js';
 import { recentStudy, rightShare } from './progress.js';
 import * as store from './store.js';
@@ -1975,115 +1976,43 @@ function reserveBar(deck, n) {
   );
 }
 
-function renderDeck(deck) {
-  const now = Date.now();
-  // A deck given by the admin is studied here, but its cards are changed only by its owner.
-  const editable = store.editable(deck.id);
-  const c = store.counts(deck.id, now, deck.studyFilter);
+/**
+ * A deck's card list, in one of three views: 'all' (every card, the filters as set), 'cards'
+ * (the cards being studied) or 'reserve' (the reserve, in the order it is pulled in). Lists
+ * share the ticked cards, but each prunes and acts only on its own.
+ */
+function cardList(deck, view, { filters, filtering, editable, hasTopics, now }) {
   const cards = store.cardsIn(deck.id);
-  if (filtersDeck !== deck.id) {
-    filters = { ...NO_FILTERS };
-    filtersDeck = deck.id;
-    selected = new Set();
-    deckTab = 'cards';
-  }
-  const hasTopics = (deck.topics ?? []).length > 0;
-  // A topic filter that no longer exists (deleted, or the deck changed) is dropped.
-  if (filters.topics.length && !topicOptions(deck, null).some((o) => o.value === filters.topics[0])) filters = { ...filters, topics: [] };
-  const filtering = Object.keys(NO_FILTERS).some((key) => key !== 'sort' && String(filters[key]) !== String(NO_FILTERS[key]));
-  const setFilters = (patch) => {
-    filters = { ...filters, ...patch };
-    render();
-  };
-
-  const groupCounts = {};
-  for (const card of cards) {
-    const group = store.cardGroup(card, now);
-    groupCounts[group] = (groupCounts[group] ?? 0) + 1;
-  }
-  const filterBar = [
-    h(
-      'div',
-      { class: 'chips', role: 'group', 'aria-label': 'Show cards that are' },
-      CARD_GROUPS.map(([group, label]) => {
-        const on = filters.groups.includes(group);
-        return h(
-          'button',
-          {
-            class: 'chip',
-            type: 'button',
-            'data-group': group,
-            'aria-pressed': String(on),
-            onclick: () => setFilters({ groups: on ? filters.groups.filter((g) => g !== group) : [...filters.groups, group] }),
-          },
-          label,
-          h('b', null, (groupCounts[group] ?? 0).toLocaleString()),
-        );
-      }),
-    ),
-    h(
-      'button',
-      {
-        class: 'btn filter-toggle',
-        type: 'button',
-        'aria-expanded': String(filtersOpen || filtering),
-        onclick: () => {
-          filtersOpen = !(filtersOpen || filtering);
-          render();
-        },
-      },
-      filtering ? 'Filters on' : 'Filter and sort',
-    ),
-    h(
-      'div',
-      { class: `filters ${filtersOpen || filtering ? 'open' : ''}` },
-      FILTER_SELECTS.map(([key, label, options]) => {
-        const select = h(
-          'select',
-          { onchange: () => setFilters({ [key]: select.value }) },
-          options.map(([value, text]) => h('option', { value, selected: value === filters[key] }, text)),
-        );
-        return h('label', { class: key !== 'sort' && filters[key] !== NO_FILTERS[key] ? 'on' : '' }, h('span', null, label), select);
-      }),
-      hasTopics &&
-        (() => {
-          const select = h(
-            'select',
-            { onchange: () => setFilters({ topics: select.value ? [select.value] : [] }) },
-            topicOptions(deck, null, 'All topics').map((o) => (o.value === (filters.topics[0] ?? '') ? Object.assign(o, { selected: true }) : o)),
-          );
-          return h('label', { class: filters.topics.length ? 'on' : '' }, h('span', null, 'Topic'), select);
-        })(),
-      filtering && h('button', { class: 'btn ghost', type: 'button', onclick: () => setFilters({ ...NO_FILTERS, sort: filters.sort }) }, icon('close'), 'Clear filters'),
-    ),
-  ];
-
-  // On a phone the list is the panel of the Cards or Reserve tab.
-  const list = h('div', isPhone() ? { class: 'deck-cards', id: 'deck-cards', role: 'tabpanel', 'aria-labelledby': `deck-tab-${deckTab}` } : { class: 'deck-cards' });
+  const list = h('div', { class: 'deck-cards' });
   const shown = h('span', { class: 'count' });
   // Ids of the reserve cards being dragged to a new place.
   let dragged = null;
   // How many matching cards are drawn; a deck can hold thousands, and drawing them all is slow.
   let limit = CARD_PAGE;
 
-  const drawList = () => {
+  const drawList = (fresh = false) => {
+    if (fresh) limit = CARD_PAGE;
     const q = query.trim();
-    // On a phone the chosen tab narrows the list: the reserve, or everything else.
-    const phone = isPhone();
+    // A view narrows the list: the reserve, or everything else.
     const matches = store
-      .findCards(deck.id, { text: q, ...(phone ? tabFilters(filters, deckTab) : filters) }, now)
-      .filter((card) => !phone || inTab(card, deckTab));
+      .findCards(deck.id, { text: q, ...(view === 'all' ? filters : tabFilters(filters, view)) }, now)
+      .filter((card) => view === 'all' || inTab(card, view));
     shown.textContent = q || filtering ? `${matches.length.toLocaleString()} of ${plural(cards.length, 'card')}` : plural(cards.length, 'card');
-    selected = new Set(matches.filter((card) => selected.has(card.id)).map((card) => card.id));
+    // Only cards on screen stay ticked; ticks in another list's view are that list's to keep.
+    const mine = new Set(ownTicks(selected, matches, view));
+    for (const id of [...mine]) {
+      const card = store.card(id);
+      if (!card || ((view === 'all' || inTab(card, view)) && !mine.has(id))) selected.delete(id);
+    }
     const pick = (ids, on) => {
       for (const id of ids) on ? selected.add(id) : selected.delete(id);
       drawList();
     };
     // In reserve order, the reserve cards shown can be moved: `line` is those, first to last.
-    const line = (phone ? deckTab === 'reserve' : filters.sort === 'reserve') ? matches.filter((card) => card.reserved) : [];
+    const line = view === 'reserve' || (view === 'all' && filters.sort === 'reserve') ? matches.filter((card) => card.reserved) : [];
     const picked = line.filter((card) => selected.has(card.id));
     const waiting = line.filter((card) => !selected.has(card.id));
-    const movable = picked.length > 0 && picked.length === selected.size;
+    const movable = picked.length > 0 && picked.length === mine.size;
     // Ticked cards not on reserve, which can be put back on it.
     const unreserved = matches.filter((card) => selected.has(card.id) && !card.reserved).map((card) => card.id);
     // Ticked cards on reserve, which can be pulled in.
@@ -2097,11 +2026,11 @@ function renderDeck(deck) {
     const step = (down) => {
       const edge = line.indexOf(picked.at(down ? -1 : 0));
       const anchor = line[edge + (down ? 1 : -1)] ?? waiting.at(down ? -1 : 0);
-      if (anchor) move([...selected], { [down ? 'after' : 'before']: anchor.id });
+      if (anchor) move([...mine], { [down ? 'after' : 'before']: anchor.id });
     };
     const toTop = () => {
       const first = store.reserveIn(deck.id).find((card) => !selected.has(card.id));
-      if (first) move([...selected], { before: first.id });
+      if (first) move([...mine], { before: first.id });
     };
     const moveButton = (label, title, onclick, glyph) => h('button', { class: 'btn', type: 'button', title, onclick }, glyph && icon(glyph), label);
     if (!matches.length) {
@@ -2121,16 +2050,16 @@ function renderDeck(deck) {
             { class: 'pick' },
             h('input', {
               type: 'checkbox',
-              checked: selected.size === matches.length,
-              indeterminate: selected.size > 0 && selected.size < matches.length,
+              checked: mine.size === matches.length,
+              indeterminate: mine.size > 0 && mine.size < matches.length,
               onchange: (e) => pick(matches.map((card) => card.id), e.target.checked),
             }),
-            selected.size ? `${selected.size.toLocaleString()} selected` : matches.length === cards.length ? 'Select all' : `Select all ${matches.length.toLocaleString()} shown`,
+            mine.size ? `${mine.size.toLocaleString()} selected` : matches.length === cards.length ? 'Select all' : `Select all ${matches.length.toLocaleString()} shown`,
           ),
-          line.length > 1 && !selected.size && h('span', { class: 'hint' }, 'Drag cards to reorder them, or tick several to move them together.'),
+          line.length > 1 && !mine.size && h('span', { class: 'hint' }, 'Drag cards to reorder them, or tick several to move them together.'),
           // Only with the whole reserve in view, so nothing out of sight moves.
           line.length > 1 &&
-            !selected.size &&
+            !mine.size &&
             line.length === store.reserveIn(deck.id).length &&
             moveButton('Reverse order', 'Turn the whole reserve around, so the last card is pulled in first', () => {
               store.reverseReserve(deck.id);
@@ -2144,10 +2073,10 @@ function renderDeck(deck) {
               moveButton('Up', 'Move up one place', () => step(false), 'up'),
               moveButton('Down', 'Move down one place', () => step(true), 'down'),
               moveButton('To top', 'Move to the front of the reserve, to be pulled in first', toTop),
-              moveButton('To bottom', 'Move to the end of the reserve, to be pulled in last', () => move([...selected])),
+              moveButton('To bottom', 'Move to the end of the reserve, to be pulled in last', () => move([...mine])),
             ),
           // On a phone these become a toolbar along the bottom: an icon over a short label each.
-          selected.size > 0 &&
+          mine.size > 0 &&
             h(
               'div',
               { class: 'bulk' },
@@ -2159,7 +2088,7 @@ function renderDeck(deck) {
                     h('button', { type: 'button', onclick: () => step(false) }, icon('up'), 'Up one place'),
                     h('button', { type: 'button', onclick: () => step(true) }, icon('down'), 'Down one place'),
                     h('button', { type: 'button', onclick: toTop }, icon('up'), 'To the top'),
-                    h('button', { type: 'button', onclick: () => move([...selected]) }, icon('down'), 'To the bottom'),
+                    h('button', { type: 'button', onclick: () => move([...mine]) }, icon('down'), 'To the bottom'),
                   ],
                   'swap',
                   'phone-only bulk-menu',
@@ -2178,7 +2107,7 @@ function renderDeck(deck) {
                   },
                 },
                 icon('box'),
-                reserved.length === selected.size ? 'Pull in' : `Pull in ${reserved.length.toLocaleString()}`,
+                reserved.length === mine.size ? 'Pull in' : `Pull in ${reserved.length.toLocaleString()}`,
               ),
             unreserved.length > 0 &&
               h(
@@ -2189,17 +2118,17 @@ function renderDeck(deck) {
               ),
             editable && [
               hasTopics &&
-                h('button', { class: 'btn', type: 'button', title: 'Put the ticked cards in a topic, or take them out of one', 'data-short': 'Topic', onclick: () => openMoveToTopic(deck, [...selected]) }, h('span', { class: 'phone-only' }, icon('check')), 'Move to topic…'),
+                h('button', { class: 'btn', type: 'button', title: 'Put the ticked cards in a topic, or take them out of one', 'data-short': 'Topic', onclick: () => openMoveToTopic(deck, [...mine]) }, h('span', { class: 'phone-only' }, icon('check')), 'Move to topic…'),
               h(
                 'button',
-                { class: 'btn', type: 'button', title: 'Add a copy of each ticked card with its front and back swapped, on the reserve', 'data-short': 'Reversed', onclick: () => addReversedCards([...selected]) },
+                { class: 'btn', type: 'button', title: 'Add a copy of each ticked card with its front and back swapped, on the reserve', 'data-short': 'Reversed', onclick: () => addReversedCards([...mine]) },
                 icon('swap'),
                 'Add reversed',
               ),
-              h('button', { class: 'btn danger', type: 'button', 'data-short': 'Delete', onclick: () => removeCards([...selected]) }, icon('trash'), `Delete ${plural(selected.size, 'card')}`),
+              h('button', { class: 'btn danger', type: 'button', 'data-short': 'Delete', onclick: () => removeCards([...mine]) }, icon('trash'), `Delete ${plural(mine.size, 'card')}`),
             ],
             ),
-          selected.size > 0 && h('button', { class: 'btn ghost bulk-cancel', type: 'button', onclick: () => pick([...selected], false) }, 'Cancel'),
+          mine.size > 0 && h('button', { class: 'btn ghost bulk-cancel', type: 'button', onclick: () => pick([...mine], false) }, 'Cancel'),
         ),
         matches.slice(0, limit).map((card) => {
           const status = cardStatus(card, now);
@@ -2286,6 +2215,102 @@ function renderDeck(deck) {
       ),
     );
   };
+  return { el: list, count: shown, draw: drawList };
+}
+
+function renderDeck(deck) {
+  const now = Date.now();
+  // A deck given by the admin is studied here, but its cards are changed only by its owner.
+  const editable = store.editable(deck.id);
+  const c = store.counts(deck.id, now, deck.studyFilter);
+  const cards = store.cardsIn(deck.id);
+  if (filtersDeck !== deck.id) {
+    filters = { ...NO_FILTERS };
+    filtersDeck = deck.id;
+    selected = new Set();
+    deckTab = 'cards';
+  }
+  const hasTopics = (deck.topics ?? []).length > 0;
+  // A topic filter that no longer exists (deleted, or the deck changed) is dropped.
+  if (filters.topics.length && !topicOptions(deck, null).some((o) => o.value === filters.topics[0])) filters = { ...filters, topics: [] };
+  const filtering = Object.keys(NO_FILTERS).some((key) => key !== 'sort' && String(filters[key]) !== String(NO_FILTERS[key]));
+  const setFilters = (patch) => {
+    filters = { ...filters, ...patch };
+    render();
+  };
+
+  const groupCounts = {};
+  for (const card of cards) {
+    const group = store.cardGroup(card, now);
+    groupCounts[group] = (groupCounts[group] ?? 0) + 1;
+  }
+  const filterBar = [
+    h(
+      'div',
+      { class: 'chips', role: 'group', 'aria-label': 'Show cards that are' },
+      CARD_GROUPS.map(([group, label]) => {
+        const on = filters.groups.includes(group);
+        return h(
+          'button',
+          {
+            class: 'chip',
+            type: 'button',
+            'data-group': group,
+            'aria-pressed': String(on),
+            onclick: () => setFilters({ groups: on ? filters.groups.filter((g) => g !== group) : [...filters.groups, group] }),
+          },
+          label,
+          h('b', null, (groupCounts[group] ?? 0).toLocaleString()),
+        );
+      }),
+    ),
+    h(
+      'button',
+      {
+        class: 'btn filter-toggle',
+        type: 'button',
+        'aria-expanded': String(filtersOpen || filtering),
+        onclick: () => {
+          filtersOpen = !(filtersOpen || filtering);
+          render();
+        },
+      },
+      filtering ? 'Filters on' : 'Filter and sort',
+    ),
+    h(
+      'div',
+      { class: `filters ${filtersOpen || filtering ? 'open' : ''}` },
+      FILTER_SELECTS.map(([key, label, options]) => {
+        const select = h(
+          'select',
+          { onchange: () => setFilters({ [key]: select.value }) },
+          options.map(([value, text]) => h('option', { value, selected: value === filters[key] }, text)),
+        );
+        return h('label', { class: key !== 'sort' && filters[key] !== NO_FILTERS[key] ? 'on' : '' }, h('span', null, label), select);
+      }),
+      hasTopics &&
+        (() => {
+          const select = h(
+            'select',
+            { onchange: () => setFilters({ topics: select.value ? [select.value] : [] }) },
+            topicOptions(deck, null, 'All topics').map((o) => (o.value === (filters.topics[0] ?? '') ? Object.assign(o, { selected: true }) : o)),
+          );
+          return h('label', { class: filters.topics.length ? 'on' : '' }, h('span', null, 'Topic'), select);
+        })(),
+      filtering && h('button', { class: 'btn ghost', type: 'button', onclick: () => setFilters({ ...NO_FILTERS, sort: filters.sort }) }, icon('close'), 'Clear filters'),
+    ),
+  ];
+
+  const deckList = cardList(deck, isPhone() ? (deckTab === 'reserve' ? 'reserve' : 'cards') : 'all', { filters, filtering, editable, hasTopics, now });
+  const list = deckList.el;
+  const shown = deckList.count;
+  // On a phone the list is the panel of the Cards or Reserve tab.
+  if (isPhone()) {
+    list.id = 'deck-cards';
+    list.setAttribute('role', 'tabpanel');
+    list.setAttribute('aria-labelledby', `deck-tab-${deckTab}`);
+  }
+  const drawList = deckList.draw;
 
   const search = h('input', {
     type: 'search',
@@ -2294,8 +2319,7 @@ function renderDeck(deck) {
     'aria-label': 'Search cards',
     oninput: () => {
       query = search.value;
-      limit = CARD_PAGE;
-      drawList();
+      drawList(true);
     },
   });
 
