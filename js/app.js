@@ -2,7 +2,7 @@ import * as api from './api.js';
 import { hasRichContent, imageToken, mathSpans, mathToken, parseContent, speechText } from './content.js';
 import { DAY, MINUTE, Rating, State, dayStart } from './fsrs.js';
 import { parseSpreadsheet } from './importer.js';
-import { HEAT_WEEKS, PHONE_QUERY, classifySwipe, inTab, isRevealTap, swipeLeaning, tabFilters } from './phone.js';
+import { HEAT_WEEKS, PHONE_QUERY, canSwipeFrom, classifySwipe, inTab, isRevealTap, swipeLeaning, tabFilters } from './phone.js';
 import { recentStudy, rightShare } from './progress.js';
 import * as store from './store.js';
 import { effectiveTopic, filterLabel, inFilter, readableTopicName, resolveFilter, topicKeyFromFileName, topicLabel } from './topics.js';
@@ -2586,6 +2586,60 @@ function rate(rating) {
   render();
 }
 
+/**
+ * On a phone, swipe the shown answer to rate it: right Good, left Again, up Easy, down Hard.
+ * The card follows the finger; past the threshold a stamp shows the answer and when the card
+ * would come back, and letting go there rates it. Short of it the card springs back.
+ */
+function attachSwipe(card, options, now) {
+  const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const scrollsX = (el) => el.scrollWidth > el.clientWidth + 1 && getComputedStyle(el).overflowX !== 'visible';
+  // A card long enough to scroll keeps up and down for scrolling.
+  const verticalAllowed = card.scrollHeight <= card.clientHeight + 1;
+  card.style.touchAction = verticalAllowed ? 'none' : 'pan-y';
+  const stamp = h('div', { class: 'swipe-stamp', 'aria-hidden': 'true' });
+  card.append(stamp);
+  const marks = [...app.querySelectorAll('.ruler .mark')];
+  let start = null;
+
+  const show = (dx, dy) => {
+    const box = { dx, dy, width: card.clientWidth, height: card.clientHeight, verticalAllowed };
+    const rating = classifySwipe(box);
+    const leaning = swipeLeaning(box);
+    if (!reduce) {
+      card.style.setProperty('--swipe-x', `${dx}px`);
+      card.style.setProperty('--swipe-y', `${verticalAllowed ? dy : 0}px`);
+      card.style.setProperty('--swipe-rot', `${Math.max(-8, Math.min(8, dx / 20))}deg`);
+    }
+    const r = RATINGS.find((x) => x.rating === rating);
+    stamp.className = `swipe-stamp ${r ? `on ${r.kind}` : ''}`;
+    stamp.textContent = r ? `${r.label.toUpperCase()} · ${options[rating].state === State.Review ? '' : '<'}${formatInterval(options[rating].due - now)}` : '';
+    marks.forEach((mark, i) => mark.classList.toggle('lean', RATINGS[i].rating === leaning));
+    return rating;
+  };
+  const reset = () => {
+    start = null;
+    card.classList.remove('swiping');
+    show(0, 0);
+  };
+
+  card.addEventListener('pointerdown', (e) => {
+    if (e.pointerType !== 'touch' || !canSwipeFrom(e.target, { scrollsX, stop: card })) return;
+    start = { x: e.clientX, y: e.clientY };
+    card.classList.add('swiping');
+  });
+  card.addEventListener('pointermove', (e) => {
+    if (start) show(e.clientX - start.x, e.clientY - start.y);
+  });
+  card.addEventListener('pointerup', (e) => {
+    if (!start) return;
+    const rating = show(e.clientX - start.x, e.clientY - start.y);
+    if (rating) rate(rating);
+    else reset();
+  });
+  card.addEventListener('pointercancel', reset);
+}
+
 /** On a phone, the study card's tools in a sheet: edit, listen again, delete. Null when there are none. */
 function cardOptions(card, deck) {
   const editable = store.editable(deck.id);
@@ -2720,6 +2774,7 @@ function renderStudy(deck) {
   // On a phone a tap anywhere on the card shows the answer.
   const flashcard = app.querySelector('.flashcard');
   if (!session.revealed) flashcard.addEventListener('click', (e) => isPhone() && isRevealTap(e.target, flashcard) && reveal());
+  else if (isPhone()) attachSwipe(flashcard, options, now);
 }
 
 // ---- Statistics -----------------------------------------------------------

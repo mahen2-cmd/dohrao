@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { Rating } from '../js/fsrs.js';
-import { classifySwipe, inTab, isRevealTap, tabFilters } from '../js/phone.js';
+import { canSwipeFrom, classifySwipe, inTab, isRevealTap, tabFilters } from '../js/phone.js';
 
 const NO = { groups: [], due: 'any', added: 'any', lapses: 'any', topics: [], sort: 'newest' };
 
@@ -46,4 +46,16 @@ test('a tap on the card reveals, except on something of its own to press or scro
   assert.equal(isRevealTap(plain, card), true);
   assert.equal(isRevealTap(speak, card), false);
   assert.equal(isRevealTap(outside, card), true);
+});
+
+test('a drag that starts inside something that scrolls sideways never swipes', () => {
+  const card = { parentElement: null, id: 'card' };
+  const eq = { parentElement: card, id: 'eq' };
+  const inner = { parentElement: eq };
+  const text = { parentElement: card };
+  const scrollsX = (el) => el.id === 'eq';
+  assert.equal(canSwipeFrom(inner, { scrollsX, stop: card }), false);
+  assert.equal(canSwipeFrom(text, { scrollsX, stop: card }), true);
+  // The card itself scrolling sideways does not count: the walk stops at it.
+  assert.equal(canSwipeFrom(text, { scrollsX: (el) => el === card, stop: card }), true);
 });

@@ -47,3 +47,13 @@ export function isRevealTap(target, card) {
   const hit = target.closest?.(OWN_TARGETS);
   return !(hit && card.contains(hit));
 }
+
+/**
+ * Whether a drag starting on `target` may swipe the card: not when it starts inside something
+ * that scrolls sideways (a wide equation or image), which scrolls instead. `scrollsX(el)` says
+ * whether an element scrolls sideways; the walk up stops at `stop`, the card.
+ */
+export function canSwipeFrom(target, { scrollsX, stop }) {
+  for (let el = target; el && el !== stop; el = el.parentElement) if (scrollsX(el)) return false;
+  return true;
+}
