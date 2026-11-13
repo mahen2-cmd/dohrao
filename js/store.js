@@ -3,6 +3,7 @@
 import * as api from './api.js';
 import { mergeCounts } from './counts.js';
 import { dayKey, streakOf } from './progress.js';
+import { readableTopicName, prefixGroup, resolveFilter, inFilter, effectiveTopic } from './topics.js';
 import { DAY, State, dayStart, newSchedule, nextDayAt, preview, schedule } from './fsrs.js';
 
 // Per-deck settings.
@@ -399,7 +400,7 @@ export const deck = (id) => state.decks.find((d) => d.id === id);
 // A deck given by the admin (`assigned: true`, from its owner `from`) is studied like any other,
 // but its name, languages and cards are the owner's. These deck fields come from the owner, as
 // listed in server/fields.js.
-const SHARED_DECK_KEYS = ['name', 'created', 'ankiId', 'frontLang', 'backLang', 'saveAudio'];
+const SHARED_DECK_KEYS = ['name', 'created', 'ankiId', 'frontLang', 'backLang', 'saveAudio', 'groups', 'topics', 'topicsAt', 'deletedGroupIds', 'deletedTopicIds'];
 
 /** Whether a deck's name and cards can be changed here: not for a deck given by the admin. */
 export const editable = (deckId) => !deck(deckId)?.assigned;
@@ -444,13 +445,17 @@ export function addCard(deckId, front, back, now = Date.now(), { reserved = fals
   return c;
 }
 
-/** Add many cards at once from `[front, back]` pairs. Returns how many were added. */
-export function addCards(deckId, pairs, now = Date.now(), { reserved = false } = {}) {
+/**
+ * Add many cards at once from `[front, back]` pairs. Returns how many were added. With `topicKey`
+ * (from a topic file's name), every card is placed in that topic, which is made if it is new.
+ */
+export function addCards(deckId, pairs, now = Date.now(), { reserved = false, topicKey } = {}) {
   mustEdit(deckId);
+  const place = topicKey ? { topic: ensureTopic(deckId, topicKey, now).id, topicBy: 'file', topicAt: now } : {};
   pairs.forEach(([front, back], i) => {
     // Stagger creation times so the cards keep the order they had in the file.
     const created = now + i;
-    state.cards.push({ id: uid(), deckId, front, back, created, updated: created, ...newSchedule(now), ...reserveFlag(reserved) });
+    state.cards.push({ id: uid(), deckId, front, back, created, updated: created, ...newSchedule(now), ...reserveFlag(reserved), ...place });
   });
   save();
   return pairs.length;
@@ -460,9 +465,9 @@ export function addCards(deckId, pairs, now = Date.now(), { reserved = false } =
  * Add decks read from an Anki file by the server, with every card's schedule as it was.
  * Importing the same file again adds only the cards that are not here yet. With `reserved`,
  * the new cards go on their deck's reserve, in Anki's order; cards already being studied keep
- * their schedule. Returns how many cards were added.
+ * their schedule. Returns how many cards were added; a `touched` Set collects the ids of the decks that got cards.
  */
-export function importAnkiDecks(imported, now = Date.now(), { reserved = false } = {}) {
+export function importAnkiDecks(imported, now = Date.now(), { reserved = false, touched } = {}) {
   const known = ankiCardIds();
   let added = 0;
   for (const { ankiId, name, settings, cards } of imported) {
@@ -478,6 +483,7 @@ export function importAnkiDecks(imported, now = Date.now(), { reserved = false }
       state.cards.push({ ...newSchedule(now), ...c, id: uid(), deckId: d.id, ...reserveFlag(reserved && c.state === State.New) });
     }
     added += fresh.length;
+    touched?.add(d.id);
   }
   if (added) save();
   return added;
@@ -559,9 +565,12 @@ export function reverseReserve(deckId) {
 /**
  * Move up to `n` cards from the front of a deck's reserve in with its new cards, where
  * they wait behind the new cards already there, in the order they had. Returns how many moved.
+ * With a study `filter` (see `resolveFilter`), only reserve cards in it count: the first `n` of them.
  */
-export function pullFromReserve(deckId, n = Infinity, now = Date.now()) {
-  return pullIn(reserveIn(deckId).slice(0, Math.max(0, n)), now);
+export function pullFromReserve(deckId, n = Infinity, now = Date.now(), filter) {
+  const d = deck(deckId);
+  const set = resolveFilter(d, filter);
+  return pullIn(reserveIn(deckId).filter((c) => inFilter(c, set, d)).slice(0, Math.max(0, n)), now);
 }
 
 /**
@@ -667,14 +676,17 @@ const SORTS = {
  *           New and reserve cards have no review coming, so any of these leaves them out.
  *   added   'today', 'week' or 'month': how recently the card was created
  *   lapses  'some' (forgotten at least once) or 'many' (three times or more)
+ *   topics  a study filter (see `resolveFilter`: `g:` groups, `t:` topics, `'unsorted'`); none means all
  *   sort    'newest', 'oldest', 'due' (soonest first), 'front' (A to Z), 'lapses' or
  *           'reserve' (the reserve first, in the order it is pulled in)
  */
-export function findCards(deckId, { text = '', groups = [], due = 'any', added = 'any', lapses = 'any', sort = 'newest' } = {}, now = Date.now()) {
+export function findCards(deckId, { text = '', groups = [], due = 'any', added = 'any', lapses = 'any', topics = [], sort = 'newest' } = {}, now = Date.now()) {
   const q = text.trim().toLowerCase();
   const today = dayStart(now);
   const tomorrow = nextDayAt(now);
   const wanted = new Set(groups);
+  const d = deck(deckId);
+  const topicSet = resolveFilter(d, topics);
   const scheduled = (c) => !c.reserved && c.state !== State.New;
   const dueBefore = { today: tomorrow, week: tomorrow + 6 * DAY, month: tomorrow + 29 * DAY }[due];
   const addedSince = { today, week: today - 6 * DAY, month: today - 29 * DAY }[added];
@@ -686,6 +698,7 @@ export function findCards(deckId, { text = '', groups = [], due = 'any', added =
       (c) =>
         (!q || `${c.front}\n${c.back}`.toLowerCase().includes(q)) &&
         (!wanted.size || wanted.has(cardGroup(c, now))) &&
+        inFilter(c, topicSet, d) &&
         (due !== 'overdue' || (c.state === State.Review && !c.reserved && c.due < today)) &&
         (!dueBefore || (scheduled(c) && c.due < dueBefore)) &&
         (!addedSince || c.created >= addedSince) &&
@@ -701,24 +714,180 @@ export function deleteCard(id) {
   save();
 }
 
+// ---- Topics ---------------------------------------------------------------
+// A deck's cards sit in topics, and topics sit in groups (or on their own). Both are the owner's
+// content, so none of this can change in a given deck. None of it touches a card's schedule.
+
+// Stamp a change to the deck's groups or topics, and save.
+function touchTopics(d, now) {
+  d.topicsAt = now;
+  save();
+}
+
+export function createGroup(deckId, name, now = Date.now()) {
+  mustEdit(deckId);
+  const d = deck(deckId);
+  const group = { id: uid(), name };
+  (d.groups ??= []).push(group);
+  touchTopics(d, now);
+  return group;
+}
+
+export function renameGroup(deckId, groupId, name, now = Date.now()) {
+  mustEdit(deckId);
+  const d = deck(deckId);
+  const group = (d.groups ?? []).find((g) => g.id === groupId);
+  if (!group) return;
+  group.name = name;
+  touchTopics(d, now);
+}
+
+// Remember a deleted group or topic id (the most recent 500), so a sync never brings it back.
+const remember = (list, id) => [...(list ?? []).filter((x) => x !== id), id].slice(-500);
+
+/** Remove a group. Its topics are kept, outside any group. */
+export function deleteGroup(deckId, groupId, now = Date.now()) {
+  mustEdit(deckId);
+  const d = deck(deckId);
+  d.groups = (d.groups ?? []).filter((g) => g.id !== groupId);
+  d.deletedGroupIds = remember(d.deletedGroupIds, groupId);
+  for (const t of d.topics ?? []) if (t.groupId === groupId) t.groupId = null;
+  touchTopics(d, now);
+}
+
+/** The topic with this file key, made (named from the key, in its prefix's group) if it is new. */
+export function ensureTopic(deckId, key, now = Date.now()) {
+  mustEdit(deckId);
+  const d = deck(deckId);
+  const known = (d.topics ?? []).find((t) => t.key === key);
+  if (known) return known;
+  const topic = { id: uid(), key, name: readableTopicName(key), groupId: prefixGroup(d, key), by: 'file' };
+  (d.topics ??= []).push(topic);
+  touchTopics(d, now);
+  return topic;
+}
+
+export function createTopic(deckId, name, groupId = null, now = Date.now()) {
+  mustEdit(deckId);
+  const d = deck(deckId);
+  const topic = { id: uid(), name, groupId: groupId ?? null, by: 'admin' };
+  (d.topics ??= []).push(topic);
+  touchTopics(d, now);
+  return topic;
+}
+
+export function renameTopic(deckId, topicId, name, now = Date.now()) {
+  mustEdit(deckId);
+  const d = deck(deckId);
+  const topic = (d.topics ?? []).find((t) => t.id === topicId);
+  if (!topic) return;
+  topic.name = name;
+  touchTopics(d, now);
+}
+
+/** Put a topic in a group, or on its own with `null`. */
+export function moveTopic(deckId, topicId, groupId, now = Date.now()) {
+  mustEdit(deckId);
+  const d = deck(deckId);
+  const topic = (d.topics ?? []).find((t) => t.id === topicId);
+  if (!topic) return;
+  topic.groupId = groupId ?? null;
+  touchTopics(d, now);
+}
+
+/** Remove a topic. Its cards become unsorted again, and the clearing wins when decks sync. */
+export function deleteTopic(deckId, topicId, now = Date.now()) {
+  mustEdit(deckId);
+  const d = deck(deckId);
+  d.topics = (d.topics ?? []).filter((t) => t.id !== topicId);
+  d.deletedTopicIds = remember(d.deletedTopicIds, topicId);
+  for (const c of cardsIn(deckId)) {
+    if (c.topic !== topicId) continue;
+    delete c.topic;
+    delete c.topicBy;
+    c.topicAt = now;
+  }
+  touchTopics(d, now);
+}
+
+/**
+ * Place cards in a topic by hand, or with `null` take them out of any topic. Either way the
+ * placement is theirs to keep: the sorter leaves it alone. Returns how many cards changed.
+ */
+export function setCardsTopic(ids, topicId, now = Date.now()) {
+  const cards = ids.map(card).filter(Boolean);
+  for (const c of cards) mustEdit(c.deckId);
+  for (const c of cards) {
+    if (topicId) c.topic = topicId;
+    else delete c.topic;
+    c.topicBy = 'manual';
+    c.topicAt = now;
+  }
+  if (cards.length) save();
+  return cards.length;
+}
+
+/**
+ * Take a card out of its topic without marking it as placed by hand (so the sorter may place
+ * it), as when it moves to another deck. The time is stamped so the clearing wins a sync.
+ */
+export function clearCardTopic(id, now = Date.now()) {
+  const c = card(id);
+  if (!c) return;
+  mustEdit(c.deckId);
+  delete c.topic;
+  delete c.topicBy;
+  c.topicAt = now;
+  save();
+}
+
+/** How many cards in a deck have no topic (see `effectiveTopic`) and were not left that way by hand. */
+export function unsortedCount(deckId) {
+  const d = deck(deckId);
+  return cardsIn(deckId).filter((c) => !effectiveTopic(d, c) && c.topicBy !== 'manual').length;
+}
+
+/**
+ * For each topic id (`''` is Unsorted) with cards, what it holds now: `due` learning and review
+ * cards, `fresh` new cards (all of them, not only today's allowance) and `reserve` cards.
+ */
+export function topicCounts(deckId, now = Date.now()) {
+  const d = deck(deckId);
+  const out = new Map();
+  const end = nextDayAt(now);
+  for (const c of cardsIn(deckId)) {
+    const id = effectiveTopic(d, c);
+    const n = out.get(id) ?? { due: 0, fresh: 0, reserve: 0 };
+    if (c.reserved) n.reserve++;
+    else if (c.state === State.New) n.fresh++;
+    else if (c.state === State.Review ? c.due < end : isLearning(c)) n.due++;
+    out.set(id, n);
+  }
+  return out;
+}
+
 // ---- Study queue ----------------------------------------------------------
 
 const isLearning = (c) => c.state === State.Learning || c.state === State.Relearning;
 
-function queue(deckId, now) {
+// The cards to study today. The new-card allowance is the deck's, whatever the `filter` (a study
+// filter, see `resolveFilter`): the filter picks which cards fill it, and none means all of them.
+function queue(deckId, now, filter) {
   const d = deck(deckId);
+  const set = resolveFilter(d, filter);
   const today = dayStart(now);
   const all = cardsIn(deckId).filter((c) => !c.reserved);
   const introduced = all.filter((c) => c.introduced >= today).length;
   const allowance = Math.max(0, d.newPerDay - introduced);
   return {
-    learning: all.filter(isLearning).sort((a, b) => a.due - b.due),
+    allowance,
+    learning: all.filter((c) => isLearning(c) && inFilter(c, set, d)).sort((a, b) => a.due - b.due),
     // Review cards are scheduled in whole days, so anything due today counts.
     review: all
-      .filter((c) => c.state === State.Review && c.due < nextDayAt(now))
+      .filter((c) => c.state === State.Review && c.due < nextDayAt(now) && inFilter(c, set, d))
       .sort((a, b) => a.due - b.due),
     fresh: all
-      .filter((c) => c.state === State.New)
+      .filter((c) => c.state === State.New && inFilter(c, set, d))
       .sort((a, b) => (a.pulled ?? a.created) - (b.pulled ?? b.created))
       .slice(0, allowance),
   };
@@ -727,15 +896,18 @@ function queue(deckId, now) {
 /**
  * How many cards are waiting in a deck today, by kind, and how many it holds in all and on reserve.
  * `tomorrow` counts the same kinds for tomorrow, as `upcoming` does.
+ * With a study `filter`, `new`, `learning`, `review` and `total` count only cards in it; the rest
+ * stay deck-wide. `newLeft` is the deck's new-card allowance left today, which a filter shares.
  */
-export function counts(deckId, now = Date.now()) {
-  const q = queue(deckId, now);
+export function counts(deckId, now = Date.now(), filter) {
+  const q = queue(deckId, now, filter);
   const n = { new: q.fresh.length, learning: q.learning.length, review: q.review.length };
   const all = cardsIn(deckId);
   const { start, ...tomorrow } = upcoming(deckId, 2, now)[1];
   return {
     ...n,
     total: n.new + n.learning + n.review,
+    newLeft: q.allowance,
     tomorrow,
     cards: all.length,
     reserve: all.filter((c) => c.reserved).length,
@@ -778,9 +950,9 @@ export function upcoming(deckId, days = 30, now = Date.now()) {
   return out;
 }
 
-/** The next card to study, or `undefined` when the deck is done for today. */
-export function nextCard(deckId, now = Date.now()) {
-  const q = queue(deckId, now);
+/** The next card to study, or `undefined` when the deck is done for today. `filter` limits it to a study filter. */
+export function nextCard(deckId, now = Date.now(), filter) {
+  const q = queue(deckId, now, filter);
   if (q.learning[0]?.due <= now) return q.learning[0];
   // Otherwise show waiting learning cards early rather than making the user wait.
   return q.review[0] ?? q.fresh[0] ?? q.learning[0];

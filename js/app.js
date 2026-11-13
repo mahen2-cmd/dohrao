@@ -4,6 +4,7 @@ import { DAY, MINUTE, Rating, State, dayStart } from './fsrs.js';
 import { parseSpreadsheet } from './importer.js';
 import { recentStudy, rightShare } from './progress.js';
 import * as store from './store.js';
+import { effectiveTopic, filterLabel, inFilter, readableTopicName, resolveFilter, topicKeyFromFileName, topicLabel } from './topics.js';
 
 const app = document.getElementById('app');
 const toasts = document.getElementById('toasts');
@@ -17,7 +18,7 @@ let offline = false;
 let query = '';
 
 // Filters on a deck's card list, reset whenever a different deck is opened.
-const NO_FILTERS = { groups: [], due: 'any', added: 'any', lapses: 'any', sort: 'newest' };
+const NO_FILTERS = { groups: [], due: 'any', added: 'any', lapses: 'any', topics: [], sort: 'newest' };
 let filters = { ...NO_FILTERS };
 let filtersDeck = null;
 // Whether the filter and sort selects are open on a phone, where they start folded away.
@@ -77,6 +78,7 @@ const ICONS = {
   decks: '<rect x="4" y="8" width="16" height="12" rx="2"/><path d="M7 5h10M9 2.5h6"/>',
   up: '<path d="M12 19V5M6 11l6-6 6 6"/>',
   down: '<path d="M12 5v14M6 13l6 6 6-6"/>',
+  chevron: '<path d="M6 9l6 6 6-6"/>',
   swap: '<path d="M7 4L3 8l4 4M3 8h14M17 12l4 4-4 4M21 16H7"/>',
   grip: '<path d="M9 6h.01M15 6h.01M9 12h.01M15 12h.01M9 18h.01M15 18h.01"/>',
   sigma: '<path d="M18 5H6l6 7-6 7h12"/>',
@@ -702,6 +704,17 @@ function openCardDialog({ card, deckId }) {
   const reserved = h('input', { type: 'checkbox', checked: Boolean(card?.reserved) });
   const canReserve = !card || card.state === State.New;
   const note = h('span', { class: 'note' }, 'Ctrl + Enter to save');
+  // Topics belong to a deck, so the choices follow the deck chosen.
+  const currentTopic = (deck) => (card && deck && card.deckId === deck.id ? effectiveTopic(deck, card) : '');
+  const topicSelect = h('select', { 'aria-label': 'Topic' });
+  const topicField = h('label', { class: 'field' }, h('span', null, 'Topic'), topicSelect);
+  const fillTopics = () => {
+    const d = store.deck(deckSelect.value);
+    topicSelect.replaceChildren(...topicChoices(d, currentTopic(d)).flat(Infinity).filter(Boolean));
+    topicField.hidden = !(d?.topics ?? []).length;
+  };
+  deckSelect.addEventListener('change', fillTopics);
+  fillTopics();
 
   const submitOnCtrlEnter = (e) => {
     if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
@@ -720,14 +733,24 @@ function openCardDialog({ card, deckId }) {
         const values = { front: front.value.trim(), back: back.value.trim() };
         if (!values.front) return front.focus();
         if (!values.back) return back.focus();
+        const topic = topicField.hidden ? '' : topicSelect.value;
         if (card) {
+          const wasIn = currentTopic(store.deck(deckSelect.value));
+          const moved = deckSelect.value !== card.deckId;
+          const chosen = topic !== wasIn || (moved && topic);
           store.updateCard(card.id, { ...values, deckId: deckSelect.value, reserved: (canReserve && reserved.checked) || undefined });
+          if (chosen) store.setCardsTopic([card.id], topic || null, Date.now());
+          // A topic from the old deck means nothing in the new one.
+          else if (moved && card.topic) store.clearCardTopic(card.id, Date.now());
           prepareCardSpeech(store.card(card.id));
           dialog.close();
           return;
         }
         // Stay open so several cards can be added in a row.
-        prepareCardSpeech(store.addCard(deckSelect.value, values.front, values.back, Date.now(), { reserved: reserved.checked }));
+        const added = store.addCard(deckSelect.value, values.front, values.back, Date.now(), { reserved: reserved.checked });
+        if (topic) store.setCardsTopic([added.id], topic, Date.now());
+        else requestSort(deckSelect.value);
+        prepareCardSpeech(added);
         front.value = back.value = '';
         for (const box of [front, back]) box.dispatchEvent(new Event('input'));
         note.textContent = reserved.checked ? 'Card added to the reserve' : 'Card added';
@@ -740,6 +763,7 @@ function openCardDialog({ card, deckId }) {
     sideEditor('Back', back),
     h('small', { class: 'field-note', style: 'margin: -6px 0 14px' }, 'Paste or drop images into a side. Press Maths to write an equation, or click one in the preview to change it. Maths can also be typed as LaTeX: \\( x^2 \\) within a line, \\[ x^2 \\] on its own line.'),
     h('label', { class: 'field' }, h('span', null, 'Deck'), deckSelect),
+    topicField,
     canReserve && h('label', { class: 'check' }, reserved, 'Keep on reserve, out of study until pulled in'),
     h(
       'div',
@@ -882,6 +906,218 @@ async function storeSheetImages(rows, images) {
   return { rows: cells, skipped: [...stored.values()].filter((name) => !name).length };
 }
 
+// ---- Sorting into topics (admin, own decks) -------------------------------
+
+// Decks being sorted now; one poll loop each. Sorting runs in the background, and studying carries on.
+const sorting = new Set();
+const proposing = new Set();
+const SORT_LIMIT = 15 * 60 * 1000;
+let sortingOffShown = false;
+const newId = () => globalThis.crypto?.randomUUID?.() ?? Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
+
+const sortingOff = () => {
+  if (sortingOffShown) return;
+  sortingOffShown = true;
+  toast('Sorting is off: no API key on the server');
+};
+
+/** Only the admin's own decks are ever sorted. */
+const canSort = (deckId) => account?.role === 'admin' && !!store.deck(deckId) && store.editable(deckId);
+
+/**
+ * Sort a deck's unsorted cards into its topics, and wait for it to finish. Quiet unless it fails.
+ * A deck with no topics is never sorted this way; it gets a proposal first. With `started`,
+ * the server has already begun (after Approve) and only the waiting is done here.
+ */
+async function requestSort(deckId, { started = false } = {}) {
+  if (!canSort(deckId) || sorting.has(deckId)) return;
+  if (!started && !(store.deck(deckId).topics ?? []).length) return;
+  sorting.add(deckId);
+  try {
+    try {
+      await store.flush();
+    } catch {
+      toast('Could not save before sorting. Try again in a moment.');
+      return;
+    }
+    const before = store.unsortedCount(deckId);
+    if (!started) {
+      try {
+        await api.admin.sort(deckId);
+      } catch (error) {
+        if (error.message === 'no-sorter') sortingOff();
+        else toast('Could not start sorting. Try again in a moment.');
+        return;
+      }
+    }
+    render();
+    let failures = 0;
+    const giveUp = Date.now() + SORT_LIMIT;
+    for (;;) {
+      await new Promise((resolve) => setTimeout(resolve, 5000));
+      // Signed out, or the deck is gone: nothing left to wait for.
+      if (!canSort(deckId)) return;
+      if (Date.now() > giveUp) {
+        toast('Sorting is taking a long time. Check back later.');
+        return;
+      }
+      try {
+        if (!(await api.admin.sortStatus(deckId)).running) break;
+        failures = 0;
+      } catch {
+        if (++failures >= 3) {
+          toast('Lost track of the sort. Reload to see where it got to.');
+          return;
+        }
+      }
+    }
+    try {
+      await store.refresh();
+    } catch {
+      toast('Sorted, but could not reload the deck. Reload the page.');
+      return;
+    }
+    const done = before - store.unsortedCount(deckId);
+    toast(done > 0 ? `Sorted ${plural(done, 'card')}` : 'Sorting finished');
+  } catch {
+    toast('Sorting stopped. Try again in a moment.');
+  } finally {
+    sorting.delete(deckId);
+    render();
+  }
+}
+
+/** The deck's saved proposal for groups and topics, or a new one. The AI call can take a while. */
+async function startProposal(deck) {
+  if (proposing.has(deck.id)) return;
+  proposing.add(deck.id);
+  render();
+  try {
+    await store.flush();
+    let proposal;
+    try {
+      proposal = await api.admin.proposal(deck.id);
+    } catch (error) {
+      if (error.message !== 'not-found') throw error;
+      proposal = await api.admin.propose(deck.id);
+    }
+    openProposalDialog(deck, proposal);
+  } catch (error) {
+    if (error.message === 'no-sorter') sortingOff();
+    else toast('Could not make a proposal. Try again in a moment.');
+  } finally {
+    proposing.delete(deck.id);
+    render();
+  }
+}
+
+/** Review a proposed set of groups and topics, change it, and approve it. No card moves before Approve. */
+function openProposalDialog(deck, proposal) {
+  const groups = proposal.groups.map((g) => ({ ...g }));
+  const topics = proposal.topics.map((t) => ({ ...t, groupId: groups.some((g) => g.id === t.groupId) ? t.groupId : null }));
+  const box = h('div', { class: 'topics-edit' });
+  const note = h('span', { class: 'note' });
+  const nameInput = (item, label) =>
+    h('input', { type: 'text', value: item.name, maxlength: 60, 'aria-label': label, oninput: (e) => (item.name = e.target.value) });
+  const topicRow = (t) =>
+    h(
+      'div',
+      { class: 'topic-row' },
+      nameInput(t, 'Topic name'),
+      h(
+        'select',
+        { 'aria-label': 'Group of this topic', onchange: (e) => ((t.groupId = e.target.value || null), draw()) },
+        h('option', { value: '', selected: !t.groupId }, 'No group'),
+        groups.map((g) => h('option', { value: g.id, selected: g.id === t.groupId }, g.name || 'Unnamed group')),
+      ),
+      iconButton('trash', 'Delete topic', () => (topics.splice(topics.indexOf(t), 1), draw()), 'danger'),
+    );
+  function draw() {
+    box.replaceChildren(
+      ...groups.map((g) =>
+        h(
+          'div',
+          { class: 'topic-group' },
+          h(
+            'div',
+            { class: 'topic-group-head' },
+            nameInput(g, 'Group name'),
+            iconButton(
+              'trash',
+              'Delete group, its topics stay without a group',
+              () => {
+                groups.splice(groups.indexOf(g), 1);
+                topics.forEach((t) => t.groupId === g.id && (t.groupId = null));
+                draw();
+              },
+              'danger',
+            ),
+          ),
+          topics.filter((t) => t.groupId === g.id).map(topicRow),
+        ),
+      ),
+      topics.some((t) => !t.groupId) && h('div', { class: 'topic-group' }, h('div', { class: 'topic-group-head' }, h('strong', null, 'No group')), topics.filter((t) => !t.groupId).map(topicRow)),
+      h('button', { class: 'btn', type: 'button', onclick: () => (groups.push({ id: newId(), name: 'New group' }), draw()) }, icon('plus'), 'Add group'),
+    );
+  }
+  draw();
+  const approve = h('button', { class: 'btn primary', type: 'submit' }, 'Approve and sort');
+  const dialog = modal(
+    `Topics for ${deck.name}`,
+    h(
+      'form',
+      {
+        onsubmit: async (e) => {
+          e.preventDefault();
+          for (const item of [...groups, ...topics]) item.name = item.name.trim();
+          if (!topics.length) return void (note.textContent = 'Keep at least one topic.');
+          if ([...groups, ...topics].some((item) => !item.name || item.name.length > 60)) return void (note.textContent = 'Every name needs 1 to 60 characters.');
+          approve.disabled = true;
+          try {
+            await api.admin.approve(deck.id, { groups: groups.map(({ id, name }) => ({ id, name })), topics: topics.map(({ id, name, groupId }) => ({ id, name, groupId })) });
+          } catch (error) {
+            approve.disabled = false;
+            if (error.message === 'no-sorter') sortingOff();
+            else note.textContent = 'Could not approve. Try again in a moment.';
+            return;
+          }
+          dialog.close();
+          toast('Sorting started. You can keep studying.');
+          requestSort(deck.id, { started: true });
+        },
+      },
+      h('p', { class: 'message', style: 'margin-bottom: 12px' }, 'This is how Dohrao would sort the deck. Nothing moves until you approve. Rename, move or delete anything first.'),
+      box,
+      h('div', { class: 'modal-foot' }, note, h('button', { class: 'btn', type: 'button', onclick: () => dialog.close() }, 'Cancel'), approve),
+    ),
+  );
+}
+
+/** How many of a deck's topics sit outside any group, counted only when the deck has groups. */
+function looseTopics(deck) {
+  const groups = deck?.groups ?? [];
+  if (!groups.length) return 0;
+  return (deck.topics ?? []).filter((t) => !groups.some((g) => g.id === t.groupId)).length;
+}
+
+/** On a deck page: the unsorted count with Sort now, or the way in to a first sort. */
+function sortBar(deck) {
+  if (!canSort(deck.id)) return null;
+  const hasTopics = (deck.topics ?? []).length > 0;
+  const unsorted = store.unsortedCount(deck.id);
+  const loose = looseTopics(deck);
+  if (sorting.has(deck.id)) return h('p', { class: 'message', role: 'status' }, 'Sorting cards into topics. You can keep studying.');
+  if (proposing.has(deck.id)) return h('p', { class: 'message', role: 'status' }, 'Reading the cards to suggest topics. This can take a minute.');
+  if (hasTopics && (unsorted > 0 || loose > 0)) {
+    const what = unsorted > 0 ? `${unsorted.toLocaleString()} unsorted` : `${plural(loose, 'topic')} without a group`;
+    return h('p', { class: 'message' }, `${what} · `, h('button', { class: 'btn', type: 'button', onclick: () => requestSort(deck.id) }, 'Sort now'));
+  }
+  if (!hasTopics && store.cardsIn(deck.id).length > 0) {
+    return h('p', { class: 'message' }, h('button', { class: 'btn', type: 'button', onclick: () => startProposal(deck) }, 'Sort this deck into topics'));
+  }
+  return null;
+}
+
 function pickImportFile(deck, toReserve = false) {
   const input = h('input', {
     type: 'file',
@@ -926,6 +1162,8 @@ function openImportDialog(deck, fileName, rows, toReserve = false) {
   const header = h('input', { type: 'checkbox', onchange: () => update() });
   const skipExisting = h('input', { type: 'checkbox', checked: true, onchange: () => update() });
   const reserved = h('input', { type: 'checkbox', checked: toReserve });
+  // A file named like a topic file puts all its cards in that topic.
+  const topicKey = topicKeyFromFileName(fileName);
   const preview = h('div', { class: 'import-preview' });
   const summary = h('p', { class: 'import-summary' });
   const submit = h('button', { class: 'btn primary', type: 'submit' });
@@ -970,8 +1208,16 @@ function openImportDialog(deck, fileName, rows, toReserve = false) {
         e.preventDefault();
         const { cards } = plan();
         if (!cards.length) return;
-        store.addCards(deck.id, cards, Date.now(), { reserved: reserved.checked });
+        const hadTopic = !!topicKey && (store.deck(deck.id).topics ?? []).some((t) => t.key === topicKey);
+        store.addCards(deck.id, cards, Date.now(), { reserved: reserved.checked, ...(topicKey && { topicKey }) });
         dialog.close();
+        if (!topicKey) requestSort(deck.id);
+        else if (!hadTopic) {
+          // A new topic from a file that fits no group yet: the sorter puts it in one.
+          const after = store.deck(deck.id);
+          const made = (after.topics ?? []).find((t) => t.key === topicKey);
+          if (made && made.groupId == null && (after.groups ?? []).length) requestSort(deck.id);
+        }
         toast(`Imported ${plural(cards.length, 'card')} into ${reserved.checked ? `the reserve of ${deck.name}` : deck.name}`);
       },
     },
@@ -982,6 +1228,7 @@ function openImportDialog(deck, fileName, rows, toReserve = false) {
       h('label', { class: 'field' }, h('span', null, 'Front'), front),
       h('label', { class: 'field' }, h('span', null, 'Back'), back),
     ),
+    topicKey && h('p', { class: 'message', style: 'margin-bottom: 12px' }, `Cards go into the topic ${readableTopicName(topicKey)}`),
     h('label', { class: 'check' }, header, 'The first row is a header, skip it'),
     h('label', { class: 'check' }, skipExisting, 'Skip cards already in this deck'),
     h('label', { class: 'check' }, reserved, 'Put these cards on reserve, to pull in when you want them'),
@@ -1059,8 +1306,10 @@ function openAnkiDialog(fileName, { decks, suspended, blank, sound, missingImage
     {
       onsubmit: (e) => {
         e.preventDefault();
-        const added = store.importAnkiDecks(incoming, Date.now(), { reserved: reserved.checked });
+        const touched = new Set();
+        const added = store.importAnkiDecks(incoming, Date.now(), { reserved: reserved.checked, touched });
         dialog.close();
+        for (const id of touched) requestSort(id);
         const onReserve = !reserved.checked ? '' : fresh === added ? ' onto the reserve' : `, ${fresh.toLocaleString()} of them on reserve`;
         toast(`Imported ${plural(added, 'card')} from Anki${onReserve}`);
       },
@@ -1332,10 +1581,307 @@ function renderHome() {
   );
 }
 
+/** A deck's topic counts; a card whose topic no longer exists counts as Unsorted (see `effectiveTopic`). */
+const topicTotals = (deck, now) => store.topicCounts(deck.id, now);
+
+const countsText = (n) => [n.due && `${n.due.toLocaleString()} due`, n.fresh && `${n.fresh.toLocaleString()} new`].filter(Boolean).join(', ') || 'Nothing due';
+
+/** Choose which topics to study. The choice is the user's own, so it is kept even on a deck the admin gave. */
+function openTopicPicker(deck) {
+  const now = Date.now();
+  const totals = topicTotals(deck, now);
+  const groups = deck.groups ?? [];
+  const topics = deck.topics ?? [];
+  const live = new Set(['unsorted', ...groups.map((g) => `g:${g.id}`), ...topics.map((t) => `t:${t.id}`)]);
+  const picked = new Set((deck.studyFilter ?? []).filter((e) => live.has(e)));
+  const sum = (ids) =>
+    ids.reduce(
+      (a, id) => {
+        const n = totals.get(id);
+        return n ? { due: a.due + n.due, fresh: a.fresh + n.fresh } : a;
+      },
+      { due: 0, fresh: 0 },
+    );
+
+  const boxes = new Map();
+  const row = (entry, label, n, { nested = false } = {}) => {
+    const box = h('input', {
+      type: 'checkbox',
+      checked: picked.has(entry),
+      onchange: () => {
+        if (box.checked) picked.add(entry);
+        else picked.delete(entry);
+        sync();
+      },
+    });
+    boxes.set(entry, box);
+    return h('label', { class: `pick-row${nested ? ' nested' : ''}` }, box, h('span', { class: 'pick-name' }, label), h('span', { class: 'pick-count' }, countsText(n)));
+  };
+  const everything = h('input', {
+    type: 'checkbox',
+    onchange: () => {
+      picked.clear();
+      sync();
+    },
+  });
+  const sync = () => {
+    everything.checked = picked.size === 0;
+    for (const [entry, box] of boxes) {
+      box.checked = picked.has(entry);
+      // A ticked group already holds all its topics.
+      if (entry.startsWith('t:')) {
+        const t = topics.find((x) => `t:${x.id}` === entry);
+        const inGroup = Boolean(t.groupId) && picked.has(`g:${t.groupId}`);
+        box.disabled = inGroup;
+        if (inGroup) box.checked = true;
+      }
+    }
+  };
+
+  const items = [h('label', { class: 'pick-row' }, everything, h('span', { class: 'pick-name' }, 'Everything'), h('span', { class: 'pick-count' }, countsText(sum([...totals.keys()]))))];
+  for (const g of groups) {
+    const own = topics.filter((t) => t.groupId === g.id);
+    const inner = h('div', { class: 'pick-topics', hidden: true }, own.map((t) => row(`t:${t.id}`, t.name, sum([t.id]), { nested: true })));
+    const toggle = h('button', {
+      class: 'icon-btn pick-toggle',
+      type: 'button',
+      'aria-expanded': 'false',
+      'aria-label': `Show the topics in ${g.name}`,
+      onclick: () => {
+        inner.hidden = !inner.hidden;
+        toggle.setAttribute('aria-expanded', String(!inner.hidden));
+      },
+    }, icon('chevron'));
+    items.push(h('div', { class: 'pick-group' }, h('div', { class: 'pick-head' }, row(`g:${g.id}`, g.name, sum(own.map((t) => t.id))), own.length > 0 && toggle), inner));
+  }
+  for (const t of topics.filter((x) => !groups.some((g) => g.id === x.groupId))) items.push(row(`t:${t.id}`, t.name, sum([t.id])));
+  if (totals.has('')) items.push(row('unsorted', 'Unsorted', sum([''])));
+  sync();
+
+  const { newLeft } = store.counts(deck.id, now);
+  const dialog = modal(
+    'Study which topics',
+    [
+      h('p', { class: 'pick-note' }, `${plural(newLeft, 'new card')} left today for this deck.`),
+      h('div', { class: 'pick-list' }, items),
+      h(
+        'div',
+        { class: 'pick-actions' },
+        h('button', { class: 'btn', type: 'button', onclick: () => dialog.close() }, 'Cancel'),
+        h(
+          'button',
+          {
+            class: 'btn primary',
+            type: 'button',
+            onclick: () => {
+              store.updateDeck(deck.id, { studyFilter: [...picked] });
+              dialog.close();
+              render();
+            },
+          },
+          'Save',
+        ),
+      ),
+    ],
+    { narrow: true },
+  );
+}
+
+/**
+ * The topic choices for a select: everything, each group, each topic, then Unsorted. Values are
+ * filter entries. With `totals` each shows how many cards are on reserve; without, just the name.
+ */
+function topicOptions(deck, totals, everything = 'Everything') {
+  const groups = deck.groups ?? [];
+  const topics = deck.topics ?? [];
+  const reserveOf = (ids) => ids.reduce((a, id) => a + (totals.get(id)?.reserve ?? 0), 0);
+  const opt = (value, label, ids) => h('option', { value }, totals ? `${label} (${reserveOf(ids).toLocaleString()})` : label);
+  const out = [opt('', everything, totals ? [...totals.keys()] : [])];
+  for (const g of groups) out.push(opt(`g:${g.id}`, g.name, topics.filter((t) => t.groupId === g.id).map((t) => t.id)));
+  for (const t of topics) {
+    const group = groups.find((g) => g.id === t.groupId);
+    out.push(opt(`t:${t.id}`, group ? `${group.name}: ${t.name}` : t.name, [t.id]));
+  }
+  if (!totals || totals.has('')) out.push(opt('unsorted', 'Unsorted', ['']));
+  return out;
+}
+
+/** Options to put one card in one topic: Unsorted, then each topic (grouped). The value is a topic id, or '' for Unsorted. */
+function topicChoices(deck, value) {
+  const groups = deck?.groups ?? [];
+  const topics = deck?.topics ?? [];
+  const opt = (t) => h('option', { value: t.id, selected: t.id === value }, t.name);
+  return [
+    h('option', { value: '', selected: !value }, 'Unsorted'),
+    groups.map((g) => {
+      const own = topics.filter((t) => t.groupId === g.id);
+      return own.length > 0 && h('optgroup', { label: g.name }, own.map(opt));
+    }),
+    topics.filter((t) => !groups.some((g) => g.id === t.groupId)).map(opt),
+  ];
+}
+
+/** The topic a card sits in, if that topic still exists. */
+
+/** Move ticked cards into a topic, or out of any topic. */
+function openMoveToTopic(deck, ids) {
+  const select = h('select', { 'aria-label': 'Topic' }, topicChoices(deck, ''));
+  const dialog = modal(
+    `Move ${plural(ids.length, 'card')} to a topic`,
+    h(
+      'form',
+      {
+        onsubmit: (e) => {
+          e.preventDefault();
+          const moved = store.setCardsTopic(ids, select.value || null, Date.now());
+          const where = select.value ? `“${select.selectedOptions[0].textContent}”` : 'Unsorted';
+          dialog.close();
+          toast(`${plural(moved, 'card')} moved to ${where}`);
+          render();
+        },
+      },
+      h('label', { class: 'field' }, h('span', null, 'Topic'), select),
+      h('div', { class: 'modal-foot' }, h('button', { class: 'btn', type: 'button', onclick: () => dialog.close() }, 'Cancel'), h('button', { class: 'btn primary', type: 'submit' }, 'Move')),
+    ),
+    { narrow: true },
+  );
+  select.focus();
+}
+
+/** Manage a deck's groups and topics. A deck given by the admin is shown but not changed. */
+function openTopicsDialog(deck) {
+  const editable = store.editable(deck.id);
+  const box = h('div', { class: 'topics-edit' });
+  const cardsIn = (topicId) => store.cardsIn(deck.id).filter((c) => c.topic === topicId).length;
+  const nameInput = (value, label, save) => {
+    const input = h('input', {
+      type: 'text',
+      value,
+      required: true,
+      maxlength: 80,
+      'aria-label': label,
+      onchange: () => {
+        const name = input.value.trim();
+        if (!name) input.value = value;
+        else {
+          value = name;
+          input.value = name;
+          save(name);
+        }
+      },
+    });
+    return input;
+  };
+  const groupSelect = (value, label, onchange) => {
+    const select = h(
+      'select',
+      { 'aria-label': label, onchange: () => onchange(select.value || null) },
+      h('option', { value: '', selected: !value }, 'No group'),
+      (deck.groups ?? []).map((g) => h('option', { value: g.id, selected: g.id === value }, g.name)),
+    );
+    return select;
+  };
+  const removeTopic = async (t) => {
+    const n = cardsIn(t.id);
+    const ok = await confirmDialog({
+      title: `Delete “${t.name}”?`,
+      message: n ? `${plural(n, 'card')} in this topic will become Unsorted.` : 'No cards are in this topic.',
+      confirmLabel: 'Delete topic',
+    });
+    if (!ok) return;
+    store.deleteTopic(deck.id, t.id, Date.now());
+    draw();
+  };
+  const removeGroup = async (g) => {
+    const n = (deck.topics ?? []).filter((t) => t.groupId === g.id).length;
+    const ok = await confirmDialog({
+      title: `Delete the group “${g.name}”?`,
+      message: n ? `Its ${plural(n, 'topic')} stay, with no group. No cards change.` : 'The group is empty.',
+      confirmLabel: 'Delete group',
+    });
+    if (!ok) return;
+    store.deleteGroup(deck.id, g.id, Date.now());
+    draw();
+  };
+  const topicRow = (t) => {
+    const n = cardsIn(t.id);
+    if (!editable) return h('div', { class: 'topic-row' }, h('span', { class: 'topic-name' }, t.name), h('span', { class: 'pick-count' }, plural(n, 'card')));
+    return h(
+      'div',
+      { class: 'topic-row' },
+      nameInput(t.name, `Name of the topic ${t.name}`, (name) => store.renameTopic(deck.id, t.id, name, Date.now())),
+      (deck.groups ?? []).length > 0 &&
+        groupSelect(t.groupId, `Group of ${t.name}`, (groupId) => {
+          store.moveTopic(deck.id, t.id, groupId, Date.now());
+          draw();
+        }),
+      h('span', { class: 'pick-count' }, plural(n, 'card')),
+      iconButton('trash', `Delete the topic ${t.name}`, () => removeTopic(t), 'danger'),
+    );
+  };
+  const add = (placeholder, label, onadd, withGroup) => {
+    const input = h('input', { type: 'text', required: true, maxlength: 80, placeholder, 'aria-label': label });
+    const group = withGroup && (deck.groups ?? []).length > 0 ? groupSelect(null, 'Group for the new topic', () => {}) : null;
+    return h(
+      'form',
+      {
+        class: 'topic-row topic-add',
+        onsubmit: (e) => {
+          e.preventDefault();
+          const name = input.value.trim();
+          if (!name) return input.focus();
+          onadd(name, group?.value || null);
+          draw();
+        },
+      },
+      input,
+      group,
+      h('button', { class: 'btn', type: 'submit' }, icon('plus'), 'Add'),
+    );
+  };
+
+  const draw = () => {
+    deck = store.deck(deck.id);
+    const groups = deck.groups ?? [];
+    const topics = deck.topics ?? [];
+    const loose = topics.filter((t) => !groups.some((g) => g.id === t.groupId));
+    const unsorted = store.cardsIn(deck.id).filter((c) => !effectiveTopic(deck, c)).length;
+    box.replaceChildren(
+      !editable && h('p', { class: 'pick-note' }, `${deck.from ? `${deck.from} sets` : 'The owner sets'} this deck's topics. You can see them here, but not change them.`),
+      !topics.length && !groups.length && h('p', { class: 'pick-note' }, editable ? 'This deck has no topics yet. Add one below, then move cards into it.' : 'This deck has no topics.'),
+      groups.map((g) =>
+        h(
+          'section',
+          { class: 'topic-group' },
+          h(
+            'div',
+            { class: 'topic-group-head' },
+            editable ? nameInput(g.name, `Name of the group ${g.name}`, (name) => store.renameGroup(deck.id, g.id, name, Date.now())) : h('b', null, g.name),
+            editable && iconButton('trash', `Delete the group ${g.name}`, () => removeGroup(g), 'danger'),
+          ),
+          topics.filter((t) => t.groupId === g.id).map(topicRow),
+        ),
+      ),
+      loose.length > 0 && h('section', { class: 'topic-group' }, groups.length > 0 && h('div', { class: 'topic-group-head' }, h('b', null, 'No group')), loose.map(topicRow)),
+      topics.length > 0 && h('p', { class: 'pick-note' }, `${plural(unsorted, 'card')} Unsorted.`),
+      editable && [
+        h('h3', { class: 'topics-sub' }, 'Add a topic'),
+        add('Topic name', 'Name of the new topic', (name, groupId) => store.createTopic(deck.id, name, groupId, Date.now()), true),
+        h('h3', { class: 'topics-sub' }, 'Add a group'),
+        add('Group name', 'Name of the new group', (name) => store.createGroup(deck.id, name, Date.now()), false),
+      ],
+    );
+  };
+  draw();
+  const dialog = modal('Topics', [box, h('div', { class: 'pick-actions' }, h('button', { class: 'btn primary', type: 'button', onclick: () => dialog.close() }, 'Done'))], { onclose: render });
+}
+
 /** A deck's reserve: how many cards are waiting, and the controls to pull some in or rearrange them. */
 function reserveBar(deck, n) {
+  const hasTopics = (deck.topics ?? []).length > 0;
+  const topic = hasTopics && h('select', { class: 'reserve-topic', 'aria-label': 'Which topic to pull in from' }, topicOptions(deck, topicTotals(deck, Date.now())));
   const pull = (count) => {
-    const pulled = store.pullFromReserve(deck.id, count);
+    const pulled = store.pullFromReserve(deck.id, count, Date.now(), topic && topic.value ? [topic.value] : undefined);
     toast(`${plural(pulled, 'card')} pulled in as new ${pulled === 1 ? 'card' : 'cards'}`);
     render();
   };
@@ -1347,7 +1893,7 @@ function reserveBar(deck, n) {
   };
   // Shown as buttons on a wide screen, and folded into a menu on a phone.
   const more = [
-    n > 1 && ['Pull all', `Pull all ${n.toLocaleString()}`, null, () => pull(n), null],
+    n > 1 && ['Pull all', hasTopics ? 'Pull all' : `Pull all ${n.toLocaleString()}`, null, () => pull(n), null],
     n > 1 && ['Choose cards', 'Choose cards', 'check', reorder, 'List the reserve in the order it is pulled in, to tick cards to pull in or to rearrange it'],
     store.editable(deck.id) && ['Import to reserve', 'Import to reserve', 'upload', () => pickImportFile(deck, true), 'Import cards from a CSV or Excel file straight into the reserve'],
   ].filter(Boolean);
@@ -1367,7 +1913,7 @@ function reserveBar(deck, n) {
       h('b', null, n ? `${plural(n, 'card')} on reserve` : 'Nothing on reserve'),
       h('span', null, n ? 'Kept out of study until you pull them in, the first in line first.' : 'Cards on reserve are kept out of study until you pull them in.'),
     ),
-    n > 0 && [amount, h('button', { class: 'btn primary', type: 'submit' }, 'Pull in')],
+    n > 0 && [topic, amount, h('button', { class: 'btn primary', type: 'submit' }, 'Pull in')],
     more.map(([, label, glyph, onclick, title]) => h('button', { class: 'btn reserve-wide', type: 'button', title, onclick }, glyph && icon(glyph), label)),
     more.length > 0 && h('div', { class: 'reserve-narrow' }, menu('More for the reserve', more.map(([, label, glyph, onclick]) => h('button', { type: 'button', onclick }, icon(glyph ?? 'down'), label)))),
   );
@@ -1377,13 +1923,16 @@ function renderDeck(deck) {
   const now = Date.now();
   // A deck given by the admin is studied here, but its cards are changed only by its owner.
   const editable = store.editable(deck.id);
-  const c = store.counts(deck.id, now);
+  const c = store.counts(deck.id, now, deck.studyFilter);
   const cards = store.cardsIn(deck.id);
   if (filtersDeck !== deck.id) {
     filters = { ...NO_FILTERS };
     filtersDeck = deck.id;
     selected = new Set();
   }
+  const hasTopics = (deck.topics ?? []).length > 0;
+  // A topic filter that no longer exists (deleted, or the deck changed) is dropped.
+  if (filters.topics.length && !topicOptions(deck, null).some((o) => o.value === filters.topics[0])) filters = { ...filters, topics: [] };
   const filtering = Object.keys(NO_FILTERS).some((key) => key !== 'sort' && String(filters[key]) !== String(NO_FILTERS[key]));
   const setFilters = (patch) => {
     filters = { ...filters, ...patch };
@@ -1438,6 +1987,15 @@ function renderDeck(deck) {
         );
         return h('label', { class: key !== 'sort' && filters[key] !== NO_FILTERS[key] ? 'on' : '' }, h('span', null, label), select);
       }),
+      hasTopics &&
+        (() => {
+          const select = h(
+            'select',
+            { onchange: () => setFilters({ topics: select.value ? [select.value] : [] }) },
+            topicOptions(deck, null, 'All topics').map((o) => (o.value === (filters.topics[0] ?? '') ? Object.assign(o, { selected: true }) : o)),
+          );
+          return h('label', { class: filters.topics.length ? 'on' : '' }, h('span', null, 'Topic'), select);
+        })(),
       filtering && h('button', { class: 'btn ghost', type: 'button', onclick: () => setFilters({ ...NO_FILTERS, sort: filters.sort }) }, icon('close'), 'Clear filters'),
     ),
   ];
@@ -1546,6 +2104,8 @@ function renderDeck(deck) {
                 'Back to reserve',
               ),
             editable && [
+              hasTopics &&
+                h('button', { class: 'btn', type: 'button', title: 'Put the ticked cards in a topic, or take them out of one', onclick: () => openMoveToTopic(deck, [...selected]) }, 'Move to topic…'),
               h(
                 'button',
                 { class: 'btn', type: 'button', title: 'Add a copy of each ticked card with its front and back swapped, on the reserve', onclick: () => addReversedCards([...selected]) },
@@ -1572,7 +2132,7 @@ function renderDeck(deck) {
           const row = h(
             'div',
             {
-              class: `card-row ${selected.has(card.id) ? 'selected' : ''} ${editable ? '' : 'read-only'}`,
+              class: `card-row ${selected.has(card.id) ? 'selected' : ''} ${editable ? '' : 'read-only'} ${hasTopics ? 'has-topic' : ''}`,
               onclick: editable && (() => openCardDialog({ card })),
               ...(sortable && {
                 draggable: true,
@@ -1606,6 +2166,7 @@ function renderDeck(deck) {
             ),
             h('div', { class: 'text' }, rich(card.front)),
             h('div', { class: 'text back-text' }, rich(card.back)),
+            hasTopics && h('div', { class: 'topic-name' }, topicLabel(deck, card)),
             statusMark(status, status.label, 'due'),
             editable &&
               h(
@@ -1689,13 +2250,16 @@ function renderDeck(deck) {
             h('a', { href: `#/upcoming/${deck.id}` }, icon('calendar'), 'Upcoming cards'),
             h('a', { href: `#/stats/${deck.id}` }, icon('chart'), 'Statistics'),
             editable && h('button', { type: 'button', title: 'Import cards from an Excel or CSV file', onclick: () => pickImportFile(deck) }, icon('upload'), 'Import from Excel'),
+            (hasTopics || editable) && h('button', { type: 'button', title: 'See the deck\'s groups and topics', onclick: () => openTopicsDialog(deck) }, icon('check'), 'Topics…'),
             h('button', { type: 'button', onclick: () => openDeckDialog(deck) }, icon('edit'), 'Deck settings'),
             editable && h('button', { type: 'button', class: 'danger', onclick: () => removeDeck(deck) }, icon('trash'), 'Delete deck'),
           ]),
           editable && h('button', { class: 'btn', type: 'button', onclick: () => openCardDialog({ deckId: deck.id }) }, icon('plus'), 'Add card'),
+          (deck.topics ?? []).length > 0 && h('button', { class: 'btn topic-pick', type: 'button', title: 'Choose which topics to study', onclick: () => openTopicPicker(deck) }, h('span', null, filterLabel(deck, deck.studyFilter)), icon('chevron')),
           c.total > 0 && h('a', { class: 'btn primary', href: `#/study/${deck.id}` }, icon('play'), `Study ${c.total}`),
         ),
       ),
+      sortBar(deck),
       content,
     ),
   );
@@ -1748,9 +2312,10 @@ const MAX_SEGMENTS = 24;
 const isShort = (text) => text.length <= 28 && !/\n|\\[([]|\[image:/.test(text);
 
 function currentStudyCard(deckId, now) {
+  const deck = store.deck(deckId);
   let card = session.cardId && store.card(session.cardId);
-  if (!card || card.deckId !== deckId || card.reserved) {
-    card = store.nextCard(deckId, now);
+  if (!card || card.deckId !== deckId || card.reserved || !inFilter(card, resolveFilter(deck, deck.studyFilter), deck)) {
+    card = store.nextCard(deckId, now, deck.studyFilter);
     session.cardId = card?.id ?? null;
     session.revealed = false;
   }
@@ -1774,7 +2339,9 @@ function renderStudy(deck) {
   const now = Date.now();
   if (session.deckId !== deck.id) Object.assign(session, { deckId: deck.id, cardId: null, revealed: false, done: 0, spoken: null });
   const card = currentStudyCard(deck.id, now);
-  const c = store.counts(deck.id, now);
+  const c = store.counts(deck.id, now, deck.studyFilter);
+  const filtered = resolveFilter(deck, deck.studyFilter) !== null;
+  const label = filterLabel(deck, deck.studyFilter);
   const total = session.done + c.total;
   const progress = total ? (session.done / total) * 100 : 100;
   // A short session shows one segment per card; a long one, a single bar.
@@ -1788,7 +2355,7 @@ function renderStudy(deck) {
       'div',
       { class: 'study-top' },
       h('a', { class: 'icon-btn', href: `#/deck/${deck.id}`, title: 'Stop studying', 'aria-label': 'Stop studying' }, icon('close')),
-      h('div', { class: 'study-title' }, deck.name),
+      h('div', { class: 'study-title' }, filtered ? `${deck.name} · ${label}` : deck.name),
       card && statusMark(cardStatus(card, now), card.state === State.Review ? 'Review' : cardStatus(card, now).label, 'state'),
       countPills(c),
       card && store.editable(deck.id) && h('div', { class: 'tools' }, iconButton('edit', 'Edit card (E)', () => openCardDialog({ card })), iconButton('trash', 'Delete card', () => removeCard(card), 'danger')),
@@ -1798,6 +2365,8 @@ function renderStudy(deck) {
 
   if (!card) {
     const empty = c.cards === 0;
+    // This topic is finished but the deck is not: offer the whole deck.
+    const topicDone = filtered && !empty && store.counts(deck.id, now).total > 0;
     app.replaceChildren(
       h(
         'div',
@@ -1807,7 +2376,7 @@ function renderStudy(deck) {
           'div',
           { class: 'done' },
           h('div', { class: 'badge' }, icon('check')),
-          h('h1', null, empty ? 'This deck is empty' : 'All caught up'),
+          h('h1', null, empty ? 'This deck is empty' : topicDone ? `${label} is done for today` : 'All caught up'),
           h(
             'p',
             null,
@@ -1815,10 +2384,14 @@ function renderStudy(deck) {
               ? 'Add some cards to start studying.'
               : session.done
                 ? `You reviewed ${plural(session.done, 'card')} this session. Come back tomorrow for more.`
-                : 'Nothing is due in this deck right now.',
+                : filtered
+                  ? `Nothing is due in ${label} right now.`
+                  : 'Nothing is due in this deck right now.',
           ),
-          !empty && h('p', null, tomorrowText(c)),
-          h('a', { class: 'btn primary', href: empty ? `#/deck/${deck.id}` : '#/' }, empty ? 'Go to deck' : 'Back to decks'),
+          // Tomorrow's numbers are for the whole deck, so they are left out while studying part of it.
+          !empty && !filtered && h('p', null, tomorrowText(c)),
+          topicDone && h('button', { class: 'btn primary', type: 'button', onclick: () => { store.updateDeck(deck.id, { studyFilter: [] }); render(); } }, 'Study everything'),
+          h('a', { class: topicDone ? 'btn' : 'btn primary', href: empty ? `#/deck/${deck.id}` : '#/' }, empty ? 'Go to deck' : 'Back to decks'),
         ),
       ),
     );

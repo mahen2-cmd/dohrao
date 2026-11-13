@@ -8,17 +8,18 @@ import { join } from 'node:path';
 import { createRecallServer } from '../server.js';
 import { openDb } from '../server/db.js';
 import { createUser, createInvite } from '../server/auth.js';
+import { applyChanges } from '../server/sync.js';
 
 const NOW = Date.now();
 const fakeTts = { speak: async () => ({ body: Buffer.from('x'), type: 'audio/mpeg' }), engine: async () => 'Fake' };
 
 /** A server on a free port with a temp data folder, an admin and an invite. */
-async function start(t) {
+async function start(t, options = {}) {
   const dataDir = await mkdtemp(join(tmpdir(), 'recall-http-'));
   const db = openDb(join(dataDir, 'recall.db'));
   const admin = await createUser(db, { username: 'admin', name: 'Admin', password: 'admin-password', role: 'admin' }, NOW);
   const invite = createInvite(db, { uses: 5 }, NOW);
-  const server = createRecallServer({ dataDir, tts: fakeTts });
+  const server = createRecallServer({ dataDir, tts: fakeTts, ...options });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   t.after(async () => {
     await new Promise((resolve) => server.close(resolve));
@@ -333,4 +334,141 @@ test("the admin sees everyone's progress, and one person's cards", async (t) => 
   assert.equal(one.status, 200);
   assert.deepEqual(one.json.cards, []);
   assert.equal((await call(port, 'GET', 'api/admin/progress/nobody', { cookie: admin })).status, 404);
+});
+
+/** A sorter that counts calls and puts every card it is shown into a new topic. */
+function fakeSorter() {
+  const calls = { place: 0, propose: 0, group: 0 };
+  return {
+    calls,
+    async placeCards({ cards }) {
+      calls.place++;
+      return { placements: cards.map((c) => ({ id: c.id, topic: 'new:1' })), newTopics: [{ ref: 'new:1', name: 'Greetings', groupId: null }] };
+    },
+    async proposeTopics() {
+      calls.propose++;
+      return { groups: [{ id: 'g1', name: 'Words' }], topics: [{ id: 't1', name: 'Hello', groupId: 'g1' }] };
+    },
+    async groupTopics() {
+      calls.group++;
+      return [];
+    },
+  };
+}
+
+/** Wait until the sort for a deck is no longer running. */
+async function sortDone(port, cookie, deckId = 'd1') {
+  for (let i = 0; i < 200; i++) {
+    const res = await call(port, 'GET', `api/admin/decks/${deckId}/sort`, { cookie });
+    if (!res.json.running) return res.json;
+    await new Promise((r) => setTimeout(r, 10));
+  }
+  throw new Error('sort never finished');
+}
+
+test('sorting is refused to non-admins and for decks the admin does not own', async (t) => {
+  const sorter = fakeSorter();
+  const { port, db, admin: adminUser, invite } = await start(t, { sorter });
+  const admin = (await logIn(port, 'admin', 'admin-password')).cookie;
+  const ben = await signUp(port, invite);
+  for (const [method, path] of [
+    ['POST', 'api/admin/decks/d1/sort'], ['GET', 'api/admin/decks/d1/sort'], ['POST', 'api/admin/decks/d1/propose'],
+    ['GET', 'api/admin/decks/d1/proposal'], ['POST', 'api/admin/decks/d1/proposal/approve'],
+  ]) {
+    assert.equal((await call(port, method, path, { cookie: ben.cookie, body: {} })).status, 403, path);
+  }
+  // A deck owned by Ben and given to the admin is still not the admin's to sort.
+  applyChanges(db, ben.json.user.id, { decks: [{ ...deck, id: 'b1' }], cards: [{ ...card, id: 'bc', deckId: 'b1' }] }, NOW);
+  db.prepare('INSERT INTO assignments (deck_id, user_id, active, assigned) VALUES (?, ?, 1, ?)').run('b1', adminUser.id, NOW);
+  for (const id of ['b1', 'missing']) {
+    for (const [method, tail] of [['POST', 'sort'], ['GET', 'sort'], ['POST', 'propose'], ['GET', 'proposal']]) {
+      assert.equal((await call(port, method, `api/admin/decks/${id}/${tail}`, { cookie: admin, body: {} })).status, 404, `${id} ${tail}`);
+    }
+    assert.equal((await call(port, 'POST', `api/admin/decks/${id}/proposal/approve`, { cookie: admin, body: { groups: [], topics: [] } })).status, 404);
+  }
+  assert.deepEqual(sorter.calls, { place: 0, propose: 0, group: 0 });
+});
+
+/** The test deck with one topic, so it can be sorted without a proposal first. */
+const topical = { ...deck, topics: [{ id: 't0', name: 'Other', groupId: null, by: 'admin' }], topicsAt: NOW };
+
+test('sorting a deck with no topics is refused; it needs a proposal first', async (t) => {
+  const sorter = fakeSorter();
+  const { port } = await start(t, { sorter });
+  const admin = (await logIn(port, 'admin', 'admin-password')).cookie;
+  await call(port, 'POST', 'api/sync', { cookie: admin, body: { decks: [deck], cards: [card] } });
+  const res = await call(port, 'POST', 'api/admin/decks/d1/sort', { cookie: admin });
+  assert.deepEqual([res.status, res.json], [409, { error: 'no-topics' }]);
+  assert.deepEqual(await sortDone(port, admin), { running: false, unsorted: 1 });
+  assert.equal(sorter.calls.place, 0);
+});
+
+test('the admin sorts a deck in the background', async (t) => {
+  const sorter = fakeSorter();
+  const { port } = await start(t, { sorter });
+  const admin = (await logIn(port, 'admin', 'admin-password')).cookie;
+  await call(port, 'POST', 'api/sync', { cookie: admin, body: { decks: [topical], cards: [card] } });
+  assert.equal((await call(port, 'GET', 'api/admin/decks/d1/sort', { cookie: admin })).json.unsorted, 1);
+  const started = await call(port, 'POST', 'api/admin/decks/d1/sort', { cookie: admin });
+  assert.equal(started.status, 202);
+  assert.deepEqual(started.json, { running: true });
+  assert.deepEqual(await sortDone(port, admin), { running: false, unsorted: 0 });
+  const state = await call(port, 'GET', 'api/state', { cookie: admin });
+  const sorted = state.json.cards.find((c) => c.id === 'c1');
+  assert.equal(state.json.decks[0].topics.find((x) => x.id === sorted.topic).name, 'Greetings');
+  assert.equal(sorted.topicBy, 'ai');
+});
+
+test('a failing sort ends without crashing the server', async (t) => {
+  const sorter = { ...fakeSorter(), async placeCards() { throw new Error('network down'); } };
+  const { port } = await start(t, { sorter });
+  const admin = (await logIn(port, 'admin', 'admin-password')).cookie;
+  await call(port, 'POST', 'api/sync', { cookie: admin, body: { decks: [topical], cards: [card] } });
+  const log = console.error;
+  console.error = () => {};
+  try {
+    await call(port, 'POST', 'api/admin/decks/d1/sort', { cookie: admin });
+    assert.deepEqual(await sortDone(port, admin), { running: false, unsorted: 1 });
+  } finally {
+    console.error = log;
+  }
+});
+
+test('sorting without a key answers 503 and the app still works', async (t) => {
+  const { port } = await start(t, { sorter: null });
+  const admin = (await logIn(port, 'admin', 'admin-password')).cookie;
+  await call(port, 'POST', 'api/sync', { cookie: admin, body: { decks: [deck], cards: [card] } });
+  for (const tail of ['sort', 'propose']) {
+    const res = await call(port, 'POST', `api/admin/decks/d1/${tail}`, { cookie: admin });
+    assert.deepEqual([res.status, res.json], [503, { error: 'no-sorter' }]);
+  }
+  const res = await call(port, 'POST', 'api/admin/decks/d1/proposal/approve', { cookie: admin, body: { groups: [], topics: [] } });
+  assert.equal(res.status, 503);
+  assert.deepEqual((await call(port, 'GET', 'api/admin/decks/d1/sort', { cookie: admin })).json, { running: false, unsorted: 1 });
+  assert.equal((await call(port, 'GET', 'api/state', { cookie: admin })).status, 200);
+});
+
+test('approving a proposal writes the topics and starts a sort', async (t) => {
+  const sorter = fakeSorter();
+  const { port } = await start(t, { sorter });
+  const admin = (await logIn(port, 'admin', 'admin-password')).cookie;
+  await call(port, 'POST', 'api/sync', { cookie: admin, body: { decks: [deck], cards: [card] } });
+  assert.equal((await call(port, 'GET', 'api/admin/decks/d1/proposal', { cookie: admin })).status, 404);
+  const made = await call(port, 'POST', 'api/admin/decks/d1/propose', { cookie: admin });
+  assert.equal(made.status, 200);
+  assert.equal(made.json.topics[0].name, 'Hello');
+  const got = await call(port, 'GET', 'api/admin/decks/d1/proposal', { cookie: admin });
+  assert.deepEqual(got.json, made.json);
+
+  const badBody = { groups: [], topics: [{ id: 't', name: '', groupId: null }] };
+  assert.equal((await call(port, 'POST', 'api/admin/decks/d1/proposal/approve', { cookie: admin, body: badBody })).status, 400);
+
+  const body = { groups: made.json.groups, topics: made.json.topics };
+  assert.equal((await call(port, 'POST', 'api/admin/decks/d1/proposal/approve', { cookie: admin, body })).status, 204);
+  await sortDone(port, admin);
+  const state = await call(port, 'GET', 'api/state', { cookie: admin });
+  const names = state.json.decks[0].topics.map((x) => [x.name, x.by]).sort();
+  assert.deepEqual(names, [['Greetings', 'ai'], ['Hello', 'admin']]);
+  assert.equal((await call(port, 'GET', 'api/admin/decks/d1/proposal', { cookie: admin })).status, 404);
+  assert.equal(sorter.calls.place, 1);
 });

@@ -1,0 +1,30 @@
+[
+  { "group": "Verbs", "topics": {
+    "verb_ser": "Ser", "verb_estar": "Estar", "verb_ter": "Ter", "verb_ir": "Ir", "verb_fazer": "Fazer",
+    "verb_falar": "Falar", "verb_gostar": "Gostar", "verb_querer": "Querer", "verb_precisar": "Precisar",
+    "verb_morar_viver": "Morar / viver", "verb_chamar_se": "Chamar-se", "verb_questions": "Verb questions" } },
+  { "group": "Grammar", "topics": {
+    "articles_o_a": "Articles: o, a", "articles_os_as": "Articles: os, as", "articles_um_uma": "Articles: um, uma",
+    "de_contractions": "De contractions", "em_contractions": "Em contractions", "masculine_nouns": "Masculine nouns",
+    "feminine_nouns": "Feminine nouns", "gender_exceptions": "Gender exceptions", "adjective_agreement": "Adjective agreement",
+    "more_plurals": "More plurals", "possessives": "Possessives", "possession": "Possession", "negation": "Negation",
+    "noun_phrases": "Noun phrases", "this_and_that": "This and that" } },
+  { "group": "About me", "topics": {
+    "name_answers": "Name answers", "age": "Age", "origin": "Origin", "address": "Address",
+    "contact_details": "Contact details", "personal_details": "Personal details", "personal_info": "Personal info",
+    "short_profile": "Short profile", "spelling_clarifying": "Spelling and clarifying", "i_am_a": "I am a…" } },
+  { "group": "Work", "topics": {
+    "professions": "Professions", "everyday_jobs": "Everyday jobs", "more_jobs": "More jobs",
+    "job_descriptions": "Job descriptions", "job_gender": "Job gender", "job_questions": "Job questions",
+    "talk_about_work": "Talk about work", "workplaces": "Workplaces" } },
+  { "group": "Things and places", "topics": {
+    "basic_objects": "Basic objects", "everyday_objects": "Everyday objects", "home_objects": "Home objects",
+    "classroom_objects": "Classroom objects", "clothes": "Clothes", "technology": "Technology",
+    "house_rooms": "House rooms", "describe_things": "Describe things", "talk_about_objects": "Talk about objects",
+    "where_objects_are": "Where objects are" } },
+  { "group": "Out and about", "topics": {
+    "cafe_drinks": "Café drinks", "cafe_ordering": "Café ordering", "saying_what_you_need": "Saying what you need",
+    "language_school": "Language school" } },
+  { "group": "Everyday phrases", "topics": {
+    "animals": "Animals", "numbers_11-19": "Numbers 11–19", "short_sentences": "Short sentences", "who_is_that": "Who is that?" } }
+]

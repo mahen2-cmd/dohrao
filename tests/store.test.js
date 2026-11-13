@@ -535,3 +535,243 @@ test("a given deck's content cannot be edited, but it can be studied and its res
   store.answerCard(store.nextCard('given', T0 + 3).id, Rating.Good, T0 + 3);
   assert.equal(store.card('g0').reps, 1);
 });
+
+test('importing a topic file creates the topic once and joins its prefix group', () => {
+  const deck = setup();
+  const verbs = store.createGroup(deck.id, 'Verbs', T0);
+  store.addCards(deck.id, [['to be', 'ser']], T0, { topicKey: 'verb_ser' });
+  store.moveTopic(deck.id, store.deck(deck.id).topics[0].id, verbs.id, T0);
+  store.addCards(deck.id, [['to go', 'ir']], T0, { topicKey: 'verb_ir' });
+  store.addCards(deck.id, [['I am', 'sou']], T0, { topicKey: 'verb_ser' });
+  const topics = store.deck(deck.id).topics;
+  assert.equal(topics.length, 2);
+  assert.ok(topics.every((t) => t.groupId === verbs.id));
+  assert.ok(store.cardsIn(deck.id).every((c) => c.topicBy === 'file' && c.topicAt === T0));
+  assert.equal(topics[0].name, 'Ser');
+  assert.equal(topics[0].by, 'file');
+});
+
+test('groups and topics can be created, renamed, moved and deleted', () => {
+  const deck = setup();
+  const g = store.createGroup(deck.id, 'Food', T0);
+  store.renameGroup(deck.id, g.id, 'Eating', T0 + 1);
+  assert.equal(store.deck(deck.id).groups[0].name, 'Eating');
+  const t = store.createTopic(deck.id, 'Cafe', g.id, T0 + 2);
+  assert.equal(t.by, 'admin');
+  store.renameTopic(deck.id, t.id, 'Cafe ordering', T0 + 3);
+  store.moveTopic(deck.id, t.id, null, T0 + 4);
+  assert.equal(store.deck(deck.id).topics[0].name, 'Cafe ordering');
+  assert.equal(store.deck(deck.id).topics[0].groupId, null);
+  store.moveTopic(deck.id, t.id, g.id, T0 + 5);
+  store.deleteGroup(deck.id, g.id, T0 + 6);
+  assert.equal(store.deck(deck.id).groups.length, 0);
+  assert.equal(store.deck(deck.id).topics.length, 1);
+  assert.equal(store.deck(deck.id).topics[0].groupId, null);
+  assert.equal(store.deck(deck.id).topicsAt, T0 + 6);
+});
+
+test('deleting a topic makes its cards sortable again', () => {
+  const deck = setup();
+  store.addCards(deck.id, [['a', 'b'], ['c', 'd']], T0, { topicKey: 'verb_ser' });
+  assert.equal(store.unsortedCount(deck.id), 0);
+  store.deleteTopic(deck.id, store.deck(deck.id).topics[0].id, T0 + 5);
+  assert.equal(store.deck(deck.id).topics.length, 0);
+  assert.equal(store.unsortedCount(deck.id), 2);
+  for (const c of store.cardsIn(deck.id)) {
+    assert.ok(!('topic' in c) && !('topicBy' in c));
+    assert.equal(c.topicAt, T0 + 5);
+  }
+});
+
+test('deleting a topic or group remembers its id so a sync does not bring it back', () => {
+  const deck = setup();
+  const g = store.createGroup(deck.id, 'Verbs', T0);
+  const t = store.createTopic(deck.id, 'Ser', g.id, T0);
+  store.deleteTopic(deck.id, t.id, T0 + 1);
+  store.deleteGroup(deck.id, g.id, T0 + 2);
+  assert.deepEqual(store.deck(deck.id).deletedTopicIds, [t.id]);
+  assert.deepEqual(store.deck(deck.id).deletedGroupIds, [g.id]);
+  for (let i = 0; i < 510; i++) store.deleteTopic(deck.id, store.createTopic(deck.id, `x${i}`, null, T0).id, T0 + 3);
+  const ids = store.deck(deck.id).deletedTopicIds;
+  assert.equal(ids.length, 500);
+  assert.ok(!ids.includes(t.id));   // the oldest are forgotten first
+});
+
+test('moving cards by hand marks them manual and they are not counted as unsorted', () => {
+  const deck = setup();
+  store.addCards(deck.id, [['a', 'b'], ['c', 'd']], T0);
+  assert.equal(store.unsortedCount(deck.id), 2);
+  const ids = store.cardsIn(deck.id).map((c) => c.id);
+  assert.equal(store.setCardsTopic(ids, null, T0 + 1), 2);
+  assert.equal(store.unsortedCount(deck.id), 0);
+  assert.ok(store.cardsIn(deck.id).every((c) => c.topicBy === 'manual' && !('topic' in c)));
+  const t = store.createTopic(deck.id, 'X', null, T0);
+  store.setCardsTopic(ids, t.id, T0 + 2);
+  assert.ok(store.cardsIn(deck.id).every((c) => c.topic === t.id && c.topicAt === T0 + 2));
+});
+
+test('clearing a moved card\'s topic leaves it sortable and stamps the time', () => {
+  const deck = setup();
+  store.addCards(deck.id, [['a', 'b']], T0, { topicKey: 'verb_ser' });
+  const c = store.cardsIn(deck.id)[0];
+  const other = store.createDeck({ name: 'Other' });
+  store.updateCard(c.id, { deckId: other.id });
+  store.clearCardTopic(c.id, T0 + 7);
+  const moved = store.card(c.id);
+  assert.ok(!('topic' in moved) && !('topicBy' in moved));
+  assert.equal(moved.topicAt, T0 + 7);
+  assert.equal(store.unsortedCount(other.id), 1);
+});
+
+test('topic edits on a given deck are refused', () => {
+  store.importData(JSON.stringify({
+    decks: [{ id: 'given', name: 'Words', assigned: true, from: 'Ana', newPerDay: 20, groups: [{ id: 'g1', name: 'G' }], topics: [{ id: 't1', key: 'a_b', name: 'B', groupId: null, by: 'file' }] }],
+    cards: [{ id: 'g0', deckId: 'given', front: 'q', back: 'a', created: T0 }],
+  }));
+  const readOnly = { message: 'read-only deck' };
+  assert.throws(() => store.createGroup('given', 'X', T0), readOnly);
+  assert.throws(() => store.renameGroup('given', 'g1', 'X', T0), readOnly);
+  assert.throws(() => store.deleteGroup('given', 'g1', T0), readOnly);
+  assert.throws(() => store.ensureTopic('given', 'new_key', T0), readOnly);
+  assert.throws(() => store.createTopic('given', 'X', null, T0), readOnly);
+  assert.throws(() => store.renameTopic('given', 't1', 'X', T0), readOnly);
+  assert.throws(() => store.moveTopic('given', 't1', null, T0), readOnly);
+  assert.throws(() => store.deleteTopic('given', 't1', T0), readOnly);
+  assert.throws(() => store.setCardsTopic(['g0'], 't1', T0), readOnly);
+  assert.throws(() => store.addCards('given', [['q', 'a']], T0, { topicKey: 'a_b' }), readOnly);
+});
+
+test('topic edits never touch scheduling fields', () => {
+  const deck = setup();
+  store.addCards(deck.id, [['a', 'b']], T0, { topicKey: 'verb_ser' });
+  const c = store.cardsIn(deck.id)[0];
+  const sched = () => JSON.stringify(['due', 'state', 'ease', 'stability', 'difficulty', 'reps', 'lapses', 'scheduledDays'].map((k) => store.card(c.id)[k]));
+  const before = sched();
+  const t = store.createTopic(deck.id, 'Other', null, T0);
+  store.setCardsTopic([c.id], t.id, T0 + 1);
+  store.moveTopic(deck.id, t.id, null, T0 + 2);
+  store.deleteTopic(deck.id, t.id, T0 + 3);
+  assert.equal(sched(), before);
+});
+
+// ---- study, count and pull by topic ----
+
+const topicId = (deckId, key) => store.deck(deckId).topics.find((t) => t.key === key).id;
+
+test('a topic session shows only that topic and shares the daily new allowance', () => {
+  const deck = setup({ newPerDay: 3 });
+  store.addCards(deck.id, [['a', '1'], ['b', '2'], ['c', '3']], T0, { topicKey: 'verb_ser' });
+  store.addCards(deck.id, [['d', '4'], ['e', '5']], T0, { topicKey: 'animals' });
+  const ser = ['t:' + topicId(deck.id, 'verb_ser')];
+  assert.equal(store.counts(deck.id, T0, ser).new, 3);
+  for (let i = 0; i < 2; i++) store.answerCard(store.nextCard(deck.id, T0, ser).id, Rating.Good, T0);
+  assert.equal(store.counts(deck.id, T0).new, 1);
+  assert.equal(store.counts(deck.id, T0, ser).newLeft, 1);
+});
+
+test('the allowance is filled from the filtered topic even when other topics have older new cards', () => {
+  const deck = setup({ newPerDay: 2 });
+  store.addCards(deck.id, [['x1', ''], ['x2', ''], ['x3', '']], T0, { topicKey: 'animals' });
+  store.addCards(deck.id, [['s1', ''], ['s2', ''], ['s3', '']], T0 + 10, { topicKey: 'verb_ser' });
+  const ser = ['t:' + topicId(deck.id, 'verb_ser')];
+  assert.equal(store.counts(deck.id, T0 + 20, ser).new, 2);
+  const seen = [];
+  for (let i = 0; i < 2; i++) {
+    const c = store.nextCard(deck.id, T0 + 20, ser);
+    seen.push(c.front);
+    store.answerCard(c.id, Rating.Good, T0 + 20);
+  }
+  assert.deepEqual(seen, ['s1', 's2']);
+  // The allowance is the deck's: it is used up for every topic now.
+  assert.equal(store.counts(deck.id, T0 + 20).new, 0);
+});
+
+test('filtered counts are zero while deck counts are not', () => {
+  const deck = setup();
+  store.addCards(deck.id, [['a', '1']], T0, { topicKey: 'verb_ser' });
+  store.addCards(deck.id, [['d', '4']], T0, { topicKey: 'animals' });
+  const [ser, animals] = ['verb_ser', 'animals'].map((k) => ['t:' + topicId(deck.id, k)]);
+  const card = store.nextCard(deck.id, T0, animals);
+  store.answerCard(card.id, Rating.Easy, T0);
+  const later = T0 + 40 * DAY;
+  assert.equal(store.counts(deck.id, later, animals).review, 1);
+  assert.equal(store.counts(deck.id, later, ser).review, 0);
+  assert.equal(store.counts(deck.id, later, ser).new, 1);
+  assert.equal(store.counts(deck.id, later, ser).cards, 2);
+  assert.equal(store.counts(deck.id, later).total, 2);
+  assert.equal(store.nextCard(deck.id, later, ser).front, 'a');
+  assert.equal(store.counts(deck.id, T0, []).total, store.counts(deck.id, T0).total);
+  // A group with no topics holds no cards, so it gives zero.
+  const empty = store.createGroup(deck.id, 'Empty', T0);
+  assert.equal(store.counts(deck.id, later, ['g:' + empty.id]).total, 0);
+});
+
+test('pulling by topic takes that topic in reserve order', () => {
+  const deck = setup();
+  store.addCards(deck.id, [['a1', ''], ['a2', ''], ['a3', '']], T0, { reserved: true, topicKey: 'x' });
+  store.addCards(deck.id, [['b1', ''], ['b2', '']], T0, { reserved: true });
+  const x = ['t:' + topicId(deck.id, 'x')];
+  assert.equal(store.pullFromReserve(deck.id, 2, T0, x), 2);
+  const pulled = store.cardsIn(deck.id).filter((c) => !c.reserved).map((c) => c.front).sort();
+  assert.deepEqual(pulled, ['a1', 'a2']);
+  assert.equal(store.counts(deck.id, T0).reserve, 3);
+  assert.equal(store.pullFromReserve(deck.id, 1, T0, ['unsorted']), 1);
+  assert.ok(!store.cardsIn(deck.id).find((c) => c.front === 'b1').reserved);
+});
+
+test('answering in a topic session schedules exactly as in a mixed one', () => {
+  const run = (filtered) => {
+    const deck = setup();
+    store.addCards(deck.id, [['a', '1']], T0, { topicKey: 'verb_ser' });
+    store.addCards(deck.id, [['b', '2']], T0, { topicKey: 'animals' });
+    const f = filtered ? ['t:' + topicId(deck.id, 'verb_ser')] : undefined;
+    const c = store.nextCard(deck.id, T0, f);
+    store.answerCard(c.id, Rating.Good, T0);
+    const { due, state, scheduledDays, stability, difficulty, reps, lapses } = store.card(c.id);
+    return { front: c.front, due, state, scheduledDays, stability, difficulty, reps, lapses };
+  };
+  const mixed = run(false);
+  const topic = run(true);
+  assert.equal(mixed.front, topic.front);
+  assert.deepEqual(topic, mixed);
+});
+
+test('findCards filters by topic and unsorted', () => {
+  const deck = setup();
+  store.addCards(deck.id, [['a', '1']], T0, { topicKey: 'verb_ser' });
+  store.addCards(deck.id, [['b', '2']], T0, { topicKey: 'animals' });
+  store.addCard(deck.id, 'loose', '3', T0);
+  const ser = 't:' + topicId(deck.id, 'verb_ser');
+  assert.deepEqual(store.findCards(deck.id, { topics: [ser] }, T0).map((c) => c.front), ['a']);
+  assert.deepEqual(store.findCards(deck.id, { topics: ['unsorted'] }, T0).map((c) => c.front), ['loose']);
+  assert.equal(store.findCards(deck.id, { topics: [ser, 'unsorted'] }, T0).length, 2);
+  assert.equal(store.findCards(deck.id, {}, T0).length, 3);
+});
+
+test('a card whose topic is gone is unsorted everywhere', () => {
+  store.importData(JSON.stringify({
+    decks: [{ id: 'd', name: 'Words', newPerDay: 20, topics: [{ id: 't1', name: 'Ser', groupId: null, by: 'admin' }] }],
+    cards: [
+      { id: 'a', deckId: 'd', front: 'a', back: '1', created: T0, topic: 'gone', topicBy: 'ai', topicAt: T0 },
+      { id: 'b', deckId: 'd', front: 'b', back: '2', created: T0 + 1, topic: 'gone', topicBy: 'manual', topicAt: T0 },
+      { id: 'c', deckId: 'd', front: 'c', back: '3', created: T0 + 2, topic: 't1', topicBy: 'ai', topicAt: T0 },
+    ],
+  }));
+  assert.deepEqual(store.findCards('d', { topics: ['unsorted'], sort: 'oldest' }, T0).map((c) => c.id), ['a', 'b']);
+  assert.equal(store.counts('d', T0, ['unsorted']).new, 2);
+  assert.equal(store.nextCard('d', T0, ['t:t1']).id, 'c');
+  // Only the one nobody placed by hand waits for the sorter.
+  assert.equal(store.unsortedCount('d'), 1);
+  assert.deepEqual(store.topicCounts('d', T0).get(''), { due: 0, fresh: 2, reserve: 0 });
+  assert.equal(store.topicCounts('d', T0).has('gone'), false);
+});
+
+test('topicCounts reports due, fresh and reserve per topic', () => {
+  const deck = setup();
+  store.addCards(deck.id, [['a', '1'], ['b', '2']], T0, { topicKey: 'verb_ser' });
+  store.addCards(deck.id, [['r', '3']], T0, { topicKey: 'verb_ser', reserved: true });
+  store.addCard(deck.id, 'loose', '3', T0);
+  const m = store.topicCounts(deck.id, T0);
+  assert.deepEqual(m.get(topicId(deck.id, 'verb_ser')), { due: 0, fresh: 2, reserve: 1 });
+  assert.deepEqual(m.get(''), { due: 0, fresh: 1, reserve: 0 });
+});

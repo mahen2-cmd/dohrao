@@ -23,7 +23,7 @@ A small, fast flashcard app with Anki's scheduling and a cleaner interface, host
 - **Read aloud.** A speaker button on each side of a card, a language for each side, optional auto-play, and an adjustable speaking speed. Maths and images are skipped. Audio is generated once per sentence and cached, unless a deck is set not to keep it.
 - **Saved on the server.** Only what changed is sent, so a phone and a laptop used on the same day do not overwrite each other. Answers given with no signal are kept in the browser and sent when the connection is back. The server keeps a dated backup each day.
 - **Keyboard-first studying**, light and dark themes, and a layout that works on a phone.
-- **No dependencies to install.** The app is plain HTML, CSS and JavaScript; the server is plain Node with its built-in SQLite. [KaTeX](https://katex.org), which typesets the maths, and [MathLive](https://mathlive.io), the equation editor, are included in `vendor/`, so maths works offline.
+- **One dependency to install.** The app is plain HTML, CSS and JavaScript; the server is plain Node with its built-in SQLite. The only package is Anthropic's SDK, for sorting the admin's cards into topics; run `npm ci` once (the deploy script does it for you), and everything but that sorting works without it or a key. [KaTeX](https://katex.org), which typesets the maths, and [MathLive](https://mathlive.io), the equation editor, are included in `vendor/`, so maths works offline.
 
 ## Accounts, invites and the admin
 
@@ -176,6 +176,17 @@ Each deck has a reserve: cards that are kept in the deck but out of study, so th
 
 Pulled cards become ordinary new cards, so they are introduced at the deck's new cards per day; raise that setting to study more of them at once. To put cards back, tick them in the deck's list, whether new, learning or due, and press **Back to reserve**; they join the end of the reserve. A card that has already been studied loses its progress and starts over as a new card when pulled in again, so you are asked first.
 
+## Topics
+
+A deck can be split into **topics**, and topics can sit in **groups** (Verbs, Grammar, and so on). Each card is in at most one topic; a card with none is **Unsorted**.
+
+- **Study by topic.** When you start a review, choose Everything, or tick groups and topics. Only the due and new cards in those topics come up. Answers are scheduled as usual, and cards outside your choice stay due and wait. The daily new-card limit is still one total for the deck, shared across topics.
+- **Pull by topic.** **Pull in** can be limited to a group or a topic, so you can bring in 20 new verb cards and nothing else.
+- **See and change topics.** The deck's card list can be filtered by topic, shows each card's topic, and has **Move to topic…** for the cards you tick. Topics and groups can be renamed, moved, made and deleted. Deleting a topic makes its cards Unsorted.
+- **Topic files.** Importing a file named `new_cards_<topic>.csv` puts its cards in that topic, and makes the topic if it is new.
+- **Automatic sorting, for the admin only.** New cards in a deck the admin owns are placed in the deck's topics by an AI model (Claude, through Anthropic's API), and **Sort now** does the unsorted ones on request. A deck with no topics yet is sorted in two steps: the model proposes groups and topics, you change them, and only then are cards placed. Cards you place by hand are never moved again. Studying never waits for sorting. Given decks and other people's decks are never sent anywhere.
+- **What leaves your server.** For the admin's decks, the text of each card's front and back, and the deck's group and topic names, are sent to Anthropic's API. Nothing else is: no answers, schedules or accounts. Sorting needs a key: set `ANTHROPIC_API_KEY`, or put `{"apiKey": "...", "model": "claude-opus-5-5"}` in `claude.json` in the data folder. With no key, sorting is off and the rest works as before.
+
 ## Statistics
 
 The chart button in the top bar opens the statistics for all decks; the one on a deck's page opens that deck's. Choose a period of 1 month, 3 months or 1 year.
@@ -277,6 +288,7 @@ Everything lives in one data folder: `RECALL_DATA`, which is `./data` when runni
 | `audio/` | Cached audio, one file per sentence per voice, shared by everyone |
 | `media/` | The images on cards, named by their contents |
 | `tts.json` | Voice settings and keys, if there is one |
+| `claude.json` | The API key for sorting into topics, if there is one |
 
 The local `data/` folder is git-ignored, so none of it is ever committed.
 

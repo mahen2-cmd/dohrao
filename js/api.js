@@ -40,6 +40,11 @@ export const admin = {
   assign: (deckId, userIds) => call('POST', `api/admin/decks/${part(deckId)}/assign`, { userIds }),
   unassign: (deckId, userIds) => call('POST', `api/admin/decks/${part(deckId)}/unassign`, { userIds }),
   resetPassword: (userId, password) => call('POST', `api/admin/users/${part(userId)}/password`, { password }),
+  sort: (deckId) => call('POST', `api/admin/decks/${part(deckId)}/sort`),
+  sortStatus: (deckId) => call('GET', `api/admin/decks/${part(deckId)}/sort`),
+  propose: (deckId) => call('POST', `api/admin/decks/${part(deckId)}/propose`),
+  proposal: (deckId) => call('GET', `api/admin/decks/${part(deckId)}/proposal`),
+  approve: (deckId, body) => call('POST', `api/admin/decks/${part(deckId)}/proposal/approve`, body),
   progress: () => call('GET', 'api/admin/progress'),
   personProgress: (userId) => call('GET', `api/admin/progress/${part(userId)}`),
 };

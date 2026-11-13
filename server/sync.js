@@ -1,5 +1,5 @@
 // Each user's view of the store, and applying their changes under ownership rules.
-import { DECK_SHARED, CARD_CONTENT, split } from './fields.js';
+import { DECK_SHARED, CARD_CONTENT, split, mergeTopics, mergeDeckTopics } from './fields.js';
 import { newSchedule } from '../js/fsrs.js';
 import { mergeCounts } from '../js/counts.js';
 
@@ -95,7 +95,9 @@ function applyDeck(db, userId, deck) {
   if (kind === null) {
     db.prepare('INSERT INTO decks (id, owner_id, data) VALUES (?, ?, ?)').run(deck.id, userId, JSON.stringify(shared));
   } else if (kind === 'own') {
-    db.prepare('UPDATE decks SET data = ? WHERE id = ?').run(JSON.stringify(shared), deck.id);
+    const stored = parse(db.prepare('SELECT data FROM decks WHERE id = ?').get(deck.id).data);
+    const merged = mergeDeckTopics(stored, shared);
+    db.prepare('UPDATE decks SET data = ? WHERE id = ?').run(JSON.stringify(merged), deck.id);
   }
   savePrefs(db, userId, deck.id, prefs);
   return true;
@@ -112,7 +114,12 @@ function applyCard(db, userId, card) {
   } else {
     const from = access(db, userId, current);
     if (from === 'own' && target === 'own') {
-      db.prepare('UPDATE cards SET deck_id = ?, data = ? WHERE id = ?').run(card.deckId, JSON.stringify(content), card.id);
+      const stored = parse(db.prepare('SELECT data FROM cards WHERE id = ?').get(card.id).data);
+      // Only the sorter writes 'ai', and it never moves a manual card, so a hand placement
+      // (even one made offline before the sort) wins over it whatever the times say.
+      const manualOverAi = content.topicBy === 'manual' && stored.topicBy === 'ai';
+      const merged = manualOverAi ? content : mergeTopics(stored, content, ['topic', 'topicBy'], 'topicAt');
+      db.prepare('UPDATE cards SET deck_id = ?, data = ? WHERE id = ?').run(card.deckId, JSON.stringify(merged), card.id);
     } else if (!(from === 'given' && current === card.deckId)) {
       return false;
     }
