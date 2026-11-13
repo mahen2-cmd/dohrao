@@ -15,7 +15,7 @@ export const HEAT_WEEKS = { phone: 16, wide: 53 };
  */
 export function tabFilters(filters, tab) {
   if (tab === 'reserve') return { ...filters, groups: ['reserve'], due: 'any', added: 'any', lapses: 'any', topics: [], sort: 'reserve' };
-  return { ...filters, groups: filters.groups.filter((g) => g !== 'reserve') };
+  return { ...filters, groups: filters.groups.filter((g) => g !== 'reserve'), sort: filters.sort === 'reserve' ? 'newest' : filters.sort };
 }
 
 /** Whether a card belongs in a deck tab's list on a phone. */

@@ -21,6 +21,10 @@ test('the Cards tab drops the reserve chip and keeps the other filters', () => {
   assert.equal(inTab({ reserved: false }, 'reserve'), false);
 });
 
+test('the Cards tab never sorts by reserve order', () => {
+  assert.equal(tabFilters({ ...NO, sort: 'reserve' }, 'cards').sort, 'newest');
+});
+
 test('a swipe past the threshold rates; short of it, nothing', () => {
   const box = { width: 300, height: 500, verticalAllowed: true };
   assert.equal(classifySwipe({ ...box, dx: 95, dy: 10 }), Rating.Good);
