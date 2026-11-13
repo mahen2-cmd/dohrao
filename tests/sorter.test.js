@@ -111,28 +111,41 @@ test('groupTopics keeps only known topics and groups', async () => {
   assert.deepEqual(await empty.groupTopics({ deckName: 'D', groups, topics }), []);
 });
 
-function withEnvKey(value, fn) {
+async function withEnvKey(value, fn) {
   const saved = process.env.ANTHROPIC_API_KEY;
   if (value === undefined) delete process.env.ANTHROPIC_API_KEY; else process.env.ANTHROPIC_API_KEY = value;
   try {
-    fn(mkdtempSync(join(tmpdir(), 'sorter-')));
+    await fn(mkdtempSync(join(tmpdir(), 'sorter-')));
   } finally {
     if (saved === undefined) delete process.env.ANTHROPIC_API_KEY; else process.env.ANTHROPIC_API_KEY = saved;
   }
 }
 
-test('loadSorter is null without a key', () => {
-  withEnvKey(undefined, (dir) => {
-    assert.equal(loadSorter(dir), null);
+test('loadSorter is null without a key', async () => {
+  await withEnvKey(undefined, async (dir) => {
+    assert.equal(await loadSorter(dir), null);
     writeFileSync(join(dir, 'claude.json'), '{ broken');
-    assert.equal(loadSorter(dir), null);
+    assert.equal(await loadSorter(dir), null);
   });
 });
 
-test('loadSorter reads the key from claude.json or the environment', () => {
-  withEnvKey(undefined, (dir) => {
+test('loadSorter reads the key from claude.json or the environment', async () => {
+  await withEnvKey(undefined, async (dir) => {
     writeFileSync(join(dir, 'claude.json'), JSON.stringify({ apiKey: 'sk-test', model: 'claude-x' }));
-    assert.ok(loadSorter(dir));
+    assert.ok(await loadSorter(dir));
   });
-  withEnvKey('sk-env', (dir) => assert.ok(loadSorter(dir)));
+  await withEnvKey('sk-env', async (dir) => assert.ok(await loadSorter(dir)));
+});
+
+test('loadSorter is null when the SDK is not installed', async () => {
+  await withEnvKey('sk-env', async (dir) => {
+    const missing = async () => { throw new Error("Cannot find package '@anthropic-ai/sdk'"); };
+    const log = console.error;
+    console.error = () => {};
+    try {
+      assert.equal(await loadSorter(dir, { importSdk: missing }), null);
+    } finally {
+      console.error = log;
+    }
+  });
 });

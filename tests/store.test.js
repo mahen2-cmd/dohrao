@@ -669,6 +669,23 @@ test('a topic session shows only that topic and shares the daily new allowance',
   assert.equal(store.counts(deck.id, T0, ser).newLeft, 1);
 });
 
+test('the allowance is filled from the filtered topic even when other topics have older new cards', () => {
+  const deck = setup({ newPerDay: 2 });
+  store.addCards(deck.id, [['x1', ''], ['x2', ''], ['x3', '']], T0, { topicKey: 'animals' });
+  store.addCards(deck.id, [['s1', ''], ['s2', ''], ['s3', '']], T0 + 10, { topicKey: 'verb_ser' });
+  const ser = ['t:' + topicId(deck.id, 'verb_ser')];
+  assert.equal(store.counts(deck.id, T0 + 20, ser).new, 2);
+  const seen = [];
+  for (let i = 0; i < 2; i++) {
+    const c = store.nextCard(deck.id, T0 + 20, ser);
+    seen.push(c.front);
+    store.answerCard(c.id, Rating.Good, T0 + 20);
+  }
+  assert.deepEqual(seen, ['s1', 's2']);
+  // The allowance is the deck's: it is used up for every topic now.
+  assert.equal(store.counts(deck.id, T0 + 20).new, 0);
+});
+
 test('filtered counts are zero while deck counts are not', () => {
   const deck = setup();
   store.addCards(deck.id, [['a', '1']], T0, { topicKey: 'verb_ser' });

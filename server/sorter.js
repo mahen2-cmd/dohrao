@@ -1,6 +1,5 @@
 // Asks Claude to place flashcards in a deck's topics, propose topics for a deck, and put
 // loose topics into groups. Only card front/back text and topic/group names are sent.
-import Anthropic from '@anthropic-ai/sdk';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { aiText } from '../js/topics.js';
@@ -153,9 +152,10 @@ export function createSorter({ client, model = DEFAULT_MODEL }) {
 
 /**
  * Build a sorter from `ANTHROPIC_API_KEY`, or from `<dataDir>/claude.json`
- * (`{ "apiKey": "...", "model": "..." }`). Returns null when there is no key.
+ * (`{ "apiKey": "...", "model": "..." }`). Resolves to null when there is no key, or when the
+ * SDK is not installed, so the server runs without it. `importSdk` is replaced in tests.
  */
-export function loadSorter(dataDir) {
+export async function loadSorter(dataDir, { importSdk = () => import('@anthropic-ai/sdk') } = {}) {
   let file = {};
   const path = join(dataDir, 'claude.json');
   if (existsSync(path)) {
@@ -169,5 +169,12 @@ export function loadSorter(dataDir) {
   const apiKey = process.env.ANTHROPIC_API_KEY || (nonEmpty(file.apiKey) ? file.apiKey.trim() : '');
   if (!apiKey) return null;
   const model = nonEmpty(file.model) ? file.model.trim() : DEFAULT_MODEL;
+  let Anthropic;
+  try {
+    ({ default: Anthropic } = await importSdk());
+  } catch (error) {
+    console.error('Sorting is off: could not load @anthropic-ai/sdk (run npm ci).', error?.message ?? error);
+    return null;
+  }
   return createSorter({ client: new Anthropic({ apiKey }), model });
 }

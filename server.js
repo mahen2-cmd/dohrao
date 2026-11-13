@@ -225,8 +225,8 @@ function clientIp(req) {
 export function createRecallServer({ dataDir, origin, tts, ...rest }) {
   mkdirSync(dataDir, { recursive: true });
   const db = openDb(join(dataDir, 'recall.db'));
-  // `sorter: null` means sorting is off; leaving the option out looks for a key.
-  const sorter = 'sorter' in rest ? rest.sorter : loadSorter(dataDir);
+  // `sorter: null` means sorting is off; leaving the option out looks for a key (and the SDK).
+  const sorterReady = 'sorter' in rest ? Promise.resolve(rest.sorter) : loadSorter(dataDir);
   // Decks being sorted right now, so a second click does not start a second job.
   const sorting = new Set();
   const voice = tts ?? createTts({ root: ROOT, dataDir });
@@ -281,7 +281,7 @@ export function createRecallServer({ dataDir, origin, tts, ...rest }) {
   }
 
   /** Sort a deck in the background; a failure is logged and ends the job. */
-  function startSort(deckId) {
+  function startSort(sorter, deckId) {
     if (sorting.has(deckId)) return;
     sorting.add(deckId);
     sortDeck(db, sorter, deckId, Date.now())
@@ -302,9 +302,12 @@ export function createRecallServer({ dataDir, origin, tts, ...rest }) {
       return sendJson(res, 200, JSON.parse(row.data));
     }
     if (method !== 'POST') throw new HttpError(404, 'not-found');
+    const sorter = await sorterReady;
     if (!sorter) throw new HttpError(503, 'no-sorter');
     if (action === 'sort') {
-      startSort(deckId);
+      // A deck with no topics gets a proposal first.
+      if (!(JSON.parse(ownedDeck(db, user.id, deckId).data).topics ?? []).length) throw new HttpError(409, 'no-topics');
+      startSort(sorter, deckId);
       return sendJson(res, 202, { running: true });
     }
     if (action === 'propose') return sendJson(res, 200, await proposeForDeck(db, sorter, deckId, Date.now()));
@@ -315,7 +318,7 @@ export function createRecallServer({ dataDir, origin, tts, ...rest }) {
       } catch (error) {
         throw error.message === 'bad-request' ? new HttpError(400, 'bad-request') : error;
       }
-      startSort(deckId);
+      startSort(sorter, deckId);
       return noContent(res);
     }
     throw new HttpError(404, 'not-found');

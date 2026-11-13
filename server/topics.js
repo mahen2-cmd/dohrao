@@ -66,7 +66,10 @@ export async function sortDeck(db, sorter, deckId, now, { batch = 100 } = {}) {
   const write = db.prepare('UPDATE cards SET data = ? WHERE id = ?');
   let sorted = 0;
   let created = 0;
+  const exists = db.prepare('SELECT 1 FROM decks WHERE id = ?');
   for (let i = 0; i < pending.length; i += batch) {
+    // The deck was deleted while sorting: nothing left to do.
+    if (!exists.get(deckId)) break;
     const deck = deckData(db, deckId);
     const answer = await sorter.placeCards({
       deckName: deck.name,

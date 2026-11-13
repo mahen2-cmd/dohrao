@@ -2385,9 +2385,12 @@ function renderStudy(deck) {
               ? 'Add some cards to start studying.'
               : session.done
                 ? `You reviewed ${plural(session.done, 'card')} this session. Come back tomorrow for more.`
-                : 'Nothing is due in this deck right now.',
+                : filtered
+                  ? `Nothing is due in ${label} right now.`
+                  : 'Nothing is due in this deck right now.',
           ),
-          !empty && h('p', null, tomorrowText(c)),
+          // Tomorrow's numbers are for the whole deck, so they are left out while studying part of it.
+          !empty && !filtered && h('p', null, tomorrowText(c)),
           topicDone && h('button', { class: 'btn primary', type: 'button', onclick: () => { store.updateDeck(deck.id, { studyFilter: [] }); render(); } }, 'Study everything'),
           h('a', { class: topicDone ? 'btn' : 'btn primary', href: empty ? `#/deck/${deck.id}` : '#/' }, empty ? 'Go to deck' : 'Back to decks'),
         ),

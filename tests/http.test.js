@@ -368,11 +368,25 @@ test('sorting is refused to non-admins and for decks the admin does not own', as
   assert.deepEqual(sorter.calls, { place: 0, propose: 0, group: 0 });
 });
 
-test('the admin sorts a deck in the background', async (t) => {
+/** The test deck with one topic, so it can be sorted without a proposal first. */
+const topical = { ...deck, topics: [{ id: 't0', name: 'Other', groupId: null, by: 'admin' }], topicsAt: NOW };
+
+test('sorting a deck with no topics is refused; it needs a proposal first', async (t) => {
   const sorter = fakeSorter();
   const { port } = await start(t, { sorter });
   const admin = (await logIn(port, 'admin', 'admin-password')).cookie;
   await call(port, 'POST', 'api/sync', { cookie: admin, body: { decks: [deck], cards: [card] } });
+  const res = await call(port, 'POST', 'api/admin/decks/d1/sort', { cookie: admin });
+  assert.deepEqual([res.status, res.json], [409, { error: 'no-topics' }]);
+  assert.deepEqual(await sortDone(port, admin), { running: false, unsorted: 1 });
+  assert.equal(sorter.calls.place, 0);
+});
+
+test('the admin sorts a deck in the background', async (t) => {
+  const sorter = fakeSorter();
+  const { port } = await start(t, { sorter });
+  const admin = (await logIn(port, 'admin', 'admin-password')).cookie;
+  await call(port, 'POST', 'api/sync', { cookie: admin, body: { decks: [topical], cards: [card] } });
   assert.equal((await call(port, 'GET', 'api/admin/decks/d1/sort', { cookie: admin })).json.unsorted, 1);
   const started = await call(port, 'POST', 'api/admin/decks/d1/sort', { cookie: admin });
   assert.equal(started.status, 202);
@@ -388,7 +402,7 @@ test('a failing sort ends without crashing the server', async (t) => {
   const sorter = { ...fakeSorter(), async placeCards() { throw new Error('network down'); } };
   const { port } = await start(t, { sorter });
   const admin = (await logIn(port, 'admin', 'admin-password')).cookie;
-  await call(port, 'POST', 'api/sync', { cookie: admin, body: { decks: [deck], cards: [card] } });
+  await call(port, 'POST', 'api/sync', { cookie: admin, body: { decks: [topical], cards: [card] } });
   const log = console.error;
   console.error = () => {};
   try {

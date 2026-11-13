@@ -125,6 +125,19 @@ test('sortDeck groups loose topics first, only when the deck has groups', async 
   assert.equal(s2.calls.group.length, 0);
 });
 
+test('sortDeck stops when the deck is deleted while it runs', async () => {
+  const { db } = await seed({ topics: [{ id: 't1', name: 'Ser', groupId: null, by: 'file' }] });
+  db.prepare('UPDATE cards SET data = ? WHERE id = ?').run(JSON.stringify({ ...stored(db, 'c2'), topic: undefined, topicBy: undefined }), 'c2');
+  const sorter = fake({
+    place: () => {
+      db.prepare('DELETE FROM decks WHERE id = ?').run('d1');
+      return { placements: [], newTopics: [] };
+    },
+  });
+  await sortDeck(db, sorter, 'd1', LATER, { batch: 1 });
+  assert.equal(sorter.calls.place.length, 1);
+});
+
 test('sortDeck sends cards in batches', async () => {
   const { db, ana } = await seed({ topics: [{ id: 't1', name: 'Ser', groupId: null, by: 'file' }] });
   applyChanges(db, ana.id, { cards: [cardOf('c4'), cardOf('c5')] }, NOW);
