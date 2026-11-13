@@ -49,6 +49,17 @@ test('placeCards sends only front and back text and the topic list', async () =>
   assert.ok(user.includes('Ser') && user.includes('Food'));
 });
 
+test('every request asks for group and topic names in English', async () => {
+  const client = fakeClient(ok({ placements: [], newTopics: [], groups: [], topics: [] }));
+  const sorter = createSorter({ client });
+  await sorter.placeCards({ deckName: 'Portuguese A1', groups, topics, cards: [{ id: 'c1', front: 'hello', back: 'olá' }] });
+  await sorter.proposeTopics({ deckName: 'Portuguese A1', cards: [{ id: 'c1', front: 'hello', back: 'olá' }] });
+  for (const req of client.requests) {
+    assert.match(req.system, /names in English/);
+    assert.doesNotMatch(req.system, /language the deck is for studying/);
+  }
+});
+
 test('ignores placements it cannot use', async () => {
   const client = fakeClient(ok({
     placements: [

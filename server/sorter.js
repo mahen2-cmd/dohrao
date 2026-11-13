@@ -9,7 +9,7 @@ const DEFAULT_MODEL = 'claude-opus-5-5';
 const RULES = `You sort flashcards for a spaced-repetition app. Each card has a front (the prompt) and a back (the answer). Cards may contain LaTeX; read it as source.
 - Put each card in exactly one topic.
 - Prefer an existing topic. Create a new topic only when nothing fits.
-- Keep topic and group names short, in the language the deck is for studying.
+- Write all topic and group names in English, short and plain, whatever language the cards are in (for example "Greetings", not "Cumprimentos").
 - Only use card ids and topic ids you were given.`;
 
 const PLACE_SYSTEM = `${RULES}
