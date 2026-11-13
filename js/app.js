@@ -2,11 +2,18 @@ import * as api from './api.js';
 import { hasRichContent, imageToken, mathSpans, mathToken, parseContent, speechText } from './content.js';
 import { DAY, MINUTE, Rating, State, dayStart } from './fsrs.js';
 import { parseSpreadsheet } from './importer.js';
+import { HEAT_WEEKS, PHONE_QUERY, classifySwipe, inTab, swipeLeaning, tabFilters } from './phone.js';
 import { recentStudy, rightShare } from './progress.js';
 import * as store from './store.js';
 import { effectiveTopic, filterLabel, inFilter, readableTopicName, resolveFilter, topicKeyFromFileName, topicLabel } from './topics.js';
 
 const app = document.getElementById('app');
+
+// The phone layout (640px and narrower). Most of it is CSS; this is for the few places where
+// what is listed differs by width. Crossing the breakpoint (a rotation) draws the screen again.
+const phoneQuery = matchMedia(PHONE_QUERY);
+const isPhone = () => phoneQuery.matches;
+phoneQuery.addEventListener('change', () => render());
 const toasts = document.getElementById('toasts');
 
 // The card currently on screen in study mode.
@@ -109,7 +116,12 @@ function menu(label, items) {
   return el;
 }
 document.addEventListener('click', (e) => {
-  for (const open of document.querySelectorAll('details.menu[open]')) if (!open.contains(e.target)) open.removeAttribute('open');
+  // On a phone an open menu is a sheet over a dimmed backdrop, drawn by the menu itself: a tap
+  // on the backdrop lands on the menu element and closes it too.
+  for (const open of document.querySelectorAll('details.menu[open]')) if (!open.contains(e.target) || e.target === open) open.removeAttribute('open');
+});
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') for (const open of document.querySelectorAll('details.menu[open]')) open.removeAttribute('open');
 });
 
 const iconButton = (name, label, onclick, extra = '') =>
@@ -1422,7 +1434,8 @@ function brand(tag, attrs = {}) {
   return h(tag, { ...attrs, class: 'brand' }, 'Dohrao', h('span', { class: 'brand-ur', lang: 'ur', dir: 'rtl' }, 'دہراؤ'));
 }
 
-function topbar() {
+/** The top bar; `title` is what a phone shows on its left in place of the app's name. */
+function topbar(title) {
   const dark = document.documentElement.dataset.theme === 'dark';
   const here = location.hash.split('/')[1] || '';
   // On a phone the same links become a tab bar along the bottom, each with its icon.
@@ -1432,6 +1445,7 @@ function topbar() {
     'header',
     { class: 'topbar' },
     brand('a', { href: '#/' }),
+    title && h('span', { class: 'topbar-title phone-only' }, title),
     h('nav', { class: 'nav', 'aria-label': 'Main' }, tab('', 'Decks', 'decks'), tab('upcoming', 'Upcoming', 'calendar'), tab('stats', 'Statistics', 'chart')),
     h('span', { class: 'spacer' }),
     storageChip(),
@@ -2236,7 +2250,7 @@ function renderDeck(deck) {
   app.replaceChildren(
     h(
       'div',
-      { class: 'page' },
+      { class: 'page screen-drill' },
       topbar(),
       h('a', { class: 'back', href: '#/' }, icon('back'), 'All decks'),
       h(
@@ -2370,7 +2384,7 @@ function renderStudy(deck) {
     app.replaceChildren(
       h(
         'div',
-        { class: 'study' },
+        { class: 'study screen-drill' },
         top,
         h(
           'div',
@@ -2413,7 +2427,7 @@ function renderStudy(deck) {
   app.replaceChildren(
     h(
       'div',
-      { class: 'study' },
+      { class: 'study screen-drill' },
       top,
       h(
         'div',
