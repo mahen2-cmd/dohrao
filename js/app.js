@@ -86,6 +86,7 @@ const ICONS = {
   up: '<path d="M12 19V5M6 11l6-6 6 6"/>',
   down: '<path d="M12 5v14M6 13l6 6 6-6"/>',
   chevron: '<path d="M6 9l6 6 6-6"/>',
+  next: '<path d="M9 6l6 6-6 6"/>',
   swap: '<path d="M7 4L3 8l4 4M3 8h14M17 12l4 4-4 4M21 16H7"/>',
   grip: '<path d="M9 6h.01M15 6h.01M9 12h.01M15 12h.01M9 18h.01M15 18h.01"/>',
   sigma: '<path d="M18 5H6l6 7-6 7h12"/>',
@@ -106,11 +107,11 @@ function icon(name) {
 }
 
 /** A small menu behind a "more" button. It closes when an item is chosen or on a click elsewhere. */
-function menu(label, items) {
+function menu(label, items, glyph = 'more', extra = '') {
   const el = h(
     'details',
-    { class: 'menu' },
-    h('summary', { class: 'icon-btn', title: label, 'aria-label': label }, icon('more')),
+    { class: `menu ${extra}`.trim() },
+    h('summary', { class: 'icon-btn', title: label, 'aria-label': label }, icon(glyph)),
     h('div', { class: 'menu-items', onclick: () => el.removeAttribute('open') }, items),
   );
   return el;
@@ -1492,17 +1493,27 @@ function todayPanel(all, now) {
       { class: 'today-main' },
       h('p', { class: 'today-when' }, partOfDay(now)),
       h('h1', null, todayHeadline(due, reviewedToday)),
+      // On a phone the day's figures fit on one line under the headline.
+      h('p', { class: 'today-line phone-only' }, `${reviewedToday.toLocaleString()} reviewed today · ${streak}-day streak · ${tomorrow.toLocaleString()} tomorrow`),
       first &&
         h(
           'div',
-          { class: 'today-go' },
+          { class: 'today-go wide-only' },
           h('a', { class: 'btn primary lg', href: `#/study/${first.id}` }, icon('play'), 'Start review'),
+          h('span', null, waiting.length > 1 ? `${first.name} first, then ${plural(waiting.length - 1, 'more deck')}` : `From ${first.name}`),
+        ),
+      // On a phone the way in is docked above the tab bar, in reach of the thumb.
+      first &&
+        h(
+          'div',
+          { class: 'dock phone-only' },
+          h('a', { class: 'btn primary lg', href: `#/study/${first.id}` }, icon('play'), 'Start review', h('span', { class: 'dock-count' }, `· ${due.toLocaleString()}`)),
           h('span', null, waiting.length > 1 ? `${first.name} first, then ${plural(waiting.length - 1, 'more deck')}` : `From ${first.name}`),
         ),
     ),
     h(
       'dl',
-      { class: 'today-figures' },
+      { class: 'today-figures wide-only' },
       h('div', null, h('dd', null, reviewedToday.toLocaleString()), h('dt', null, 'reviewed today')),
       h(
         'div',
@@ -1536,7 +1547,16 @@ function renderHome() {
         { class: 'deck-main', href: `#/deck/${deck.id}` },
         h('span', { class: 'deck-name' }, deck.name),
         deckFrom(deck),
-        h('span', { class: 'deck-meta' }, plural(c.cards, 'card') + (c.reserve ? ` · ${c.reserve.toLocaleString()} on reserve` : '') + (c.tomorrow.total ? ` · ${c.tomorrow.total.toLocaleString()} tomorrow` : '')),
+        h('span', { class: 'deck-meta wide-only' }, plural(c.cards, 'card') + (c.reserve ? ` · ${c.reserve.toLocaleString()} on reserve` : '') + (c.tomorrow.total ? ` · ${c.tomorrow.total.toLocaleString()} tomorrow` : '')),
+        // A phone keeps the row to one short line; the reserve shows on the deck's own page.
+        h('span', { class: 'deck-meta phone-only' }, plural(c.cards, 'card') + (c.tomorrow.total ? ` · ${c.tomorrow.total.toLocaleString()} tomorrow` : '')),
+      ),
+      // On a phone: today's total and a chevron, the whole row opening the deck.
+      h(
+        'a',
+        { class: 'deck-due phone-only', href: `#/deck/${deck.id}`, tabindex: '-1', 'aria-hidden': 'true' },
+        c.total ? [h('i', { class: 'dot' }), c.total.toLocaleString()] : c.cards ? h('span', { class: 'deck-done' }, 'Done') : '',
+        icon('next'),
       ),
       countPills(c),
       h(
@@ -1564,8 +1584,17 @@ function renderHome() {
           h(
             'div',
             { class: 'actions' },
-            h('button', { class: 'btn', type: 'button', title: 'Import decks from an Anki .apkg file', onclick: pickAnkiFile }, icon('upload'), 'Import from Anki'),
-            h('button', { class: 'btn', type: 'button', onclick: () => openDeckDialog() }, icon('plus'), 'New deck'),
+            h('button', { class: 'btn wide-only', type: 'button', title: 'Import decks from an Anki .apkg file', onclick: pickAnkiFile }, icon('upload'), 'Import from Anki'),
+            h('button', { class: 'btn wide-only', type: 'button', onclick: () => openDeckDialog() }, icon('plus'), 'New deck'),
+            menu(
+              'New deck or import',
+              [
+                h('button', { type: 'button', onclick: () => openDeckDialog() }, icon('plus'), 'New deck'),
+                h('button', { type: 'button', onclick: pickAnkiFile }, icon('upload'), 'Import from Anki'),
+              ],
+              'plus',
+              'phone-only',
+            ),
           ),
         ),
         h('ul', { class: 'deck-list', 'aria-label': 'Decks' }, all.map(row)),
@@ -1588,7 +1617,7 @@ function renderHome() {
     h(
       'div',
       { class: 'page' },
-      topbar(),
+      topbar(partOfDay(now)),
       !decks.length && h('div', { class: 'page-head' }, h('div', null, h('h1', null, 'Decks'), h('p', { class: 'sub' }, 'Nothing here yet'))),
       body,
     ),
