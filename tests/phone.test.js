@@ -35,7 +35,9 @@ test('the axis that moved more decides, and vertical can be switched off', () =>
   assert.equal(classifySwipe({ ...box, verticalAllowed: true, dx: 100, dy: 120 }), Rating.Hard);
   assert.equal(classifySwipe({ ...box, verticalAllowed: true, dx: 130, dy: 120 }), Rating.Good);
   assert.equal(classifySwipe({ ...box, verticalAllowed: false, dx: 5, dy: 200 }), null);
-  assert.equal(classifySwipe({ ...box, verticalAllowed: false, dx: 100, dy: 120 }), Rating.Good);
+  // A long card scrolls up and down: a drag that is mostly vertical rates nothing at all.
+  assert.equal(classifySwipe({ ...box, verticalAllowed: false, dx: 100, dy: 120 }), null);
+  assert.equal(classifySwipe({ ...box, verticalAllowed: false, dx: 130, dy: 40 }), Rating.Good);
 });
 
 test('a tap on the card reveals, except on something of its own to press or scroll', () => {
@@ -58,4 +60,11 @@ test('a drag that starts inside something that scrolls sideways never swipes', (
   assert.equal(canSwipeFrom(text, { scrollsX, stop: card }), true);
   // The card itself scrolling sideways does not count: the walk stops at it.
   assert.equal(canSwipeFrom(text, { scrollsX: (el) => el === card, stop: card }), true);
+});
+
+test('the Reserve tab shows the whole reserve, whatever filters the Cards tab was left with', () => {
+  const f = { ...NO, groups: ['due'], topics: ['t:verbs'], due: 'week', added: 'month', lapses: 'some' };
+  assert.deepEqual(tabFilters(f, 'reserve'), { ...NO, groups: ['reserve'], sort: 'reserve' });
+  // The Cards tab keeps them: they are visible and clearable there.
+  assert.deepEqual(tabFilters(f, 'cards').topics, ['t:verbs']);
 });

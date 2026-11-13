@@ -3347,6 +3347,12 @@ table.upcoming {
   .screen-drill .grip {
     display: none;
   }
+  /* Holding a row ticks it: no text selection or iPhone callout on the way. */
+  .screen-drill .card-row {
+    -webkit-touch-callout: none;
+    -webkit-user-select: none;
+    user-select: none;
+  }
   .bulk > .btn {
     line-height: 1.2;
   }
@@ -3390,8 +3396,20 @@ table.upcoming {
     min-height: 0;
     overflow-y: auto;
     overscroll-behavior: contain;
-    justify-content: safe center;
+    justify-content: flex-start;
     padding: 24px 0;
+  }
+  /* Centred while it fits, and from the top once it scrolls (where "safe center" is unknown). */
+  .screen-drill .flashcard::before,
+  .screen-drill .flashcard::after {
+    content: '';
+    flex: 0 0 0;
+  }
+  .screen-drill .flashcard::before {
+    margin-top: auto;
+  }
+  .screen-drill .flashcard::after {
+    margin-bottom: auto;
   }
   .screen-drill .flashcard > * {
     flex-shrink: 0;
@@ -3464,6 +3482,10 @@ table.upcoming {
   .swipe-stamp.hard,
   .swipe-stamp.easy {
     color: var(--text);
+  }
+  /* A wide equation pans sideways even on a card that swipes. */
+  .screen-drill .flashcard .katex-display.overflows {
+    touch-action: pan-x;
   }
   .ruler .mark.lean {
     background: var(--accent);

@@ -2594,9 +2594,19 @@ function rate(rating) {
 function attachSwipe(card, options, now) {
   const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
   const scrollsX = (el) => el.scrollWidth > el.clientWidth + 1 && getComputedStyle(el).overflowX !== 'visible';
-  // A card long enough to scroll keeps up and down for scrolling.
-  const verticalAllowed = card.scrollHeight <= card.clientHeight + 1;
-  card.style.touchAction = verticalAllowed ? 'none' : 'pan-y';
+  // A card long enough to scroll keeps up and down for scrolling. Its length can change after
+  // it is drawn (an image loading), so this is checked again whenever its content resizes, and
+  // once more as each drag starts.
+  const fits = () => card.scrollHeight <= card.clientHeight + 1;
+  let verticalAllowed = true;
+  const measure = () => {
+    verticalAllowed = fits();
+    card.style.touchAction = verticalAllowed ? 'none' : 'pan-y';
+  };
+  measure();
+  const resized = new ResizeObserver(() => (card.isConnected ? measure() : resized.disconnect()));
+  for (const child of card.children) resized.observe(child);
+  for (const img of card.querySelectorAll('img')) img.addEventListener('load', measure);
   const stamp = h('div', { class: 'swipe-stamp', 'aria-hidden': 'true' });
   card.append(stamp);
   const marks = [...app.querySelectorAll('.ruler .mark')];
@@ -2623,21 +2633,23 @@ function attachSwipe(card, options, now) {
     show(0, 0);
   };
 
+  // One finger swipes; a second one landing does not restart or steer it.
   card.addEventListener('pointerdown', (e) => {
-    if (e.pointerType !== 'touch' || !canSwipeFrom(e.target, { scrollsX, stop: card })) return;
-    start = { x: e.clientX, y: e.clientY };
+    if (start || e.pointerType !== 'touch' || !canSwipeFrom(e.target, { scrollsX, stop: card })) return;
+    measure();
+    start = { x: e.clientX, y: e.clientY, id: e.pointerId };
     card.classList.add('swiping');
   });
   card.addEventListener('pointermove', (e) => {
-    if (start) show(e.clientX - start.x, e.clientY - start.y);
+    if (start && e.pointerId === start.id) show(e.clientX - start.x, e.clientY - start.y);
   });
   card.addEventListener('pointerup', (e) => {
-    if (!start) return;
+    if (!start || e.pointerId !== start.id) return;
     const rating = show(e.clientX - start.x, e.clientY - start.y);
     if (rating) rate(rating);
     else reset();
   });
-  card.addEventListener('pointercancel', reset);
+  card.addEventListener('pointercancel', (e) => start && e.pointerId === start.id && reset());
 }
 
 /** On a phone, the study card's tools in a sheet: edit, listen again, delete. Null when there are none. */

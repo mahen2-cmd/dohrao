@@ -9,11 +9,12 @@ export const PHONE_QUERY = '(max-width: 640px)';
 export const HEAT_WEEKS = { phone: 16, wide: 53 };
 
 /**
- * The list filters a deck tab uses on a phone, as a new object: the Reserve tab shows the
- * reserve in the order it is pulled in, and the Cards tab drops the "On reserve" chip.
+ * The list filters a deck tab uses on a phone, as a new object: the Reserve tab shows the whole
+ * reserve in the order it is pulled in (it has no filters of its own to show or clear), and the
+ * Cards tab drops the "On reserve" chip.
  */
 export function tabFilters(filters, tab) {
-  if (tab === 'reserve') return { ...filters, groups: ['reserve'], sort: 'reserve' };
+  if (tab === 'reserve') return { ...filters, groups: ['reserve'], due: 'any', added: 'any', lapses: 'any', topics: [], sort: 'reserve' };
   return { ...filters, groups: filters.groups.filter((g) => g !== 'reserve') };
 }
 
@@ -33,6 +34,8 @@ export function swipeLeaning({ dx, dy, verticalAllowed }) {
 
 /** The answer a drag gives when let go, or null when it fell short of the threshold. */
 export function classifySwipe({ dx, dy, width, height, verticalAllowed }) {
+  // On a card that scrolls, a mostly vertical drag is a scroll, never a sideways rating.
+  if (!verticalAllowed && Math.abs(dy) > Math.abs(dx)) return null;
   const rating = swipeLeaning({ dx, dy, verticalAllowed });
   if (rating === Rating.Good || rating === Rating.Again) return Math.abs(dx) >= SWIPE.x * width ? rating : null;
   if (rating) return Math.abs(dy) >= SWIPE.y * height ? rating : null;
