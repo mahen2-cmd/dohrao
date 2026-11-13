@@ -1093,15 +1093,24 @@ function openProposalDialog(deck, proposal) {
   );
 }
 
+/** How many of a deck's topics sit outside any group, counted only when the deck has groups. */
+function looseTopics(deck) {
+  const groups = deck?.groups ?? [];
+  if (!groups.length) return 0;
+  return (deck.topics ?? []).filter((t) => !groups.some((g) => g.id === t.groupId)).length;
+}
+
 /** On a deck page: the unsorted count with Sort now, or the way in to a first sort. */
 function sortBar(deck) {
   if (!canSort(deck.id)) return null;
   const hasTopics = (deck.topics ?? []).length > 0;
   const unsorted = store.unsortedCount(deck.id);
+  const loose = looseTopics(deck);
   if (sorting.has(deck.id)) return h('p', { class: 'message', role: 'status' }, 'Sorting cards into topics. You can keep studying.');
   if (proposing.has(deck.id)) return h('p', { class: 'message', role: 'status' }, 'Reading the cards to suggest topics. This can take a minute.');
-  if (hasTopics && unsorted > 0) {
-    return h('p', { class: 'message' }, `${unsorted.toLocaleString()} unsorted · `, h('button', { class: 'btn', type: 'button', onclick: () => requestSort(deck.id) }, 'Sort now'));
+  if (hasTopics && (unsorted > 0 || loose > 0)) {
+    const what = unsorted > 0 ? `${unsorted.toLocaleString()} unsorted` : `${plural(loose, 'topic')} without a group`;
+    return h('p', { class: 'message' }, `${what} · `, h('button', { class: 'btn', type: 'button', onclick: () => requestSort(deck.id) }, 'Sort now'));
   }
   if (!hasTopics && store.cardsIn(deck.id).length > 0) {
     return h('p', { class: 'message' }, h('button', { class: 'btn', type: 'button', onclick: () => startProposal(deck) }, 'Sort this deck into topics'));
@@ -1199,9 +1208,16 @@ function openImportDialog(deck, fileName, rows, toReserve = false) {
         e.preventDefault();
         const { cards } = plan();
         if (!cards.length) return;
+        const hadTopic = !!topicKey && (store.deck(deck.id).topics ?? []).some((t) => t.key === topicKey);
         store.addCards(deck.id, cards, Date.now(), { reserved: reserved.checked, ...(topicKey && { topicKey }) });
         dialog.close();
         if (!topicKey) requestSort(deck.id);
+        else if (!hadTopic) {
+          // A new topic from a file that fits no group yet: the sorter puts it in one.
+          const after = store.deck(deck.id);
+          const made = (after.topics ?? []).find((t) => t.key === topicKey);
+          if (made && made.groupId == null && (after.groups ?? []).length) requestSort(deck.id);
+        }
         toast(`Imported ${plural(cards.length, 'card')} into ${reserved.checked ? `the reserve of ${deck.name}` : deck.name}`);
       },
     },
