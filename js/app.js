@@ -2,7 +2,7 @@ import * as api from './api.js';
 import { hasRichContent, imageToken, mathSpans, mathToken, parseContent, speechText } from './content.js';
 import { DAY, MINUTE, Rating, State, dayStart } from './fsrs.js';
 import { parseSpreadsheet } from './importer.js';
-import { TABBED_DECK_QUERY, ownTicks } from './deckpage.js';
+import { TABBED_DECK_QUERY, clampAmount, ownTicks, pruneTicks, pullAllLabel, pullPreview } from './deckpage.js';
 import { HEAT_WEEKS, PHONE_QUERY, canSwipeFrom, classifySwipe, inTab, isRevealTap, swipeLeaning, tabFilters } from './phone.js';
 import { recentStudy, rightShare } from './progress.js';
 import * as store from './store.js';
@@ -37,6 +37,9 @@ let filtersDeck = null;
 let filtersOpen = false;
 // On a phone the deck page shows one of its tabs: 'cards', 'reserve' or 'topics'.
 let deckTab = 'cards';
+// On a wide screen: the topic the reserve column pulls from ('' for all), and how many (null: the default).
+let reserveTopic = '';
+let pullAmount = null;
 // Ids of the cards ticked in that list. Only cards on screen stay selected.
 let selected = new Set();
 // How many cards the list draws at first, and how many more each "Show more" adds.
@@ -2002,8 +2005,12 @@ function reserveBar(deck, n) {
  * A deck's card list, in one of three views: 'all' (every card, the filters as set), 'cards'
  * (the cards being studied) or 'reserve' (the reserve, in the order it is pulled in). Lists
  * share the ticked cards, but each prunes and acts only on its own.
+ *
+ * `column` makes a reserve list the wide screen's reserve column: narrowed to `column.topics`,
+ * each row numbered by its place in the queue with the cards Pull in would take tinted
+ * (`column.preview()`), and the ticked cards' actions handed to `column.onDraw` for its foot.
  */
-function cardList(deck, view, { filters, filtering, editable, hasTopics, now }) {
+function cardList(deck, view, { filters, filtering, editable, hasTopics, now, column = null }) {
   const cards = store.cardsIn(deck.id);
   const list = h('div', { class: 'deck-cards' });
   const shown = h('span', { class: 'count' });
@@ -2017,15 +2024,12 @@ function cardList(deck, view, { filters, filtering, editable, hasTopics, now }) 
     const q = query.trim();
     // A view narrows the list: the reserve, or everything else.
     const matches = store
-      .findCards(deck.id, { text: q, ...(view === 'all' ? filters : tabFilters(filters, view)) }, now)
+      .findCards(deck.id, { text: q, ...(view === 'all' ? filters : tabFilters(filters, view)), ...(column && { topics: column.topics }) }, now)
       .filter((card) => view === 'all' || inTab(card, view));
     shown.textContent = q || filtering ? `${matches.length.toLocaleString()} of ${plural(cards.length, 'card')}` : plural(cards.length, 'card');
     // Only cards on screen stay ticked; ticks in another list's view are that list's to keep.
+    pruneTicks(selected, matches, view, store.card);
     const mine = new Set(ownTicks(selected, matches, view));
-    for (const id of [...mine]) {
-      const card = store.card(id);
-      if (!card || ((view === 'all' || inTab(card, view)) && !mine.has(id))) selected.delete(id);
-    }
     const pick = (ids, on) => {
       for (const id of ids) on ? selected.add(id) : selected.delete(id);
       drawList();
@@ -2055,11 +2059,15 @@ function cardList(deck, view, { filters, filtering, editable, hasTopics, now }) 
       if (first) move([...mine], { before: first.id });
     };
     const moveButton = (label, title, onclick, glyph) => h('button', { class: 'btn', type: 'button', title, onclick }, glyph && icon(glyph), label);
+    column?.onDraw({ ticked: [...mine], movable: movable && line.length > 1, step, toTop, toBottom: () => move([...mine]), untick: () => pick([...mine], false) });
     if (!matches.length) {
       const message = q && !filtering ? `No cards match “${q}”.` : q ? `No cards match “${q}” with these filters.` : 'No cards match these filters.';
       list.replaceChildren(h('div', { class: 'card-list' }, h('div', { class: 'list-empty' }, message)));
       return;
     }
+    // In the reserve column: each card's place in the queue, and the ones Pull in would take.
+    const preview = column?.preview();
+    const lastNext = preview && [...preview.next].at(-1);
     list.replaceChildren(
       h(
         'div',
@@ -2076,8 +2084,12 @@ function cardList(deck, view, { filters, filtering, editable, hasTopics, now }) 
               indeterminate: mine.size > 0 && mine.size < matches.length,
               onchange: (e) => pick(matches.map((card) => card.id), e.target.checked),
             }),
-            mine.size ? `${mine.size.toLocaleString()} selected` : matches.length === cards.length ? 'Select all' : `Select all ${matches.length.toLocaleString()} shown`,
+            // The reserve column's foot says how many are ticked; its top only offers to tick them all.
+            mine.size && !column ? `${mine.size.toLocaleString()} selected` : matches.length === cards.length || column ? 'Select all' : `Select all ${matches.length.toLocaleString()} shown`,
           ),
+          column
+            ? line.length > 1 && !mine.size && h('span', { class: 'hint' }, 'Drag to reorder')
+            : [
           line.length > 1 && !mine.size && h('span', { class: 'hint' }, 'Drag cards to reorder them, or tick several to move them together.'),
           // Only with the whole reserve in view, so nothing out of sight moves.
           line.length > 1 &&
@@ -2151,6 +2163,7 @@ function cardList(deck, view, { filters, filtering, editable, hasTopics, now }) 
             ],
             ),
           mine.size > 0 && h('button', { class: 'btn ghost bulk-cancel', type: 'button', onclick: () => pick([...mine], false) }, 'Cancel'),
+              ],
         ),
         matches.slice(0, limit).map((card) => {
           const status = cardStatus(card, now);
@@ -2167,7 +2180,7 @@ function cardList(deck, view, { filters, filtering, editable, hasTopics, now }) 
           const row = h(
             'div',
             {
-              class: `card-row ${selected.has(card.id) ? 'selected' : ''} ${editable ? '' : 'read-only'} ${hasTopics ? 'has-topic' : ''}`,
+              class: `card-row ${selected.has(card.id) ? 'selected' : ''} ${editable ? '' : 'read-only'} ${hasTopics && !column ? 'has-topic' : ''} ${preview?.next.has(card.id) ? 'next' : ''} ${card.id === lastNext ? 'next-last' : ''}`,
               onclick: editable && (() => openCardDialog({ card })),
               // A phone reorders through the Move sheet: touch does not drag rows.
               ...(sortable && !isPhone() && {
@@ -2200,11 +2213,13 @@ function cardList(deck, view, { filters, filtering, editable, hasTopics, now }) 
               sortable && h('span', { class: 'grip', title: 'Drag to reorder' }, icon('grip')),
               h('input', { type: 'checkbox', 'aria-label': 'Select card', checked: selected.has(card.id), onchange: (e) => pick([card.id], e.target.checked) }),
             ),
+            column && h('span', { class: 'place' }, preview.place.get(card.id)?.toLocaleString()),
             h('div', { class: 'text' }, rich(card.front)),
             h('div', { class: 'text back-text' }, rich(card.back)),
-            hasTopics && h('div', { class: 'topic-name' }, topicLabel(deck, card)),
-            statusMark(status, status.label, 'due'),
-            editable &&
+            !column && hasTopics && h('div', { class: 'topic-name' }, topicLabel(deck, card)),
+            !column && statusMark(status, status.label, 'due'),
+            !column &&
+              editable &&
               h(
                 'div',
                 { class: 'row-actions', onclick: (e) => e.stopPropagation() },
@@ -2251,7 +2266,10 @@ function renderDeck(deck) {
     filtersDeck = deck.id;
     selected = new Set();
     deckTab = 'cards';
+    reserveTopic = '';
+    pullAmount = null;
   }
+  if (reserveTopic && !topicOptions(deck, null).some((o) => o.value === reserveTopic)) reserveTopic = '';
   const hasTopics = (deck.topics ?? []).length > 0;
   // A topic filter that no longer exists (deleted, or the deck changed) is dropped.
   if (filters.topics.length && !topicOptions(deck, null).some((o) => o.value === filters.topics[0])) filters = { ...filters, topics: [] };
@@ -2330,13 +2348,14 @@ function renderDeck(deck) {
 
   const options = { filters, filtering, editable, hasTopics, now };
   // Up to 899px one list fills the chosen tab; wider, the reserve and the studying cards sit side by side.
-  const lists = tabbed ? [cardList(deck, deckTab === 'reserve' ? 'reserve' : 'cards', options)] : [cardList(deck, 'reserve', options), cardList(deck, 'cards', options)];
+  const reserveCol = !tabbed && reserveColumn(deck, editable, options);
+  const lists = tabbed ? [cardList(deck, deckTab === 'reserve' ? 'reserve' : 'cards', options)] : [reserveCol.list, cardList(deck, 'cards', options)].filter(Boolean);
   if (tabbed) {
     lists[0].el.id = 'deck-cards';
     lists[0].el.setAttribute('role', 'tabpanel');
     lists[0].el.setAttribute('aria-labelledby', `deck-tab-${deckTab}`);
   }
-  const [reserveList, studyList] = tabbed ? [null, null] : lists;
+  const studyList = !tabbed && lists.at(-1);
 
   const search = h('input', {
     type: 'search',
@@ -2425,7 +2444,7 @@ function renderDeck(deck) {
     content = h(
       'div',
       { class: 'deck-columns' },
-      reserveColumn(deck, c, editable, reserveList),
+      reserveCol.el,
       h(
         'section',
         { class: 'deck-studying', 'aria-label': 'Studying' },
@@ -2485,15 +2504,155 @@ function renderDeck(deck) {
   );
 }
 
-/** On a wide screen, the reserve's own column: every reserve card in the order it is pulled in. */
-function reserveColumn(deck, c, editable, list) {
-  return h(
-    'section',
-    { class: 'deck-reserve', 'aria-label': 'Reserve' },
-    h('div', { class: 'column-head' }, h('h2', null, 'Reserve'), h('span', null, `${c.reserve.toLocaleString()} · pulled in from the top`)),
-    reserveBar(deck, c.reserve),
-    list.el,
+/**
+ * On a wide screen, the reserve's own column: every reserve card in the order it is pulled in,
+ * with Pull in at its foot and the cards it would take tinted. Returns the column and its list
+ * (null when the reserve is empty).
+ */
+function reserveColumn(deck, editable, options) {
+  const hasTopics = (deck.topics ?? []).length > 0;
+  const topics = reserveTopic ? [reserveTopic] : [];
+  // What Pull in takes from, asked afresh each time: dragging a card changes the order.
+  const queue = () => store.findCards(deck.id, { groups: ['reserve'], topics, sort: 'reserve' }, Date.now());
+  const total = store.reserveIn(deck.id).length;
+  const amount = (n = queue().length) => clampAmount(pullAmount ?? 10, n);
+  const topicName = reserveTopic && topicOptions(deck, null).find((o) => o.value === reserveTopic)?.textContent;
+  const pulledToast = (pulled) => toast(`${plural(pulled, 'card')} pulled in as new ${pulled === 1 ? 'card' : 'cards'}`);
+  const pullNext = (n) => {
+    pulledToast(store.pullFromReserve(deck.id, n, Date.now(), topics.length ? topics : undefined));
+    render();
+  };
+
+  const waiting = queue().length;
+  const more = [
+    waiting > 1 && h('button', { type: 'button', onclick: () => pullNext(Infinity) }, icon('box'), pullAllLabel(waiting, topicName)),
+    total > 1 &&
+      h(
+        'button',
+        {
+          type: 'button',
+          title: 'Turn the whole reserve around, so the last card is pulled in first',
+          onclick: () => {
+            store.reverseReserve(deck.id);
+            render();
+          },
+        },
+        icon('swap'),
+        'Reverse order',
+      ),
+    editable && h('button', { type: 'button', title: 'Import cards from a CSV or Excel file straight into the reserve', onclick: () => pickImportFile(deck, true) }, icon('upload'), 'Import to reserve'),
+  ].filter(Boolean);
+  const head = h(
+    'div',
+    { class: 'column-head' },
+    h('h2', null, 'Reserve'),
+    h('span', null, `${total.toLocaleString()} · pulled in from the top`),
+    more.length > 0 && menu('More for the reserve', more),
   );
+
+  if (!total) {
+    return {
+      list: null,
+      el: h(
+        'section',
+        { class: 'deck-reserve', 'aria-label': 'Reserve' },
+        head,
+        h(
+          'div',
+          { class: 'reserve-box reserve-empty' },
+          h('b', null, 'Nothing on reserve'),
+          h('p', null, 'Cards on reserve are kept out of study until you pull them in.'),
+          editable && h('button', { class: 'btn', type: 'button', onclick: () => pickImportFile(deck, true) }, icon('upload'), 'Import to reserve'),
+        ),
+      ),
+    };
+  }
+
+  // The foot with nothing ticked: the topic, how many, and Pull in. Built once, so typing in the
+  // number keeps its focus while the tint follows it.
+  const topicSelect =
+    hasTopics &&
+    h(
+      'select',
+      {
+        class: 'reserve-topic',
+        'aria-label': 'Which topic to pull in from',
+        onchange: (e) => {
+          reserveTopic = e.target.value;
+          render();
+        },
+      },
+      topicOptions(deck, topicTotals(deck, Date.now())).map((o) => Object.assign(o, { selected: o.value === reserveTopic })),
+    );
+  const amountBox = h('input', {
+    type: 'number',
+    min: 1,
+    max: waiting,
+    step: 1,
+    value: amount(waiting),
+    'aria-label': 'How many cards to pull in',
+    oninput: () => {
+      pullAmount = amountBox.value === '' ? null : Number(amountBox.value);
+      list.draw();
+    },
+    onchange: () => {
+      amountBox.value = amount();
+    },
+  });
+  const pullButton = h('button', { class: 'btn primary', type: 'submit' });
+  const plain = h(
+    'form',
+    {
+      class: 'reserve-pull',
+      onsubmit: (e) => {
+        e.preventDefault();
+        pullNext(amount());
+      },
+    },
+    topicSelect,
+    waiting > 0 ? h('div', { class: 'foot-row' }, amountBox, pullButton) : h('p', { class: 'foot-note' }, 'Nothing on reserve in this topic.'),
+  );
+
+  const foot = h('div', { class: 'reserve-foot' });
+  const drawFoot = ({ ticked, movable, step, toTop, toBottom, untick }) => {
+    if (!ticked.length) {
+      pullButton.textContent = `Pull in the next ${amount().toLocaleString()}`;
+      if (foot.firstChild !== plain) foot.replaceChildren(plain);
+      return;
+    }
+    const moveButton = (label, title, onclick, glyph) => h('button', { class: 'btn', type: 'button', title, onclick }, glyph && icon(glyph), label);
+    foot.replaceChildren(
+      h('div', { class: 'foot-row' }, h('b', null, `${ticked.length.toLocaleString()} selected`), h('button', { class: 'btn ghost', type: 'button', onclick: untick }, 'Cancel')),
+      h(
+        'div',
+        { class: 'foot-row wrap' },
+        h(
+          'button',
+          {
+            class: 'btn primary',
+            type: 'button',
+            title: 'Pull the ticked reserve cards in as new cards, in their reserve order',
+            onclick: () => {
+              pulledToast(store.pullCards(ticked));
+              render();
+            },
+          },
+          icon('box'),
+          `Pull in ${ticked.length.toLocaleString()}`,
+        ),
+        movable && [
+          moveButton('Up', 'Move up one place', () => step(false), 'up'),
+          moveButton('Down', 'Move down one place', () => step(true), 'down'),
+          moveButton('To top', 'Move to the front of the reserve, to be pulled in first', toTop),
+          moveButton('To bottom', 'Move to the end of the reserve, to be pulled in last', toBottom),
+        ],
+        editable && h('button', { class: 'btn danger', type: 'button', onclick: () => removeCards(ticked) }, icon('trash'), 'Delete'),
+      ),
+    );
+  };
+
+  const list = cardList(deck, 'reserve', { ...options, column: { topics, preview: () => pullPreview(queue(), amount()), onDraw: drawFoot } });
+  return { list, el: h('section', { class: 'deck-reserve', 'aria-label': 'Reserve' }, head, h('div', { class: 'reserve-box' }, list.el, foot)) };
 }
 
 /**

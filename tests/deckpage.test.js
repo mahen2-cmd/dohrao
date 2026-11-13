@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { clampAmount, ownTicks, pullAllLabel, pullPreview } from '../js/deckpage.js';
+import { clampAmount, ownTicks, pruneTicks, pullAllLabel, pullPreview } from '../js/deckpage.js';
 
 test('the amount stays within what the queue holds', () => {
   assert.equal(clampAmount(10, 3), 3);
@@ -39,4 +39,14 @@ test('each column acts only on its own ticked cards', () => {
   assert.deepEqual(ownTicks(ticked, shown, 'reserve'), ['r']);
   assert.deepEqual(ownTicks(ticked, shown, 'cards'), ['s']);
   assert.deepEqual(ownTicks(ticked, shown, 'all').sort(), ['r', 's']);
+});
+
+test('a list clears its own ticks that are no longer shown, and keeps the other list\'s', () => {
+  const all = { r1: { id: 'r1', reserved: true }, r2: { id: 'r2', reserved: true }, s1: { id: 's1', reserved: false } };
+  const ticked = new Set(['r1', 'r2', 's1', 'deleted']);
+  pruneTicks(ticked, [all.r1], 'reserve', (id) => all[id]);
+  assert.deepEqual([...ticked].sort(), ['r1', 's1']);
+  const everything = new Set(['r1', 's1']);
+  pruneTicks(everything, [all.s1], 'all', (id) => all[id]);
+  assert.deepEqual([...everything], ['s1']);
 });

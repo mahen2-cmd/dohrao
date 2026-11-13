@@ -35,3 +35,15 @@ export function pullAllLabel(count, topicName) {
 export function ownTicks(selected, cards, view) {
   return cards.filter((card) => selected.has(card.id) && (view === 'all' || inTab(card, view))).map((card) => card.id);
 }
+
+/**
+ * Untick, in place, the cards a list no longer shows: those in its view that are not among
+ * `shown`, and any that no longer exist. Ticks in another list's view are left alone.
+ */
+export function pruneTicks(selected, shown, view, cardOf) {
+  const kept = new Set(shown.map((card) => card.id));
+  for (const id of [...selected]) {
+    const card = cardOf(id);
+    if (!card || ((view === 'all' || inTab(card, view)) && !kept.has(id))) selected.delete(id);
+  }
+}

@@ -787,6 +787,121 @@ kbd {
 .filter-panel {
   margin-bottom: 16px;
 }
+.column-head .menu {
+  margin-left: auto;
+}
+/* The reserve column stays in view as the page scrolls; its cards scroll inside it, above Pull in. */
+.deck-reserve {
+  position: sticky;
+  top: 16px;
+}
+.reserve-box {
+  display: flex;
+  flex-direction: column;
+  /* Short enough that Pull in shows under the header when the page opens. */
+  max-height: max(340px, calc(100vh - 300px));
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  overflow: hidden;
+}
+.reserve-box .deck-cards {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+.reserve-box .select-bar {
+  padding-left: 8px;
+}
+.deck-reserve .card-row {
+  grid-template-columns: auto 26px minmax(0, 1fr) minmax(0, 1fr);
+  gap: 10px;
+  padding-left: 8px;
+}
+.deck-reserve .place {
+  color: var(--muted);
+  font-size: 12px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+/* The cards Pull in would take: tinted, with a line under the last of them. */
+.card-row.next:not(.selected) {
+  background: color-mix(in srgb, var(--accent) 7%, transparent);
+}
+.card-row.next .place {
+  color: var(--accent);
+}
+.card-row.next-last {
+  border-bottom: 2px dashed var(--accent);
+}
+.reserve-foot {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border-top: 1px solid var(--border-strong);
+}
+.reserve-pull {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.foot-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.foot-row.wrap {
+  flex-wrap: wrap;
+}
+.foot-row b {
+  flex: 1;
+  font-weight: 600;
+}
+.reserve-foot input,
+.reserve-foot select {
+  height: 36px;
+  padding: 0 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text);
+}
+.reserve-foot input {
+  width: 72px;
+}
+.reserve-foot select {
+  width: 100%;
+}
+.reserve-foot input:focus,
+.reserve-foot select:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.reserve-pull .btn.primary {
+  flex: 1;
+  justify-content: center;
+}
+.foot-note {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13.5px;
+}
+.reserve-empty {
+  gap: 8px;
+  padding: 20px;
+  color: var(--muted);
+}
+.reserve-empty b {
+  color: var(--text);
+}
+.reserve-empty p {
+  margin: 0;
+}
+.reserve-empty .btn {
+  align-self: flex-start;
+}
 
 .toolbar {
   display: flex;
