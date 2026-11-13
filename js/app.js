@@ -4,7 +4,7 @@ import { DAY, MINUTE, Rating, State, dayStart } from './fsrs.js';
 import { parseSpreadsheet } from './importer.js';
 import { recentStudy, rightShare } from './progress.js';
 import * as store from './store.js';
-import { filterLabel, inFilter, readableTopicName, resolveFilter, topicKeyFromFileName } from './topics.js';
+import { effectiveTopic, filterLabel, inFilter, readableTopicName, resolveFilter, topicKeyFromFileName } from './topics.js';
 
 const app = document.getElementById('app');
 const toasts = document.getElementById('toasts');
@@ -705,7 +705,7 @@ function openCardDialog({ card, deckId }) {
   const canReserve = !card || card.state === State.New;
   const note = h('span', { class: 'note' }, 'Ctrl + Enter to save');
   // Topics belong to a deck, so the choices follow the deck chosen.
-  const currentTopic = (deck) => (card && deck?.topics?.some((t) => t.id === card.topic) && card.deckId === deck.id ? card.topic : '');
+  const currentTopic = (deck) => (card && deck && card.deckId === deck.id ? effectiveTopic(deck, card) : '');
   const topicSelect = h('select', { 'aria-label': 'Topic' });
   const topicField = h('label', { class: 'field' }, h('span', null, 'Topic'), topicSelect);
   const fillTopics = () => {
@@ -1565,20 +1565,8 @@ function renderHome() {
   );
 }
 
-/** A deck's topic counts with any card whose topic no longer exists folded into Unsorted. */
-function topicTotals(deck, now) {
-  const known = new Set((deck.topics ?? []).map((t) => t.id));
-  const out = new Map();
-  for (const [id, n] of store.topicCounts(deck.id, now)) {
-    const key = known.has(id) ? id : '';
-    const sum = out.get(key) ?? { due: 0, fresh: 0, reserve: 0 };
-    sum.due += n.due;
-    sum.fresh += n.fresh;
-    sum.reserve += n.reserve;
-    out.set(key, sum);
-  }
-  return out;
-}
+/** A deck's topic counts; a card whose topic no longer exists counts as Unsorted (see `effectiveTopic`). */
+const topicTotals = (deck, now) => store.topicCounts(deck.id, now);
 
 const countsText = (n) => [n.due && `${n.due.toLocaleString()} due`, n.fresh && `${n.fresh.toLocaleString()} new`].filter(Boolean).join(', ') || 'Nothing due';
 
@@ -1718,7 +1706,7 @@ function topicChoices(deck, value) {
 }
 
 /** The topic a card sits in, if that topic still exists. */
-const topicOf = (deck, card) => (deck?.topics ?? []).find((t) => t.id === card.topic);
+const topicOf = (deck, card) => (deck?.topics ?? []).find((t) => t.id === effectiveTopic(deck, card));
 
 /** Move ticked cards into a topic, or out of any topic. */
 function openMoveToTopic(deck, ids) {
@@ -1842,7 +1830,7 @@ function openTopicsDialog(deck) {
     const groups = deck.groups ?? [];
     const topics = deck.topics ?? [];
     const loose = topics.filter((t) => !groups.some((g) => g.id === t.groupId));
-    const unsorted = store.cardsIn(deck.id).filter((c) => !topics.some((t) => t.id === c.topic)).length;
+    const unsorted = store.cardsIn(deck.id).filter((c) => !effectiveTopic(deck, c)).length;
     box.replaceChildren(
       !editable && h('p', { class: 'pick-note' }, `${deck.from ? `${deck.from} sets` : 'The owner sets'} this deck's topics. You can see them here, but not change them.`),
       !topics.length && !groups.length && h('p', { class: 'pick-note' }, editable ? 'This deck has no topics yet. Add one below, then move cards into it.' : 'This deck has no topics.'),
@@ -2311,7 +2299,7 @@ const isShort = (text) => text.length <= 28 && !/\n|\\[([]|\[image:/.test(text);
 function currentStudyCard(deckId, now) {
   const deck = store.deck(deckId);
   let card = session.cardId && store.card(session.cardId);
-  if (!card || card.deckId !== deckId || card.reserved || !inFilter(card, resolveFilter(deck, deck.studyFilter))) {
+  if (!card || card.deckId !== deckId || card.reserved || !inFilter(card, resolveFilter(deck, deck.studyFilter), deck)) {
     card = store.nextCard(deckId, now, deck.studyFilter);
     session.cardId = card?.id ?? null;
     session.revealed = false;

@@ -56,9 +56,18 @@ export function resolveFilter(deck, filter) {
   return set;
 }
 
-/** Whether a card is in the resolved filter. A card with no topic counts as Unsorted. */
-export function inFilter(card, set) {
-  return set === null || set.has(card.topic ?? '');
+/**
+ * The topic a card is in: its `topic` while the deck still has that topic, otherwise `''`
+ * (Unsorted). A topic id the deck no longer has counts as no topic, everywhere.
+ */
+export function effectiveTopic(deck, card) {
+  const id = card.topic;
+  return id && (deck?.topics ?? []).some((t) => t.id === id) ? id : '';
+}
+
+/** Whether a card in `deck` is in the resolved filter. A card with no topic counts as Unsorted. */
+export function inFilter(card, set, deck) {
+  return set === null || set.has(effectiveTopic(deck, card));
 }
 
 /** Short words for the filter: `Everything`, one name, or `Verbs and 2 more`. */

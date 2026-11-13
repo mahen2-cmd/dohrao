@@ -2,6 +2,7 @@
 // and approving a proposal. Scheduling data (progress rows) is never touched here.
 import { randomUUID } from 'node:crypto';
 import { addTombstone } from './fields.js';
+import { effectiveTopic } from '../js/topics.js';
 
 const parse = (text) => (text ? JSON.parse(text) : {});
 const NAME_MAX = 60;
@@ -16,11 +17,12 @@ const deckData = (db, deckId) => parse(db.prepare('SELECT data FROM decks WHERE 
 const saveDeck = (db, deckId, deck) =>
   db.prepare('UPDATE decks SET data = ? WHERE id = ?').run(JSON.stringify(deck), deckId);
 
-/** Cards with no topic that nobody placed by hand, in the deck's order. */
+/** Cards with no topic (see `effectiveTopic`) that nobody placed by hand, in the deck's order. */
 export function unsortedCards(db, deckId) {
+  const deck = deckData(db, deckId);
   return db.prepare('SELECT id, data FROM cards WHERE deck_id = ? ORDER BY rowid').all(deckId)
     .map((r) => ({ id: r.id, ...parse(r.data) }))
-    .filter((c) => !c.topic && c.topicBy !== 'manual')
+    .filter((c) => !effectiveTopic(deck, c) && c.topicBy !== 'manual')
     .map((c) => ({ id: c.id, front: c.front ?? '', back: c.back ?? '' }));
 }
 
@@ -91,7 +93,7 @@ export async function sortDeck(db, sorter, deckId, now, { batch = 100 } = {}) {
       const row = read.get(p.id, deckId);
       if (!row || (!ids.has(p.topic) && !known.has(topic))) continue;
       const card = parse(row.data);
-      if (card.topic || card.topicBy === 'manual') continue;
+      if (effectiveTopic(fresh, card) || card.topicBy === 'manual') continue;
       write.run(JSON.stringify({ ...card, topic, topicBy: 'ai', topicAt: now }), p.id);
       placedIn.add(topic);
       placed++;

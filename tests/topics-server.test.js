@@ -62,7 +62,7 @@ test('ownedDeck answers only for the owner', async () => {
 });
 
 test('unsortedCards skips topics and manual placements', async () => {
-  const { db } = await seed();
+  const { db } = await seed({ topics: [{ id: 't1', name: 'Ser', groupId: null, by: 'file' }] });
   assert.deepEqual(unsortedCards(db, 'd1'), [{ id: 'c3', front: 'front c3', back: 'back c3' }]);
   // a manual placement with no topic (put back to Unsorted by hand) stays out too
   db.prepare('UPDATE cards SET data = ? WHERE id = ?').run(JSON.stringify({ ...stored(db, 'c3'), topicBy: 'manual' }), 'c3');
@@ -96,6 +96,20 @@ test('sortDeck places only unsorted, non-manual cards and keeps scheduling', asy
   assert.equal(stored(db, 'c1').topic, 'tm');
   const after = buildView(db, ana.id, NOW).cards.find((c) => c.id === 'c3');
   for (const k of ['due', 'state', 'reps', 'lapses', 'stability', 'difficulty']) assert.equal(after[k], before[k]);
+});
+
+test('a card whose topic is gone is sorted again, unless it was placed by hand', async () => {
+  const { db } = await seed({ topics: [{ id: 't1', name: 'Ser', groupId: null, by: 'file' }] });
+  db.prepare('UPDATE cards SET data = ? WHERE id = ?').run(JSON.stringify({ ...stored(db, 'c2'), topic: 'gone', topicBy: 'ai' }), 'c2');
+  // c1 is manual in 'tm', which this deck does not have: shown as Unsorted, never sent.
+  assert.deepEqual(unsortedCards(db, 'd1').map((c) => c.id), ['c2', 'c3']);
+  const sorter = fake({ place: (args) => ({ placements: args.cards.map((c) => ({ id: c.id, topic: 't1' })), newTopics: [] }) });
+  const out = await sortDeck(db, sorter, 'd1', LATER);
+  assert.deepEqual(sorter.calls.place[0].cards.map((c) => c.id), ['c2', 'c3']);
+  assert.deepEqual(out, { sorted: 2, created: 0, remaining: 0 });
+  assert.equal(stored(db, 'c2').topic, 't1');
+  assert.equal(stored(db, 'c1').topic, 'tm');
+  assert.equal(stored(db, 'c1').topicBy, 'manual');
 });
 
 test('sortDeck groups loose topics first, only when the deck has groups', async () => {

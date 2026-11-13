@@ -3,7 +3,7 @@
 import * as api from './api.js';
 import { mergeCounts } from './counts.js';
 import { dayKey, streakOf } from './progress.js';
-import { readableTopicName, prefixGroup, resolveFilter, inFilter } from './topics.js';
+import { readableTopicName, prefixGroup, resolveFilter, inFilter, effectiveTopic } from './topics.js';
 import { DAY, State, dayStart, newSchedule, nextDayAt, preview, schedule } from './fsrs.js';
 
 // Per-deck settings.
@@ -568,8 +568,9 @@ export function reverseReserve(deckId) {
  * With a study `filter` (see `resolveFilter`), only reserve cards in it count: the first `n` of them.
  */
 export function pullFromReserve(deckId, n = Infinity, now = Date.now(), filter) {
-  const set = resolveFilter(deck(deckId), filter);
-  return pullIn(reserveIn(deckId).filter((c) => inFilter(c, set)).slice(0, Math.max(0, n)), now);
+  const d = deck(deckId);
+  const set = resolveFilter(d, filter);
+  return pullIn(reserveIn(deckId).filter((c) => inFilter(c, set, d)).slice(0, Math.max(0, n)), now);
 }
 
 /**
@@ -684,7 +685,8 @@ export function findCards(deckId, { text = '', groups = [], due = 'any', added =
   const today = dayStart(now);
   const tomorrow = nextDayAt(now);
   const wanted = new Set(groups);
-  const topicSet = resolveFilter(deck(deckId), topics);
+  const d = deck(deckId);
+  const topicSet = resolveFilter(d, topics);
   const scheduled = (c) => !c.reserved && c.state !== State.New;
   const dueBefore = { today: tomorrow, week: tomorrow + 6 * DAY, month: tomorrow + 29 * DAY }[due];
   const addedSince = { today, week: today - 6 * DAY, month: today - 29 * DAY }[added];
@@ -696,7 +698,7 @@ export function findCards(deckId, { text = '', groups = [], due = 'any', added =
       (c) =>
         (!q || `${c.front}\n${c.back}`.toLowerCase().includes(q)) &&
         (!wanted.size || wanted.has(cardGroup(c, now))) &&
-        inFilter(c, topicSet) &&
+        inFilter(c, topicSet, d) &&
         (due !== 'overdue' || (c.state === State.Review && !c.reserved && c.due < today)) &&
         (!dueBefore || (scheduled(c) && c.due < dueBefore)) &&
         (!addedSince || c.created >= addedSince) &&
@@ -825,22 +827,27 @@ export function setCardsTopic(ids, topicId, now = Date.now()) {
   return cards.length;
 }
 
-/** How many cards in a deck have no topic and were not left that way by hand. */
-export const unsortedCount = (deckId) => cardsIn(deckId).filter((c) => !c.topic && c.topicBy !== 'manual').length;
+/** How many cards in a deck have no topic (see `effectiveTopic`) and were not left that way by hand. */
+export function unsortedCount(deckId) {
+  const d = deck(deckId);
+  return cardsIn(deckId).filter((c) => !effectiveTopic(d, c) && c.topicBy !== 'manual').length;
+}
 
 /**
  * For each topic id (`''` is Unsorted) with cards, what it holds now: `due` learning and review
  * cards, `fresh` new cards (all of them, not only today's allowance) and `reserve` cards.
  */
 export function topicCounts(deckId, now = Date.now()) {
+  const d = deck(deckId);
   const out = new Map();
   const end = nextDayAt(now);
   for (const c of cardsIn(deckId)) {
-    const n = out.get(c.topic ?? '') ?? { due: 0, fresh: 0, reserve: 0 };
+    const id = effectiveTopic(d, c);
+    const n = out.get(id) ?? { due: 0, fresh: 0, reserve: 0 };
     if (c.reserved) n.reserve++;
     else if (c.state === State.New) n.fresh++;
     else if (c.state === State.Review ? c.due < end : isLearning(c)) n.due++;
-    out.set(c.topic ?? '', n);
+    out.set(id, n);
   }
   return out;
 }
@@ -860,13 +867,13 @@ function queue(deckId, now, filter) {
   const allowance = Math.max(0, d.newPerDay - introduced);
   return {
     allowance,
-    learning: all.filter((c) => isLearning(c) && inFilter(c, set)).sort((a, b) => a.due - b.due),
+    learning: all.filter((c) => isLearning(c) && inFilter(c, set, d)).sort((a, b) => a.due - b.due),
     // Review cards are scheduled in whole days, so anything due today counts.
     review: all
-      .filter((c) => c.state === State.Review && c.due < nextDayAt(now) && inFilter(c, set))
+      .filter((c) => c.state === State.Review && c.due < nextDayAt(now) && inFilter(c, set, d))
       .sort((a, b) => a.due - b.due),
     fresh: all
-      .filter((c) => c.state === State.New && inFilter(c, set))
+      .filter((c) => c.state === State.New && inFilter(c, set, d))
       .sort((a, b) => (a.pulled ?? a.created) - (b.pulled ?? b.created))
       .slice(0, allowance),
   };

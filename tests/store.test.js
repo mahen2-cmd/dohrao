@@ -718,6 +718,24 @@ test('findCards filters by topic and unsorted', () => {
   assert.equal(store.findCards(deck.id, {}, T0).length, 3);
 });
 
+test('a card whose topic is gone is unsorted everywhere', () => {
+  store.importData(JSON.stringify({
+    decks: [{ id: 'd', name: 'Words', newPerDay: 20, topics: [{ id: 't1', name: 'Ser', groupId: null, by: 'admin' }] }],
+    cards: [
+      { id: 'a', deckId: 'd', front: 'a', back: '1', created: T0, topic: 'gone', topicBy: 'ai', topicAt: T0 },
+      { id: 'b', deckId: 'd', front: 'b', back: '2', created: T0 + 1, topic: 'gone', topicBy: 'manual', topicAt: T0 },
+      { id: 'c', deckId: 'd', front: 'c', back: '3', created: T0 + 2, topic: 't1', topicBy: 'ai', topicAt: T0 },
+    ],
+  }));
+  assert.deepEqual(store.findCards('d', { topics: ['unsorted'], sort: 'oldest' }, T0).map((c) => c.id), ['a', 'b']);
+  assert.equal(store.counts('d', T0, ['unsorted']).new, 2);
+  assert.equal(store.nextCard('d', T0, ['t:t1']).id, 'c');
+  // Only the one nobody placed by hand waits for the sorter.
+  assert.equal(store.unsortedCount('d'), 1);
+  assert.deepEqual(store.topicCounts('d', T0).get(''), { due: 0, fresh: 2, reserve: 0 });
+  assert.equal(store.topicCounts('d', T0).has('gone'), false);
+});
+
 test('topicCounts reports due, fresh and reserve per topic', () => {
   const deck = setup();
   store.addCards(deck.id, [['a', '1'], ['b', '2']], T0, { topicKey: 'verb_ser' });

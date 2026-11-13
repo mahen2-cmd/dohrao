@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { aiText, filterLabel, inFilter, prefixGroup, readableTopicName, resolveFilter, topicKeyFromFileName } from '../js/topics.js';
+import { aiText, effectiveTopic, filterLabel, inFilter, prefixGroup, readableTopicName, resolveFilter, topicKeyFromFileName } from '../js/topics.js';
 
 const deck = {
   groups: [{ id: 'g1', name: 'Verbs' }, { id: 'g2', name: 'Nature' }],
@@ -44,10 +44,19 @@ test('a group expands to its topics and unsorted is the empty key', () => {
 });
 
 test('inFilter treats a missing topic as unsorted', () => {
-  assert.equal(inFilter({}, null), true);
-  assert.equal(inFilter({}, new Set(['t1'])), false);
-  assert.equal(inFilter({}, new Set([''])), true);
-  assert.equal(inFilter({ topic: 't1' }, new Set(['t1'])), true);
+  assert.equal(inFilter({}, null, deck), true);
+  assert.equal(inFilter({}, new Set(['t1']), deck), false);
+  assert.equal(inFilter({}, new Set(['']), deck), true);
+  assert.equal(inFilter({ topic: 't1' }, new Set(['t1']), deck), true);
+});
+
+test('a topic that no longer exists counts as unsorted', () => {
+  assert.equal(effectiveTopic(deck, { topic: 't1' }), 't1');
+  assert.equal(effectiveTopic(deck, { topic: 'gone' }), '');
+  assert.equal(effectiveTopic(deck, {}), '');
+  assert.equal(effectiveTopic({}, { topic: 't1' }), '');
+  assert.equal(inFilter({ topic: 'gone' }, new Set(['']), deck), true);
+  assert.equal(inFilter({ topic: 'gone' }, new Set(['gone']), deck), false);
 });
 
 test('filterLabel names the choice', () => {
