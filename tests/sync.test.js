@@ -255,6 +255,25 @@ test('a newer manual topic wins over the stored one', async () => {
   assert.equal(c1.topicAt, NOW + 60);
 });
 
+test('an offline manual placement beats a later AI placement', async () => {
+  const { db, ana } = await seed();
+  setStored(db, 'cards', 'c1', { topic: 't9', topicBy: 'ai', topicAt: NOW + 50 });
+  applyChanges(db, ana.id, { cards: [cardOf('c1', { topic: 't2', topicBy: 'manual', topicAt: NOW + 10 })] }, NOW);
+  const c1 = buildView(db, ana.id, NOW).cards.find((c) => c.id === 'c1');
+  assert.equal(c1.topic, 't2');
+  assert.equal(c1.topicBy, 'manual');
+  assert.equal(c1.topicAt, NOW + 10);
+});
+
+test('an older manual placement does not beat a newer file placement', async () => {
+  const { db, ana } = await seed();
+  setStored(db, 'cards', 'c1', { topic: 't9', topicBy: 'file', topicAt: NOW + 50 });
+  applyChanges(db, ana.id, { cards: [cardOf('c1', { topic: 't2', topicBy: 'manual', topicAt: NOW + 10 })] }, NOW);
+  const c1 = buildView(db, ana.id, NOW).cards.find((c) => c.id === 'c1');
+  assert.equal(c1.topic, 't9');
+  assert.equal(c1.topicBy, 'file');
+});
+
 test('stale deck content keeps the newer groups and topics', async () => {
   const { db, ana, deck } = await seed();
   const groups = [{ id: 'g9', name: 'Nouns' }];

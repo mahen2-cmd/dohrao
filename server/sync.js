@@ -115,7 +115,10 @@ function applyCard(db, userId, card) {
     const from = access(db, userId, current);
     if (from === 'own' && target === 'own') {
       const stored = parse(db.prepare('SELECT data FROM cards WHERE id = ?').get(card.id).data);
-      const merged = mergeTopics(stored, content, ['topic', 'topicBy'], 'topicAt');
+      // Only the sorter writes 'ai', and it never moves a manual card, so a hand placement
+      // (even one made offline before the sort) wins over it whatever the times say.
+      const manualOverAi = content.topicBy === 'manual' && stored.topicBy === 'ai';
+      const merged = manualOverAi ? content : mergeTopics(stored, content, ['topic', 'topicBy'], 'topicAt');
       db.prepare('UPDATE cards SET deck_id = ?, data = ? WHERE id = ?').run(card.deckId, JSON.stringify(merged), card.id);
     } else if (!(from === 'given' && current === card.deckId)) {
       return false;
