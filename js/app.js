@@ -2070,7 +2070,7 @@ function renderDeck(deck) {
       drawList();
     };
     // In reserve order, the reserve cards shown can be moved: `line` is those, first to last.
-    const line = filters.sort === 'reserve' ? matches.filter((card) => card.reserved) : [];
+    const line = (phone ? deckTab === 'reserve' : filters.sort === 'reserve') ? matches.filter((card) => card.reserved) : [];
     const picked = line.filter((card) => selected.has(card.id));
     const waiting = line.filter((card) => !selected.has(card.id));
     const movable = picked.length > 0 && picked.length === selected.size;
@@ -2088,6 +2088,10 @@ function renderDeck(deck) {
       const edge = line.indexOf(picked.at(down ? -1 : 0));
       const anchor = line[edge + (down ? 1 : -1)] ?? waiting.at(down ? -1 : 0);
       if (anchor) move([...selected], { [down ? 'after' : 'before']: anchor.id });
+    };
+    const toTop = () => {
+      const first = store.reserveIn(deck.id).find((card) => !selected.has(card.id));
+      if (first) move([...selected], { before: first.id });
     };
     const moveButton = (label, title, onclick, glyph) => h('button', { class: 'btn', type: 'button', title, onclick }, glyph && icon(glyph), label);
     if (!matches.length) {
@@ -2123,16 +2127,33 @@ function renderDeck(deck) {
               drawList();
             }, 'swap'),
           movable &&
-            line.length > 1 && [
+            line.length > 1 &&
+            h(
+              'div',
+              { class: 'bulk-move' },
               moveButton('Up', 'Move up one place', () => step(false), 'up'),
               moveButton('Down', 'Move down one place', () => step(true), 'down'),
-              moveButton('To top', 'Move to the front of the reserve, to be pulled in first', () => {
-                const first = store.reserveIn(deck.id).find((card) => !selected.has(card.id));
-                if (first) move([...selected], { before: first.id });
-              }),
+              moveButton('To top', 'Move to the front of the reserve, to be pulled in first', toTop),
               moveButton('To bottom', 'Move to the end of the reserve, to be pulled in last', () => move([...selected])),
-            ],
-          selected.size > 0 && [
+            ),
+          // On a phone these become a toolbar along the bottom: an icon over a short label each.
+          selected.size > 0 &&
+            h(
+              'div',
+              { class: 'bulk' },
+              movable &&
+                line.length > 1 &&
+                menu(
+                  'Move',
+                  [
+                    h('button', { type: 'button', onclick: () => step(false) }, icon('up'), 'Up one place'),
+                    h('button', { type: 'button', onclick: () => step(true) }, icon('down'), 'Down one place'),
+                    h('button', { type: 'button', onclick: toTop }, icon('up'), 'To the top'),
+                    h('button', { type: 'button', onclick: () => move([...selected]) }, icon('down'), 'To the bottom'),
+                  ],
+                  'swap',
+                  'phone-only bulk-menu',
+                ),
             reserved.length > 0 &&
               h(
                 'button',
@@ -2152,23 +2173,23 @@ function renderDeck(deck) {
             unreserved.length > 0 &&
               h(
                 'button',
-                { class: 'btn', type: 'button', title: 'Take the ticked cards out of study and put them at the end of the reserve', onclick: () => returnCardsToReserve(unreserved) },
+                { class: 'btn', type: 'button', title: 'Take the ticked cards out of study and put them at the end of the reserve', 'data-short': 'To reserve', onclick: () => returnCardsToReserve(unreserved) },
                 icon('box'),
                 'Back to reserve',
               ),
             editable && [
               hasTopics &&
-                h('button', { class: 'btn', type: 'button', title: 'Put the ticked cards in a topic, or take them out of one', onclick: () => openMoveToTopic(deck, [...selected]) }, 'Move to topic…'),
+                h('button', { class: 'btn', type: 'button', title: 'Put the ticked cards in a topic, or take them out of one', 'data-short': 'Topic', onclick: () => openMoveToTopic(deck, [...selected]) }, h('span', { class: 'phone-only' }, icon('check')), 'Move to topic…'),
               h(
                 'button',
-                { class: 'btn', type: 'button', title: 'Add a copy of each ticked card with its front and back swapped, on the reserve', onclick: () => addReversedCards([...selected]) },
+                { class: 'btn', type: 'button', title: 'Add a copy of each ticked card with its front and back swapped, on the reserve', 'data-short': 'Reversed', onclick: () => addReversedCards([...selected]) },
                 icon('swap'),
                 'Add reversed',
               ),
-              h('button', { class: 'btn danger', type: 'button', onclick: () => removeCards([...selected]) }, icon('trash'), `Delete ${plural(selected.size, 'card')}`),
+              h('button', { class: 'btn danger', type: 'button', 'data-short': 'Delete', onclick: () => removeCards([...selected]) }, icon('trash'), `Delete ${plural(selected.size, 'card')}`),
             ],
-            h('button', { class: 'btn ghost', type: 'button', onclick: () => pick([...selected], false) }, 'Cancel'),
-          ],
+            ),
+          selected.size > 0 && h('button', { class: 'btn ghost bulk-cancel', type: 'button', onclick: () => pick([...selected], false) }, 'Cancel'),
         ),
         matches.slice(0, limit).map((card) => {
           const status = cardStatus(card, now);
@@ -2187,7 +2208,8 @@ function renderDeck(deck) {
             {
               class: `card-row ${selected.has(card.id) ? 'selected' : ''} ${editable ? '' : 'read-only'} ${hasTopics ? 'has-topic' : ''}`,
               onclick: editable && (() => openCardDialog({ card })),
-              ...(sortable && {
+              // A phone reorders through the Move sheet: touch does not drag rows.
+              ...(sortable && !isPhone() && {
                 draggable: true,
                 // Dragging a ticked card takes the other ticked cards along.
                 ondragstart: (e) => {
@@ -2229,6 +2251,7 @@ function renderDeck(deck) {
                 iconButton('trash', 'Delete card', () => removeCard(card), 'danger'),
               ),
           );
+          if (isPhone()) holdToTick(row, () => pick([card.id], true));
           return row;
         }),
         matches.length > limit &&
@@ -2346,6 +2369,43 @@ function renderDeck(deck) {
     ),
   );
 }
+
+/**
+ * On a phone, holding a finger on a card row ticks it; moving the finger first (to scroll)
+ * cancels, and the tap that ends a hold does not also open the card.
+ */
+function holdToTick(row, tick) {
+  let timer = null;
+  let start = null;
+  const cancel = () => clearTimeout(timer);
+  row.addEventListener('pointerdown', (e) => {
+    if (e.pointerType !== 'touch') return;
+    start = { x: e.clientX, y: e.clientY };
+    timer = setTimeout(() => {
+      heldAt = Date.now();
+      navigator.vibrate?.(10);
+      tick();
+    }, 450);
+  });
+  row.addEventListener('pointermove', (e) => {
+    if (start && Math.hypot(e.clientX - start.x, e.clientY - start.y) > 8) cancel();
+  });
+  for (const type of ['pointerup', 'pointercancel', 'pointerleave']) row.addEventListener(type, cancel);
+}
+// When a hold last ticked a row. Ticking redraws the list, so the tap that ends the hold lands
+// on a new row: any click just after a hold is swallowed, wherever it lands.
+let heldAt = 0;
+document.addEventListener(
+  'click',
+  (e) => {
+    if (Date.now() - heldAt > 700) return;
+    heldAt = 0;
+    e.stopPropagation();
+    e.preventDefault();
+  },
+  true,
+);
+document.addEventListener('contextmenu', (e) => Date.now() - heldAt < 700 && e.preventDefault());
 
 /** On a phone: the deck's tabs, Cards, Reserve and (when there is anything to show) Topics. */
 function deckTabs(deck, c, cards, withTopics) {

@@ -932,6 +932,12 @@ kbd {
 .select-bar .btn.danger {
   margin-left: auto;
 }
+/* The ticked-card actions and the reserve's reorder buttons sit in the bar as they are; a
+   phone moves the actions into a toolbar along the bottom. */
+.select-bar .bulk,
+.select-bar .bulk-move {
+  display: contents;
+}
 .select-bar .hint {
   margin-left: auto;
   font-weight: 400;
@@ -3270,6 +3276,88 @@ table.upcoming {
     height: 52px;
     padding: 0;
     border-radius: 12px;
+  }
+
+  /* Select mode: a toolbar along the bottom in place of the docked Study bar. */
+  .select-bar {
+    flex-wrap: nowrap;
+  }
+  .select-bar .bulk-move,
+  .page:has(.bulk) .deck-dock.phone-only {
+    display: none !important;
+  }
+  .select-bar .hint {
+    display: none;
+  }
+  .select-bar .bulk-cancel {
+    margin-left: auto;
+  }
+  .select-bar .bulk {
+    position: fixed;
+    z-index: 9;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    display: flex;
+    gap: 2px;
+    padding: 6px 6px calc(8px + env(safe-area-inset-bottom));
+    border-top: 1px solid var(--border-strong);
+    background: var(--surface);
+  }
+  .bulk > .btn,
+  .bulk > .menu {
+    flex: 1 1 0;
+    min-width: 0;
+  }
+  .bulk > .btn,
+  .bulk > .menu > summary {
+    flex-direction: column;
+    justify-content: center;
+    gap: 4px;
+    width: 100%;
+    height: auto;
+    min-height: 58px;
+    margin: 0;
+    padding: 4px 2px;
+    border: 0;
+    border-radius: 10px;
+    background: none;
+    color: var(--text);
+    font-size: 12px;
+    font-weight: 500;
+  }
+  .bulk > .btn[data-short] {
+    font-size: 0;
+  }
+  .bulk > .btn[data-short]::after {
+    content: attr(data-short);
+    font-size: 12px;
+  }
+  .bulk > .menu > summary::after {
+    content: 'Move';
+  }
+  .bulk > .btn.primary {
+    color: var(--link);
+  }
+  .bulk > .btn.danger,
+  :root[data-theme='dark'] .bulk > .btn.danger {
+    margin-left: 0;
+    color: var(--danger);
+  }
+  .screen-drill .grip {
+    display: none;
+  }
+  .bulk > .btn {
+    line-height: 1.2;
+  }
+  .bulk .icon svg,
+  .bulk .menu summary .icon svg {
+    width: 20px;
+    height: 20px;
+    stroke-width: 1.8;
+  }
+  .bulk > .btn > .phone-only {
+    display: inline-flex !important;
   }
 }
 
