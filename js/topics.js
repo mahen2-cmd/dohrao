@@ -65,6 +65,18 @@ export function effectiveTopic(deck, card) {
   return id && (deck?.topics ?? []).some((t) => t.id === id) ? id : '';
 }
 
+/**
+ * How a card's place is shown in a card list: 'Verbs · Ser' for a topic in a group, just the
+ * topic's name when it has no group (or its group is gone), and 'Unsorted' when it has no topic.
+ */
+export function topicLabel(deck, card) {
+  const id = effectiveTopic(deck, card);
+  const topic = id && deck.topics.find((t) => t.id === id);
+  if (!topic) return 'Unsorted';
+  const group = topic.groupId && (deck.groups ?? []).find((g) => g.id === topic.groupId);
+  return group ? `${group.name} · ${topic.name}` : topic.name;
+}
+
 /** Whether a card in `deck` is in the resolved filter. A card with no topic counts as Unsorted. */
 export function inFilter(card, set, deck) {
   return set === null || set.has(effectiveTopic(deck, card));

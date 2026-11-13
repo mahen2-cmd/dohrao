@@ -4,7 +4,7 @@ import { DAY, MINUTE, Rating, State, dayStart } from './fsrs.js';
 import { parseSpreadsheet } from './importer.js';
 import { recentStudy, rightShare } from './progress.js';
 import * as store from './store.js';
-import { effectiveTopic, filterLabel, inFilter, readableTopicName, resolveFilter, topicKeyFromFileName } from './topics.js';
+import { effectiveTopic, filterLabel, inFilter, readableTopicName, resolveFilter, topicKeyFromFileName, topicLabel } from './topics.js';
 
 const app = document.getElementById('app');
 const toasts = document.getElementById('toasts');
@@ -1722,7 +1722,6 @@ function topicChoices(deck, value) {
 }
 
 /** The topic a card sits in, if that topic still exists. */
-const topicOf = (deck, card) => (deck?.topics ?? []).find((t) => t.id === effectiveTopic(deck, card));
 
 /** Move ticked cards into a topic, or out of any topic. */
 function openMoveToTopic(deck, ids) {
@@ -2167,7 +2166,7 @@ function renderDeck(deck) {
             ),
             h('div', { class: 'text' }, rich(card.front)),
             h('div', { class: 'text back-text' }, rich(card.back)),
-            hasTopics && h('div', { class: 'topic-name' }, topicOf(deck, card)?.name ?? 'Unsorted'),
+            hasTopics && h('div', { class: 'topic-name' }, topicLabel(deck, card)),
             statusMark(status, status.label, 'due'),
             editable &&
               h(

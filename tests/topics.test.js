@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { aiText, effectiveTopic, filterLabel, inFilter, prefixGroup, readableTopicName, resolveFilter, topicKeyFromFileName } from '../js/topics.js';
+import { aiText, effectiveTopic, filterLabel, inFilter, prefixGroup, readableTopicName, resolveFilter, topicKeyFromFileName, topicLabel } from '../js/topics.js';
 
 const deck = {
   groups: [{ id: 'g1', name: 'Verbs' }, { id: 'g2', name: 'Nature' }],
@@ -20,6 +20,16 @@ test('topic keys come from new_cards_<key> file names', () => {
   assert.equal(topicKeyFromFileName('new_cards_x.pdf'), null);
 });
 test('new_cards_all is not a topic', () => assert.equal(topicKeyFromFileName('new_cards_all.csv'), null));
+
+test('a card is labelled with its group and topic', () => {
+  assert.equal(topicLabel(deck, { topic: 't1' }), 'Verbs · Ser');
+  const loose = { ...deck, topics: [...deck.topics, { id: 't4', name: 'Greetings', groupId: null }] };
+  assert.equal(topicLabel(loose, { topic: 't4' }), 'Greetings');
+  const orphan = { ...deck, topics: [{ id: 't5', name: 'Food', groupId: 'gone' }] };
+  assert.equal(topicLabel(orphan, { topic: 't5' }), 'Food');
+  assert.equal(topicLabel(deck, { topic: 'gone' }), 'Unsorted');
+  assert.equal(topicLabel(deck, {}), 'Unsorted');
+});
 
 test('readable names drop verb_ and capitalise', () => {
   assert.equal(readableTopicName('cafe_ordering'), 'Cafe ordering');
