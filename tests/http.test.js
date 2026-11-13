@@ -216,6 +216,27 @@ test('static files stay inside the folders they are served from', async (t) => {
   assert.equal((await call(port, 'GET', 'api/media/..%2F..%2Fpackage.json', { cookie: (await logIn(port, 'admin', 'admin-password')).cookie })).status, 404);
 });
 
+test('phones can add the app to the home screen with a proper icon', async (t) => {
+  const { port } = await start(t);
+  const page = (await call(port, 'GET', '')).text;
+  assert.match(page, /<link rel="manifest" href="manifest\.webmanifest"/);
+  assert.match(page, /<link rel="apple-touch-icon" href="icons\/apple-touch-icon\.png"/);
+
+  const manifest = await call(port, 'GET', 'manifest.webmanifest');
+  assert.equal(manifest.status, 200);
+  assert.equal(manifest.headers['content-type'], 'application/manifest+json');
+  const json = JSON.parse(manifest.text);
+  assert.equal(json.name, 'Dohrao');
+  assert.equal(json.display, 'standalone');
+  for (const icon of json.icons) {
+    const file = await call(port, 'GET', icon.src);
+    assert.equal(file.status, 200, icon.src);
+    assert.equal(file.headers['content-type'], 'image/png');
+  }
+  assert.ok(json.icons.some((i) => i.sizes === '512x512' && i.purpose === 'maskable'));
+  assert.equal((await call(port, 'GET', 'icons/apple-touch-icon.png')).headers['content-type'], 'image/png');
+});
+
 test('the app files are cached by the phone and revalidated with an ETag', async (t) => {
   const { port, invite } = await start(t);
   const first = await call(port, 'GET', 'js/app.js');

@@ -43,6 +43,8 @@ const TYPES = {
   '.mjs': 'text/javascript; charset=utf-8',
   '.css': 'text/css; charset=utf-8',
   '.woff2': 'font/woff2',
+  '.png': 'image/png',
+  '.webmanifest': 'application/manifest+json',
 };
 
 const exists = (file) => access(file).then(() => true, () => false);
@@ -170,8 +172,8 @@ async function staticFile(path, req, res) {
   // resolved first and must then lie inside one of the served folders.
   if (/\.\.|\\|\0/.test(path)) throw new Error('not found');
   const file = resolve(ROOT, `.${path}`);
-  const allowed = file === join(ROOT, 'index.html')
-    || ['js', 'css', 'vendor'].some((dir) => file.startsWith(join(ROOT, dir) + sep));
+  const allowed = ['index.html', 'manifest.webmanifest'].some((name) => file === join(ROOT, name))
+    || ['js', 'css', 'vendor', 'icons'].some((dir) => file.startsWith(join(ROOT, dir) + sep));
   if (!allowed) throw new Error('not found');
   const info = await stat(file);
   if (!info.isFile()) throw new Error('not found');
