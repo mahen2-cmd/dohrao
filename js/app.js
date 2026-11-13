@@ -30,6 +30,8 @@ let filters = { ...NO_FILTERS };
 let filtersDeck = null;
 // Whether the filter and sort selects are open on a phone, where they start folded away.
 let filtersOpen = false;
+// On a phone the deck page shows one of its tabs: 'cards', 'reserve' or 'topics'.
+let deckTab = 'cards';
 // Ids of the cards ticked in that list. Only cards on screen stay selected.
 let selected = new Set();
 // How many cards the list draws at first, and how many more each "Show more" adds.
@@ -87,6 +89,7 @@ const ICONS = {
   down: '<path d="M12 5v14M6 13l6 6 6-6"/>',
   chevron: '<path d="M6 9l6 6 6-6"/>',
   next: '<path d="M9 6l6 6-6 6"/>',
+  sliders: '<path d="M4 6h16M7 12h10M10 18h4"/>',
   swap: '<path d="M7 4L3 8l4 4M3 8h14M17 12l4 4-4 4M21 16H7"/>',
   grip: '<path d="M9 6h.01M15 6h.01M9 12h.01M15 12h.01M9 18h.01M15 18h.01"/>',
   sigma: '<path d="M18 5H6l6 7-6 7h12"/>',
@@ -1932,6 +1935,7 @@ function reserveBar(deck, n) {
   const reorder = () => {
     query = '';
     filters = { ...NO_FILTERS, groups: ['reserve'], sort: 'reserve' };
+    deckTab = 'reserve';
     render();
   };
   // Shown as buttons on a wide screen, and folded into a menu on a phone.
@@ -1972,6 +1976,7 @@ function renderDeck(deck) {
     filters = { ...NO_FILTERS };
     filtersDeck = deck.id;
     selected = new Set();
+    deckTab = 'cards';
   }
   const hasTopics = (deck.topics ?? []).length > 0;
   // A topic filter that no longer exists (deleted, or the deck changed) is dropped.
@@ -1998,6 +2003,7 @@ function renderDeck(deck) {
           {
             class: 'chip',
             type: 'button',
+            'data-group': group,
             'aria-pressed': String(on),
             onclick: () => setFilters({ groups: on ? filters.groups.filter((g) => g !== group) : [...filters.groups, group] }),
           },
@@ -2043,7 +2049,7 @@ function renderDeck(deck) {
     ),
   ];
 
-  const list = h('div');
+  const list = h('div', { class: 'deck-cards' });
   const shown = h('span', { class: 'count' });
   // Ids of the reserve cards being dragged to a new place.
   let dragged = null;
@@ -2052,7 +2058,11 @@ function renderDeck(deck) {
 
   const drawList = () => {
     const q = query.trim();
-    const matches = store.findCards(deck.id, { text: q, ...filters }, now);
+    // On a phone the chosen tab narrows the list: the reserve, or everything else.
+    const phone = isPhone();
+    const matches = store
+      .findCards(deck.id, { text: q, ...(phone ? tabFilters(filters, deckTab) : filters) }, now)
+      .filter((card) => !phone || inTab(card, deckTab));
     shown.textContent = q || filtering ? `${matches.length.toLocaleString()} of ${plural(cards.length, 'card')}` : plural(cards.length, 'card');
     selected = new Set(matches.filter((card) => selected.has(card.id)).map((card) => card.id));
     const pick = (ids, on) => {
@@ -2257,7 +2267,33 @@ function renderDeck(deck) {
   });
 
   const content = cards.length
-    ? [reserveBar(deck, c.reserve), h('div', { class: 'toolbar' }, h('div', { class: 'search' }, icon('search'), search), shown), filterBar, list]
+    ? [
+        reserveBar(deck, c.reserve),
+        h(
+          'div',
+          { class: 'toolbar' },
+          h('div', { class: 'search' }, icon('search'), search),
+          shown,
+          // On a phone the filters open from a button beside the search.
+          h(
+            'button',
+            {
+              class: `icon-btn filter-icon phone-only ${filtering ? 'on' : ''}`,
+              type: 'button',
+              title: 'Filter and sort',
+              'aria-label': 'Filter and sort',
+              'aria-expanded': String(filtersOpen || filtering),
+              onclick: () => {
+                filtersOpen = !(filtersOpen || filtering);
+                render();
+              },
+            },
+            icon('sliders'),
+          ),
+        ),
+        filterBar,
+        list,
+      ]
     : h(
         'div',
         { class: 'empty' },
@@ -2279,7 +2315,7 @@ function renderDeck(deck) {
   app.replaceChildren(
     h(
       'div',
-      { class: 'page screen-drill' },
+      { class: 'page screen-drill', 'data-tab': deckTab },
       topbar(),
       h('a', { class: 'back', href: '#/' }, icon('back'), 'All decks'),
       h(
@@ -2297,13 +2333,110 @@ function renderDeck(deck) {
             h('button', { type: 'button', onclick: () => openDeckDialog(deck) }, icon('edit'), 'Deck settings'),
             editable && h('button', { type: 'button', class: 'danger', onclick: () => removeDeck(deck) }, icon('trash'), 'Delete deck'),
           ]),
-          editable && h('button', { class: 'btn', type: 'button', onclick: () => openCardDialog({ deckId: deck.id }) }, icon('plus'), 'Add card'),
-          (deck.topics ?? []).length > 0 && h('button', { class: 'btn topic-pick', type: 'button', title: 'Choose which topics to study', onclick: () => openTopicPicker(deck) }, h('span', null, filterLabel(deck, deck.studyFilter)), icon('chevron')),
-          c.total > 0 && h('a', { class: 'btn primary', href: `#/study/${deck.id}` }, icon('play'), `Study ${c.total}`),
+          editable && h('button', { class: 'btn wide-only', type: 'button', onclick: () => openCardDialog({ deckId: deck.id }) }, icon('plus'), 'Add card'),
+          (deck.topics ?? []).length > 0 && h('button', { class: 'btn topic-pick wide-only', type: 'button', title: 'Choose which topics to study', onclick: () => openTopicPicker(deck) }, h('span', null, filterLabel(deck, deck.studyFilter)), icon('chevron')),
+          c.total > 0 && h('a', { class: 'btn primary wide-only', href: `#/study/${deck.id}` }, icon('play'), `Study ${c.total}`),
         ),
       ),
+      cards.length > 0 && deckTabs(deck, c, cards, editable || hasTopics),
       sortBar(deck),
+      cards.length > 0 && isPhone() && deckTab === 'topics' && topicsTab(deck, editable),
       content,
+      deckDock(deck, c, editable),
+    ),
+  );
+}
+
+/** On a phone: the deck's tabs, Cards, Reserve and (when there is anything to show) Topics. */
+function deckTabs(deck, c, cards, withTopics) {
+  const tabs = [
+    ['cards', 'Cards', cards.length - c.reserve],
+    ['reserve', 'Reserve', c.reserve],
+    withTopics && ['topics', 'Topics', null],
+  ].filter(Boolean);
+  if (!withTopics && deckTab === 'topics') deckTab = 'cards';
+  return h(
+    'div',
+    { class: 'deck-tabs phone-only', role: 'tablist', 'aria-label': 'Show' },
+    tabs.map(([key, label, n]) =>
+      h(
+        'button',
+        {
+          type: 'button',
+          role: 'tab',
+          'aria-selected': String(deckTab === key),
+          onclick: () => {
+            deckTab = key;
+            render();
+          },
+        },
+        label,
+        n !== null && h('b', null, n.toLocaleString()),
+      ),
+    ),
+  );
+}
+
+/** On a phone, the Topics tab: what to study, managing topics, and each topic, which filters the cards. */
+function topicsTab(deck, editable) {
+  const now = Date.now();
+  const hasTopics = (deck.topics ?? []).length > 0;
+  const rows = hasTopics
+    ? topicOptions(deck, null)
+        .slice(1)
+        .map((o) => ({ value: o.value, name: o.textContent, n: store.findCards(deck.id, { topics: [o.value] }, now).length }))
+    : [];
+  return h(
+    'section',
+    { class: 'deck-topics' },
+    h(
+      'div',
+      { class: 'deck-topics-actions' },
+      hasTopics && h('button', { class: 'btn', type: 'button', onclick: () => openTopicPicker(deck) }, icon('play'), 'Choose what to study'),
+      h('button', { class: 'btn', type: 'button', onclick: () => openTopicsDialog(deck) }, icon('check'), 'Manage topics…'),
+    ),
+    rows.length > 0 &&
+      h(
+        'ul',
+        { class: 'deck-topic-list' },
+        rows.map(({ value, name, n }) =>
+          h(
+            'li',
+            null,
+            h(
+              'button',
+              {
+                type: 'button',
+                onclick: () => {
+                  filters = { ...filters, topics: [value] };
+                  deckTab = 'cards';
+                  render();
+                },
+              },
+              h('span', null, name),
+              h('b', null, n.toLocaleString()),
+              icon('next'),
+            ),
+          ),
+        ),
+      ),
+  );
+}
+
+/** On a phone: Add card and Study, docked at the bottom, with what Study will study above them. */
+function deckDock(deck, c, editable) {
+  const topics = (deck.topics ?? []).length > 0;
+  return h(
+    'div',
+    { class: 'dock deck-dock phone-only' },
+    topics && h('button', { class: 'dock-topic', type: 'button', onclick: () => openTopicPicker(deck) }, `Studying: ${filterLabel(deck, deck.studyFilter)}`, icon('next')),
+    h(
+      'div',
+      { class: 'dock-row' },
+      editable && h('button', { class: 'btn dock-add', type: 'button', title: 'Add card', 'aria-label': 'Add card', onclick: () => openCardDialog({ deckId: deck.id }) }, icon('plus')),
+      c.total > 0
+        ? h('a', { class: 'btn primary lg', href: `#/study/${deck.id}` }, icon('play'), `Study ${c.total.toLocaleString()}`)
+        : h('button', { class: 'btn primary lg', type: 'button', disabled: true }, 'Nothing due'),
     ),
   );
 }
