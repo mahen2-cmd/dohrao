@@ -827,6 +827,20 @@ export function setCardsTopic(ids, topicId, now = Date.now()) {
   return cards.length;
 }
 
+/**
+ * Take a card out of its topic without marking it as placed by hand (so the sorter may place
+ * it), as when it moves to another deck. The time is stamped so the clearing wins a sync.
+ */
+export function clearCardTopic(id, now = Date.now()) {
+  const c = card(id);
+  if (!c) return;
+  mustEdit(c.deckId);
+  delete c.topic;
+  delete c.topicBy;
+  c.topicAt = now;
+  save();
+}
+
 /** How many cards in a deck have no topic (see `effectiveTopic`) and were not left that way by hand. */
 export function unsortedCount(deckId) {
   const d = deck(deckId);

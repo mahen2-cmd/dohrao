@@ -738,10 +738,10 @@ function openCardDialog({ card, deckId }) {
           const wasIn = currentTopic(store.deck(deckSelect.value));
           const moved = deckSelect.value !== card.deckId;
           const chosen = topic !== wasIn || (moved && topic);
-          // A topic from the old deck means nothing in the new one.
-          const drop = moved && !chosen && card.topic ? { topic: undefined, topicBy: undefined } : {};
-          store.updateCard(card.id, { ...values, ...drop, deckId: deckSelect.value, reserved: (canReserve && reserved.checked) || undefined });
+          store.updateCard(card.id, { ...values, deckId: deckSelect.value, reserved: (canReserve && reserved.checked) || undefined });
           if (chosen) store.setCardsTopic([card.id], topic || null, Date.now());
+          // A topic from the old deck means nothing in the new one.
+          else if (moved && card.topic) store.clearCardTopic(card.id, Date.now());
           prepareCardSpeech(store.card(card.id));
           dialog.close();
           return;

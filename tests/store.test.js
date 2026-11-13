@@ -610,6 +610,19 @@ test('moving cards by hand marks them manual and they are not counted as unsorte
   assert.ok(store.cardsIn(deck.id).every((c) => c.topic === t.id && c.topicAt === T0 + 2));
 });
 
+test('clearing a moved card\'s topic leaves it sortable and stamps the time', () => {
+  const deck = setup();
+  store.addCards(deck.id, [['a', 'b']], T0, { topicKey: 'verb_ser' });
+  const c = store.cardsIn(deck.id)[0];
+  const other = store.createDeck({ name: 'Other' });
+  store.updateCard(c.id, { deckId: other.id });
+  store.clearCardTopic(c.id, T0 + 7);
+  const moved = store.card(c.id);
+  assert.ok(!('topic' in moved) && !('topicBy' in moved));
+  assert.equal(moved.topicAt, T0 + 7);
+  assert.equal(store.unsortedCount(other.id), 1);
+});
+
 test('topic edits on a given deck are refused', () => {
   store.importData(JSON.stringify({
     decks: [{ id: 'given', name: 'Words', assigned: true, from: 'Ana', newPerDay: 20, groups: [{ id: 'g1', name: 'G' }], topics: [{ id: 't1', key: 'a_b', name: 'B', groupId: null, by: 'file' }] }],
