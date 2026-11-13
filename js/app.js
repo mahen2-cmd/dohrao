@@ -2916,7 +2916,9 @@ function forecastPanel(s, today) {
 
 /** A year of days as a grid of weeks, shaded by how many cards were answered. */
 function activityPanel(s, today, deck) {
-  const WEEKS = 53;
+  // A phone shows the weeks that fit its width.
+  const WEEKS = isPhone() ? HEAT_WEEKS.phone : HEAT_WEEKS.wide;
+  const span = isPhone() ? `the last ${HEAT_WEEKS.phone} weeks` : 'the past year';
   const start = addDays(today, -((WEEKS - 1) * 7 + ((new Date(today).getDay() + 6) % 7))); // a Monday
   const days = [];
   for (let d = start; d <= today; d = addDays(d, 1)) days.push({ date: d, n: s.perDay[store.dayKey(d)] ?? 0 });
@@ -2944,8 +2946,8 @@ function activityPanel(s, today, deck) {
     ),
   );
   const sub = active.length
-    ? `${plural(sum(active.map((day) => day.n)), 'review')} on ${plural(active.length, 'day')} in the past year.`
-    : 'No reviews in the past year.';
+    ? `${plural(sum(active.map((day) => day.n)), 'review')} on ${plural(active.length, 'day')} in ${span}.`
+    : `No reviews in ${span}.`;
   const section = panel(
     'Activity',
     sub,
@@ -3075,7 +3077,7 @@ function renderStats(deck) {
         ? [
             h(
               'div',
-              { class: 'filters' },
+              { class: 'filters stats-filters' },
               decks.length > 1 && deckSelect,
               h(
                 'div',
@@ -3212,7 +3214,7 @@ function renderUpcoming(deck) {
         ? [
             h(
               'div',
-              { class: 'filters' },
+              { class: 'filters stats-filters' },
               decks.length > 1 && deckSelect,
               h(
                 'div',
