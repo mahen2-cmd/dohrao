@@ -40,7 +40,7 @@ let deckTab = 'cards';
 // On a wide screen: the topic the reserve column pulls from ('' for all), and how many (null: the default).
 let reserveTopic = '';
 let pullAmount = null;
-// Ids of the cards ticked in that list. Only cards on screen stay selected.
+// Ids of the ticked cards. Only cards on screen stay ticked; beside the reserve column, each list keeps its own.
 let selected = new Set();
 // How many cards the list draws at first, and how many more each "Show more" adds.
 const CARD_PAGE = 200;
@@ -1976,7 +1976,8 @@ function reserveBar(deck, n) {
   // Shown as buttons on a wide screen, and folded into a menu on a phone.
   const more = [
     n > 1 && ['Pull all', hasTopics ? 'Pull all' : `Pull all ${n.toLocaleString()}`, null, () => pull(n), null],
-    n > 1 && ['Choose cards', 'Choose cards', 'check', reorder, 'List the reserve in the order it is pulled in, to tick cards to pull in or to rearrange it'],
+    // Only a phone needs it: wider, the Reserve tab and the reserve column list the reserve in order already.
+    n > 1 && isPhone() && ['Choose cards', 'Choose cards', 'check', reorder, 'List the reserve in the order it is pulled in, to tick cards to pull in or to rearrange it'],
     store.editable(deck.id) && ['Import to reserve', 'Import to reserve', 'upload', () => pickImportFile(deck, true), 'Import cards from a CSV or Excel file straight into the reserve'],
   ].filter(Boolean);
   return h(
@@ -2028,7 +2029,9 @@ function cardList(deck, view, { filters, filtering, editable, hasTopics, now, co
       .filter((card) => view === 'all' || inTab(card, view));
     shown.textContent = q || filtering ? `${matches.length.toLocaleString()} of ${plural(cards.length, 'card')}` : plural(cards.length, 'card');
     // Only cards on screen stay ticked; ticks in another list's view are that list's to keep.
-    pruneTicks(selected, matches, view, store.card);
+    // With one list on screen (the tabs), anything it does not show is unticked, as it always was;
+    // beside another list, a list keeps that list's ticks.
+    pruneTicks(selected, matches, isTabbedDeck() ? 'all' : view, store.card);
     const mine = new Set(ownTicks(selected, matches, view));
     const pick = (ids, on) => {
       for (const id of ids) on ? selected.add(id) : selected.delete(id);
@@ -2519,6 +2522,8 @@ function reserveColumn(deck, editable, options) {
   const topicName = reserveTopic && topicOptions(deck, null).find((o) => o.value === reserveTopic)?.textContent;
   const pulledToast = (pulled) => toast(`${plural(pulled, 'card')} pulled in as new ${pulled === 1 ? 'card' : 'cards'}`);
   const pullNext = (n) => {
+    // Pulled cards leave the reserve: none of them stays ticked in the studying list.
+    for (const id of [...selected]) if (store.card(id)?.reserved) selected.delete(id);
     pulledToast(store.pullFromReserve(deck.id, n, Date.now(), topics.length ? topics : undefined));
     render();
   };
@@ -2633,6 +2638,7 @@ function reserveColumn(deck, editable, options) {
             type: 'button',
             title: 'Pull the ticked reserve cards in as new cards, in their reserve order',
             onclick: () => {
+              for (const id of ticked) selected.delete(id);
               pulledToast(store.pullCards(ticked));
               render();
             },
@@ -2646,7 +2652,11 @@ function reserveColumn(deck, editable, options) {
           moveButton('To top', 'Move to the front of the reserve, to be pulled in first', toTop),
           moveButton('To bottom', 'Move to the end of the reserve, to be pulled in last', toBottom),
         ],
-        editable && h('button', { class: 'btn danger', type: 'button', onclick: () => removeCards(ticked) }, icon('trash'), 'Delete'),
+        editable && [
+          hasTopics && h('button', { class: 'btn', type: 'button', title: 'Put the ticked cards in a topic, or take them out of one', onclick: () => openMoveToTopic(deck, ticked) }, 'Move to topic…'),
+          h('button', { class: 'btn', type: 'button', title: 'Add a copy of each ticked card with its front and back swapped, on the reserve', onclick: () => addReversedCards(ticked) }, icon('swap'), 'Add reversed'),
+          h('button', { class: 'btn danger', type: 'button', onclick: () => removeCards(ticked) }, icon('trash'), 'Delete'),
+        ],
       ),
     );
   };
