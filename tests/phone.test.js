@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { Rating } from '../js/fsrs.js';
-import { classifySwipe, inTab, tabFilters } from '../js/phone.js';
+import { classifySwipe, inTab, isRevealTap, tabFilters } from '../js/phone.js';
 
 const NO = { groups: [], due: 'any', added: 'any', lapses: 'any', topics: [], sort: 'newest' };
 
@@ -36,4 +36,14 @@ test('the axis that moved more decides, and vertical can be switched off', () =>
   assert.equal(classifySwipe({ ...box, verticalAllowed: true, dx: 130, dy: 120 }), Rating.Good);
   assert.equal(classifySwipe({ ...box, verticalAllowed: false, dx: 5, dy: 200 }), null);
   assert.equal(classifySwipe({ ...box, verticalAllowed: false, dx: 100, dy: 120 }), Rating.Good);
+});
+
+test('a tap on the card reveals, except on something of its own to press or scroll', () => {
+  const card = { contains: (el) => el.inCard };
+  const plain = { closest: () => null };
+  const speak = { closest: (sel) => (sel.includes('button') ? { inCard: true } : null) };
+  const outside = { closest: () => ({ inCard: false }) };
+  assert.equal(isRevealTap(plain, card), true);
+  assert.equal(isRevealTap(speak, card), false);
+  assert.equal(isRevealTap(outside, card), true);
 });

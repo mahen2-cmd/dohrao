@@ -2,7 +2,7 @@ import * as api from './api.js';
 import { hasRichContent, imageToken, mathSpans, mathToken, parseContent, speechText } from './content.js';
 import { DAY, MINUTE, Rating, State, dayStart } from './fsrs.js';
 import { parseSpreadsheet } from './importer.js';
-import { HEAT_WEEKS, PHONE_QUERY, classifySwipe, inTab, swipeLeaning, tabFilters } from './phone.js';
+import { HEAT_WEEKS, PHONE_QUERY, classifySwipe, inTab, isRevealTap, swipeLeaning, tabFilters } from './phone.js';
 import { recentStudy, rightShare } from './progress.js';
 import * as store from './store.js';
 import { effectiveTopic, filterLabel, inFilter, readableTopicName, resolveFilter, topicKeyFromFileName, topicLabel } from './topics.js';
@@ -2558,8 +2558,23 @@ function currentStudyCard(deckId, now) {
   return card;
 }
 
+// How many times the answer has been shown on this device; a phone's "tap anywhere" hint
+// goes away after the first few.
+const HINT_KEY = 'dohrao.revealHints';
+const REVEAL_HINTS = 5;
+function revealCount() {
+  try {
+    return Number(localStorage.getItem(HINT_KEY)) || 0;
+  } catch {
+    return REVEAL_HINTS;
+  }
+}
+
 function reveal() {
   session.revealed = true;
+  try {
+    localStorage.setItem(HINT_KEY, String(revealCount() + 1));
+  } catch {}
   render();
 }
 
@@ -2569,6 +2584,18 @@ function rate(rating) {
   session.cardId = null;
   session.done++;
   render();
+}
+
+/** On a phone, the study card's tools in a sheet: edit, listen again, delete. Null when there are none. */
+function cardOptions(card, deck) {
+  const editable = store.editable(deck.id);
+  const side = session.revealed ? 'back' : 'front';
+  const items = [
+    editable && h('button', { type: 'button', onclick: () => openCardDialog({ card }) }, icon('edit'), 'Edit card'),
+    canSpeak() && speechText(card[side]) !== '' && h('button', { type: 'button', onclick: () => speakSideOf(card, deck, side) }, icon('speaker'), 'Listen again'),
+    editable && h('button', { type: 'button', class: 'danger', onclick: () => removeCard(card) }, icon('trash'), 'Delete card'),
+  ].filter(Boolean);
+  return items.length > 0 && menu('Card options', items, 'more', 'phone-only');
 }
 
 function renderStudy(deck) {
@@ -2595,6 +2622,9 @@ function renderStudy(deck) {
       card && statusMark(cardStatus(card, now), card.state === State.Review ? 'Review' : cardStatus(card, now).label, 'state'),
       countPills(c),
       card && store.editable(deck.id) && h('div', { class: 'tools' }, iconButton('edit', 'Edit card (E)', () => openCardDialog({ card })), iconButton('trash', 'Delete card', () => removeCard(card), 'danger')),
+      // On a phone: where you are in the session, and the card's tools in a sheet.
+      card && h('span', { class: 'study-count phone-only' }, `${(session.done + 1).toLocaleString()} of ${total.toLocaleString()}`),
+      card && cardOptions(card, deck),
     ),
     bar,
   ];
@@ -2679,11 +2709,17 @@ function renderStudy(deck) {
                 ),
               ),
             ]
-          : h('button', { class: 'btn primary lg', type: 'button', onclick: reveal }, 'Show answer', h('kbd', null, 'Space')),
+          : [
+              revealCount() < REVEAL_HINTS && h('p', { class: 'reveal-hint phone-only' }, 'Tap anywhere to show the answer'),
+              h('button', { class: 'btn primary lg', type: 'button', onclick: reveal }, 'Show answer', h('kbd', null, 'Space')),
+            ],
       ),
     ),
   );
   markOverflow(app);
+  // On a phone a tap anywhere on the card shows the answer.
+  const flashcard = app.querySelector('.flashcard');
+  if (!session.revealed) flashcard.addEventListener('click', (e) => isPhone() && isRevealTap(e.target, flashcard) && reveal());
 }
 
 // ---- Statistics -----------------------------------------------------------

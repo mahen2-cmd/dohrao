@@ -3359,6 +3359,76 @@ table.upcoming {
   .bulk > .btn > .phone-only {
     display: inline-flex !important;
   }
+
+  /* Study: a fixed top, the card scrolling on its own between, the answer bar always in reach. */
+  .study.screen-drill {
+    height: 100vh;
+    height: 100dvh;
+    min-height: 0;
+    padding: 0 16px max(14px, env(safe-area-inset-bottom));
+  }
+  .study-top {
+    gap: 8px;
+    height: 56px;
+  }
+  .study-top .counts,
+  .study-top .tools {
+    display: none;
+  }
+  .study-title {
+    flex: 1;
+  }
+  .study-count {
+    color: var(--muted);
+    font-size: 13px;
+    white-space: nowrap;
+  }
+  .study-top .menu {
+    margin-right: -8px;
+  }
+  .screen-drill .flashcard {
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    justify-content: safe center;
+    padding: 24px 0;
+  }
+  .screen-drill .flashcard > * {
+    flex-shrink: 0;
+  }
+  .flashcard:has(hr) .face.question {
+    font-size: 22px;
+    color: var(--muted);
+  }
+  .flashcard hr {
+    margin: 24px auto;
+  }
+  .screen-drill .answer-bar {
+    flex: none;
+    min-height: 0;
+    padding-top: 10px;
+  }
+  .answer-bar > .btn.lg {
+    justify-content: center;
+    width: 100%;
+    height: 56px;
+    border-radius: 14px;
+    font-size: 17px;
+  }
+  .reveal-hint {
+    margin: 0 0 10px;
+    color: var(--muted);
+    font-size: 12.5px;
+  }
+  .screen-drill .ratings {
+    grid-template-columns: 1fr 1fr 1.35fr 1fr;
+    gap: 8px;
+  }
+  .screen-drill .rate {
+    min-height: 72px;
+    padding: 8px 2px;
+    border-radius: 12px;
+  }
 }
 
 @keyframes sheet-up {

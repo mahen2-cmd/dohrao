@@ -38,3 +38,12 @@ export function classifySwipe({ dx, dy, width, height, verticalAllowed }) {
   if (rating) return Math.abs(dy) >= SWIPE.y * height ? rating : null;
   return null;
 }
+
+// Things inside a card that are pressed or scrolled for themselves, not to turn the card over.
+const OWN_TARGETS = 'button, a, input, textarea, select, img, .katex-display, [contenteditable]';
+
+/** Whether a tap on `target` should show the answer: anywhere on `card` but its own controls. */
+export function isRevealTap(target, card) {
+  const hit = target.closest?.(OWN_TARGETS);
+  return !(hit && card.contains(hit));
+}
