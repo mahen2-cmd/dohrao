@@ -268,13 +268,58 @@ test('stale deck content keeps the newer groups and topics', async () => {
   assert.equal(d.topicsAt, NOW + 50);
 });
 
-test('a newer deck topic list replaces the stored one', async () => {
+test('a newer deck topic list wins for shared items and keeps the older side\'s others', async () => {
   const { db, ana, deck } = await seed();
-  setStored(db, 'decks', 'd1', { groups: [{ id: 'g9', name: 'Old' }], topics: [], topicsAt: NOW + 50 });
+  setStored(db, 'decks', 'd1', { groups: [{ id: 'g9', name: 'Old' }], topics: [{ id: 't2', name: 'Was', groupId: null, by: 'admin' }], topicsAt: NOW + 50 });
   applyChanges(db, ana.id, { decks: [{ ...deck, topics: [{ id: 't2', name: 'New', groupId: null, by: 'admin' }], topicsAt: NOW + 60 }] }, NOW);
   const d = buildView(db, ana.id, NOW).decks[0];
-  assert.equal(d.topics[0].id, 't2');
-  assert.equal(d.groups, undefined);   // absent in the winner, absent in the result
+  assert.deepEqual(d.topics.map((t) => t.name), ['New']);
+  assert.deepEqual(d.groups, [{ id: 'g9', name: 'Old' }]);   // not deleted by the newer side, so kept
+  assert.equal(d.topicsAt, NOW + 60);
+});
+
+const T = (id, name, over = {}) => ({ id, name, groupId: null, by: 'admin', ...over });
+
+test('a rename from a client keeps a topic the server added meanwhile', async () => {
+  const { db, ana, deck } = await seed();
+  setStored(db, 'decks', 'd1', { topics: [T('t1', 'Ser'), T('t9', 'Food', { by: 'ai' })], topicsAt: NOW + 50 });
+  applyChanges(db, ana.id, { decks: [{ ...deck, topics: [T('t1', 'Ser and estar')], topicsAt: NOW + 60 }] }, NOW);
+  const d = buildView(db, ana.id, NOW).decks[0];
+  assert.deepEqual(byId(d.topics).map((t) => [t.id, t.name]), [['t1', 'Ser and estar'], ['t9', 'Food']]);
+  assert.equal(d.topicsAt, NOW + 60);
+});
+
+test('a delete from a client removes only that topic', async () => {
+  const { db, ana, deck } = await seed();
+  setStored(db, 'decks', 'd1', { topics: [T('t1', 'Ser'), T('t2', 'Ir'), T('t9', 'Food', { by: 'ai' })], topicsAt: NOW + 50 });
+  applyChanges(db, ana.id, { decks: [{ ...deck, topics: [T('t1', 'Ser')], deletedTopicIds: ['t2'], topicsAt: NOW + 60 }] }, NOW);
+  const d = buildView(db, ana.id, NOW).decks[0];
+  assert.deepEqual(byId(d.topics).map((t) => t.id), ['t1', 't9']);
+  assert.deepEqual(d.deletedTopicIds, ['t2']);
+});
+
+test('a stale client without a new topic does not remove it', async () => {
+  const { db, ana, deck } = await seed();
+  setStored(db, 'decks', 'd1', { topics: [T('t1', 'Ser'), T('t9', 'Food', { by: 'ai' })], topicsAt: NOW + 50 });
+  applyChanges(db, ana.id, { decks: [{ ...deck, topics: [T('t1', 'Old name')], topicsAt: NOW + 10 }] }, NOW);
+  const d = buildView(db, ana.id, NOW).decks[0];
+  assert.deepEqual(byId(d.topics).map((t) => [t.id, t.name]), [['t1', 'Ser'], ['t9', 'Food']]);
+  assert.equal(d.topicsAt, NOW + 50);
+});
+
+test('a group deleted on either side stays deleted, and tombstones are kept from both', async () => {
+  const { db, ana, deck } = await seed();
+  setStored(db, 'decks', 'd1', {
+    groups: [{ id: 'g1', name: 'Verbs' }], topics: [T('t1', 'Ser', { groupId: 'g1' })],
+    deletedTopicIds: ['t7'], topicsAt: NOW + 50,
+  });
+  // An older copy still has t7, and deleted g1 itself (but its stamp is older).
+  applyChanges(db, ana.id, { decks: [{ ...deck, groups: [], topics: [T('t1', 'Ser'), T('t7', 'Gone')], deletedGroupIds: ['g1'], topicsAt: NOW + 10 }] }, NOW);
+  const d = buildView(db, ana.id, NOW).decks[0];
+  assert.deepEqual(d.groups, []);
+  assert.deepEqual(d.topics, [T('t1', 'Ser')]);   // the newer t1, out of the deleted group
+  assert.deepEqual(d.deletedGroupIds, ['g1']);
+  assert.deepEqual(d.deletedTopicIds, ['t7']);
 });
 
 test('a recipient cannot change topics of a given deck', async () => {

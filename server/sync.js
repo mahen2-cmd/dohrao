@@ -1,5 +1,5 @@
 // Each user's view of the store, and applying their changes under ownership rules.
-import { DECK_SHARED, CARD_CONTENT, split, mergeTopics } from './fields.js';
+import { DECK_SHARED, CARD_CONTENT, split, mergeTopics, mergeDeckTopics } from './fields.js';
 import { newSchedule } from '../js/fsrs.js';
 import { mergeCounts } from '../js/counts.js';
 
@@ -96,7 +96,7 @@ function applyDeck(db, userId, deck) {
     db.prepare('INSERT INTO decks (id, owner_id, data) VALUES (?, ?, ?)').run(deck.id, userId, JSON.stringify(shared));
   } else if (kind === 'own') {
     const stored = parse(db.prepare('SELECT data FROM decks WHERE id = ?').get(deck.id).data);
-    const merged = mergeTopics(stored, shared, ['groups', 'topics'], 'topicsAt');
+    const merged = mergeDeckTopics(stored, shared);
     db.prepare('UPDATE decks SET data = ? WHERE id = ?').run(JSON.stringify(merged), deck.id);
   }
   savePrefs(db, userId, deck.id, prefs);

@@ -400,7 +400,7 @@ export const deck = (id) => state.decks.find((d) => d.id === id);
 // A deck given by the admin (`assigned: true`, from its owner `from`) is studied like any other,
 // but its name, languages and cards are the owner's. These deck fields come from the owner, as
 // listed in server/fields.js.
-const SHARED_DECK_KEYS = ['name', 'created', 'ankiId', 'frontLang', 'backLang', 'saveAudio', 'groups', 'topics', 'topicsAt'];
+const SHARED_DECK_KEYS = ['name', 'created', 'ankiId', 'frontLang', 'backLang', 'saveAudio', 'groups', 'topics', 'topicsAt', 'deletedGroupIds', 'deletedTopicIds'];
 
 /** Whether a deck's name and cards can be changed here: not for a deck given by the admin. */
 export const editable = (deckId) => !deck(deckId)?.assigned;
@@ -740,11 +740,15 @@ export function renameGroup(deckId, groupId, name, now = Date.now()) {
   touchTopics(d, now);
 }
 
+// Remember a deleted group or topic id (the most recent 500), so a sync never brings it back.
+const remember = (list, id) => [...(list ?? []).filter((x) => x !== id), id].slice(-500);
+
 /** Remove a group. Its topics are kept, outside any group. */
 export function deleteGroup(deckId, groupId, now = Date.now()) {
   mustEdit(deckId);
   const d = deck(deckId);
   d.groups = (d.groups ?? []).filter((g) => g.id !== groupId);
+  d.deletedGroupIds = remember(d.deletedGroupIds, groupId);
   for (const t of d.topics ?? []) if (t.groupId === groupId) t.groupId = null;
   touchTopics(d, now);
 }
@@ -794,6 +798,7 @@ export function deleteTopic(deckId, topicId, now = Date.now()) {
   mustEdit(deckId);
   const d = deck(deckId);
   d.topics = (d.topics ?? []).filter((t) => t.id !== topicId);
+  d.deletedTopicIds = remember(d.deletedTopicIds, topicId);
   for (const c of cardsIn(deckId)) {
     if (c.topic !== topicId) continue;
     delete c.topic;

@@ -583,6 +583,20 @@ test('deleting a topic makes its cards sortable again', () => {
   }
 });
 
+test('deleting a topic or group remembers its id so a sync does not bring it back', () => {
+  const deck = setup();
+  const g = store.createGroup(deck.id, 'Verbs', T0);
+  const t = store.createTopic(deck.id, 'Ser', g.id, T0);
+  store.deleteTopic(deck.id, t.id, T0 + 1);
+  store.deleteGroup(deck.id, g.id, T0 + 2);
+  assert.deepEqual(store.deck(deck.id).deletedTopicIds, [t.id]);
+  assert.deepEqual(store.deck(deck.id).deletedGroupIds, [g.id]);
+  for (let i = 0; i < 510; i++) store.deleteTopic(deck.id, store.createTopic(deck.id, `x${i}`, null, T0).id, T0 + 3);
+  const ids = store.deck(deck.id).deletedTopicIds;
+  assert.equal(ids.length, 500);
+  assert.ok(!ids.includes(t.id));   // the oldest are forgotten first
+});
+
 test('moving cards by hand marks them manual and they are not counted as unsorted', () => {
   const deck = setup();
   store.addCards(deck.id, [['a', 'b'], ['c', 'd']], T0);

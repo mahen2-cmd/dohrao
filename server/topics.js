@@ -1,6 +1,7 @@
 // Jobs that put a deck's cards into topics: sorting with the AI service, proposing topics,
 // and approving a proposal. Scheduling data (progress rows) is never touched here.
 import { randomUUID } from 'node:crypto';
+import { addTombstone } from './fields.js';
 
 const parse = (text) => (text ? JSON.parse(text) : {});
 const NAME_MAX = 60;
@@ -141,6 +142,10 @@ export function approveProposal(db, deckId, { groups, topics }, now) {
   if (topics.some((t) => t.groupId != null && !groupIds.has(t.groupId))) throw bad();
 
   const deck = deckData(db, deckId);
+  // The old groups and topics are deleted; remember them so a device that still has them
+  // cannot bring them back.
+  for (const g of deck.groups ?? []) deck.deletedGroupIds = addTombstone(deck.deletedGroupIds, g.id);
+  for (const t of deck.topics ?? []) deck.deletedTopicIds = addTombstone(deck.deletedTopicIds, t.id);
   deck.groups = groups.map((g) => ({ id: groupIds.get(g.id), name: g.name.trim() }));
   deck.topics = topics.map((t) => ({
     id: randomUUID(), name: t.name.trim(), groupId: t.groupId == null ? null : groupIds.get(t.groupId), by: 'admin',

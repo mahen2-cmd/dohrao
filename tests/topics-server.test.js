@@ -181,6 +181,19 @@ test('approveProposal writes fresh topics and deletes the proposal', async () =>
   assert.equal(stored(db, 'c1').topic, 'tm');
 });
 
+test('approveProposal remembers the old ids so a stale device cannot bring them back', async () => {
+  const { db, ana } = await seed({ groups: [{ id: 'g0', name: 'Old' }], topics: [{ id: 't1', name: 'Ser', groupId: 'g0', by: 'file' }], topicsAt: NOW });
+  approveProposal(db, 'd1', { groups: [], topics: [{ id: 'x', name: 'New', groupId: null }] }, LATER);
+  const deck = storedDeck(db);
+  assert.deepEqual(deck.deletedGroupIds, ['g0']);
+  assert.deepEqual(deck.deletedTopicIds, ['t1']);
+  // A device that still has the old list (and a later clock) syncs.
+  applyChanges(db, ana.id, { decks: [deckOf({ groups: [{ id: 'g0', name: 'Old' }], topics: [{ id: 't1', name: 'Ser', groupId: 'g0', by: 'file' }], topicsAt: LATER + 100 })] }, LATER);
+  const after = storedDeck(db);
+  assert.deepEqual(after.groups, []);
+  assert.deepEqual(after.topics.map((t) => t.name), ['New']);
+});
+
 test('approveProposal refuses bad names and unknown groups', async () => {
   const { db } = await seed();
   const bad = (body) => assert.throws(() => approveProposal(db, 'd1', body, LATER), /bad-request/);
