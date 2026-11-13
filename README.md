@@ -94,6 +94,13 @@ After that, the schedule depends on the deck's scheduling setting:
 
 In both, forgetting a review card sends it through one 10-minute relearning step. A deck can switch between the two at any time, because both sets of scheduling data are kept for every card.
 
+### On a phone
+
+- **Tap the card** to show the answer, or press **Show answer** at the bottom.
+- **Swipe the answer** to rate it: right for Good, left for Again, up for Easy, down for Hard. A stamp on the card shows the answer and when the card comes back; let go short of it and nothing happens. A long answer scrolls instead of swiping up and down, and a wide equation scrolls sideways. The four buttons work too.
+- Edit, delete and listen again are in the **⋯** menu at the top.
+- A deck's page has three tabs, **Cards**, **Reserve** and **Topics**, with **Study** and **Add card** at the bottom. Hold a card to tick it; ticked cards get a toolbar along the bottom, and on the Reserve tab **Move** puts them up, down, to the top or to the bottom.
+
 ### Keyboard shortcuts
 
 | Key | Action |
