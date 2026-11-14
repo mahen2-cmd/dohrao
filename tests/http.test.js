@@ -504,3 +504,17 @@ test('a sync on an urdu deck queues its new cards', async (t) => {
   assert.equal(state.json.cards[0].urdu, 'ur:olá');
   assert.equal(state.json.cards[0].urduBy, 'google');
 });
+
+test('a sync that is saved still answers 200 when the Urdu scan fails', async (t) => {
+  const { port, invite, db, admin } = await start(t);
+  const { cookie } = await signUp(port, invite);
+  // Another user's deck whose stored data can't be read: the scan of it throws.
+  db.prepare('INSERT INTO decks (id, owner_id, data) VALUES (?, ?, ?)').run('broken', admin.id, '{not json');
+  const errors = t.mock.method(console, 'error', () => {});
+  const mine = { id: 'd1', name: 'Mine', created: NOW, frontLang: 'en-US', backLang: 'pt-PT' };
+  const sync = await call(port, 'POST', 'api/sync', { cookie, body: { decks: [mine, { ...mine, id: 'broken' }] } });
+  assert.equal(sync.status, 200);
+  assert.deepEqual(sync.json, { rejected: ['broken'] });
+  assert.equal((await call(port, 'GET', 'api/state', { cookie })).json.decks[0].name, 'Mine');
+  assert.match(errors.mock.calls.map((c) => c.arguments.join(' ')).join('\n'), /Urdu scan failed/);
+});

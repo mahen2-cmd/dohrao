@@ -283,7 +283,12 @@ export function createRecallServer({ dataDir, origin, tts, translator, ...rest }
     if (!validChanges(changes)) throw new HttpError(400, 'bad-request');
     const result = applyChanges(db, user.id, changes, Date.now());
     const deckIds = new Set([...(changes.cards ?? []).map((c) => c.deckId), ...(changes.decks ?? []).map((d) => d.id)]);
-    for (const id of deckIds) if (typeof id === 'string') urduQueue.scanDeck(id);
+    // The changes are saved by now; a fault in the Urdu scan must not report them as unsaved.
+    try {
+      for (const id of deckIds) if (typeof id === 'string') urduQueue.scanDeck(id);
+    } catch (error) {
+      console.error('Urdu scan failed after a sync:', error?.message ?? error);
+    }
     sendJson(res, 200, result);
   }
 
