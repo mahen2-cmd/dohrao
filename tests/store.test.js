@@ -783,3 +783,18 @@ test('new decks default to FSRS at 90%', () => {
   assert.equal(deck.scheduler, 'fsrs');
   assert.equal(deck.retention, 0.9);
 });
+
+test('hiding and showing a deck', () => {
+  const deck = setup();
+  assert.equal(store.isHidden(deck), false);
+  store.setHidden(deck.id, true);
+  assert.equal(store.deck(deck.id).hidden, true);
+  assert.equal(store.isHidden(store.deck(deck.id)), true);
+  store.setHidden(deck.id, false);
+  assert.equal('hidden' in store.deck(deck.id), false);
+  assert.equal(store.isHidden(store.deck(deck.id)), false);
+});
+
+test('hidden is a personal deck field', () => {
+  assert.equal(DECK_SHARED.includes('hidden'), false);
+});

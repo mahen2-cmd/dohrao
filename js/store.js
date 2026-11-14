@@ -422,6 +422,17 @@ export function updateDeck(id, patch) {
   save();
 }
 
+// Hiding a deck takes it off the home page's list and today's figures. It is the user's own
+// choice, kept per user like the deck's other personal settings.
+export const isHidden = (d) => d?.hidden === true;
+
+export function setHidden(id, hidden) {
+  const d = deck(id);
+  if (hidden) d.hidden = true;
+  else delete d.hidden;
+  save();
+}
+
 export function deleteDeck(id) {
   mustEdit(id);
   state.decks = state.decks.filter((d) => d.id !== id);
