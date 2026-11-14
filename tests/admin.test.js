@@ -160,3 +160,22 @@ test("progress shows each person's decks, statuses and study days, and only card
   assert.equal(detail.cards[0].pass, undefined);
   assert.equal(personProgress(db, 'no-such-user', NOW), null);
 });
+
+test("the owner's hidden choice is not copied to a new recipient", async () => {
+  const { db, ana, ben } = await seed();
+  applyChanges(db, ana.id, { decks: [{ ...deck, hidden: true }] }, NOW);
+  assert.equal(buildView(db, ana.id, NOW).decks[0].hidden, true);
+  assignDeck(db, { ownerId: ana.id, deckId: 'd1', userIds: [ben.id] }, NOW);
+  const given = buildView(db, ben.id, NOW).decks[0];
+  assert.equal('hidden' in given, false);
+  assert.equal(given.newPerDay, 15); // other prefs still copied
+});
+
+test("a returning recipient's own hidden choice is kept", async () => {
+  const { db, ana, ben } = await seed();
+  assignDeck(db, { ownerId: ana.id, deckId: 'd1', userIds: [ben.id] }, NOW);
+  applyChanges(db, ben.id, { decks: [{ ...buildView(db, ben.id, NOW).decks[0], hidden: true }] }, NOW);
+  unassignDeck(db, { ownerId: ana.id, deckId: 'd1', userIds: [ben.id] });
+  assignDeck(db, { ownerId: ana.id, deckId: 'd1', userIds: [ben.id] }, NOW);
+  assert.equal(buildView(db, ben.id, NOW).decks[0].hidden, true);
+});
