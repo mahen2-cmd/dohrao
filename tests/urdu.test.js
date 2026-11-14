@@ -32,4 +32,7 @@ test('shownSide', () => {
   assert.deepEqual(shownSide(c, { ...deck, frontShows: 'both', frontShowsAt: 1, urduScript: 'roman' }), { english: 'Where do you live?', urdu: 'aap kahan rahte hen?', urduLang: 'ur-Latn' });
   assert.deepEqual(shownSide(card, { ...deck, frontShows: 'ur', frontShowsAt: 1 }), { english: 'Where do you live?', urdu: null, urduLang: 'ur' });
   assert.deepEqual(shownSide(c, { ...deck, urdu: false, frontShows: 'ur', frontShowsAt: 1 }).urdu, null);
+  const english = { english: 'Where do you live?', urdu: null, urduLang: 'ur' };
+  assert.deepEqual(shownSide(c, { ...deck, frontShows: 'en', frontShowsAt: 1 }), english);
+  assert.deepEqual(shownSide(c, deck), english);
 });

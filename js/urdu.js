@@ -38,12 +38,13 @@ export function frontShows(deck) {
 
 /** The English side of a card as it should be shown: its English and Urdu, either of which may be absent. */
 export function shownSide(card, deck) {
-  const hasUrdu = Boolean(deck.urdu && card.urdu);
-  const roman = deck.urduScript === 'roman' && card.urduRoman;
   const choice = frontShows(deck);
+  const hasUrdu = Boolean(deck.urdu && card.urdu);
+  const showsUrdu = hasUrdu && choice !== 'en';
+  const roman = deck.urduScript === 'roman' && card.urduRoman;
   return {
-    english: hasUrdu && choice === 'ur' ? null : card[englishSide(card, deck)],
-    urdu: hasUrdu ? (roman ? card.urduRoman : card.urdu) : null,
+    english: showsUrdu && choice === 'ur' ? null : card[englishSide(card, deck)],
+    urdu: showsUrdu ? (roman ? card.urduRoman : card.urdu) : null,
     urduLang: roman ? 'ur-Latn' : 'ur',
   };
 }
