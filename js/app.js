@@ -86,6 +86,7 @@ const ICONS = {
   upload: '<path d="M12 16V5M7 9l5-5 5 5M5 20h14"/>',
   search: '<circle cx="11" cy="11" r="6.5"/><path d="M20 20l-4-4"/>',
   check: '<path d="M5 12.5l4.5 4.5L19 7.5"/>',
+  hide: '<path d="M3 3l18 18"/><path d="M10.6 5.1A9.6 9.6 0 0 1 12 5c5 0 9 4.5 10 7a12.6 12.6 0 0 1-2.9 4M6.6 6.6C4.4 8 2.6 10.2 2 12c1 2.5 5 7 10 7a9.8 9.8 0 0 0 5.4-1.6M9.9 9.9a3 3 0 0 0 4.2 4.2"/>',
   alert: '<path d="M12 4l9 16H3z"/><path d="M12 10v4M12 17v.5"/>',
   speaker: '<path d="M4 9.5v5h3.5L12 18V6L7.5 9.5H4z"/><path d="M15.5 9a4 4 0 0 1 0 6M18 6.5a7.5 7.5 0 0 1 0 11"/>',
   play: '<path d="M7 5l12 7-12 7V5z"/>',
@@ -557,6 +558,7 @@ function openDeckDialog(deck) {
     ),
   );
   const saveAudio = h('input', { type: 'checkbox', checked: defaults.saveAudio });
+  const hidden = h('input', { type: 'checkbox', checked: store.isHidden(deck) });
 
   const form = h(
     'form',
@@ -576,8 +578,10 @@ function openDeckDialog(deck) {
           }),
         };
         if (own && !values.name) return name.focus();
-        if (deck) store.updateDeck(deck.id, values);
-        else store.createDeck(values);
+        if (deck) {
+          store.updateDeck(deck.id, values);
+          if (hidden.checked !== store.isHidden(deck)) store.setHidden(deck.id, hidden.checked);
+        } else store.createDeck(values);
         dialog.close();
       },
     },
@@ -614,6 +618,10 @@ function openDeckDialog(deck) {
         h('label', { class: 'check', style: 'margin-top: 12px' }, saveAudio, 'Keep the audio made for this deck'),
         h('small', { class: 'field-note' }, 'Turn this off for decks that are mostly maths: audio is then made each time it plays instead of being kept, and “npm run cache-voice” leaves the deck out.'),
       ],
+    ],
+    deck && [
+      h('label', { class: 'check', style: 'margin-top: 16px' }, hidden, 'Hide deck from the list'),
+      h('small', { class: 'field-note' }, 'A hidden deck waits, folded away, at the bottom of your decks and leaves today’s figures. Only you see it hidden.'),
     ],
     h(
       'div',
@@ -1571,10 +1579,45 @@ function todayPanel(all, now) {
   );
 }
 
+// Whether the home page's hidden section is open; kept across renders so Show can be pressed again.
+let hiddenOpen = false;
+
+function setDeckHidden(deck, hidden) {
+  store.setHidden(deck.id, hidden);
+  toast(hidden ? `Hidden “${deck.name}”.` : `“${deck.name}” is back in your decks.`);
+  render();
+}
+
+/** The folded section of hidden decks at the bottom of the home page, or nothing when none is hidden. */
+function hiddenSection(hidden, now) {
+  if (!hidden.length) return null;
+  const section = h(
+    'details',
+    { class: 'hidden-decks', open: hiddenOpen, ontoggle: () => (hiddenOpen = section.open) },
+    h('summary', null, icon('next'), `Hidden · ${hidden.length.toLocaleString()}`),
+    h(
+      'ul',
+      { class: 'hidden-list', 'aria-label': 'Hidden decks' },
+      hidden.map((deck) =>
+        h(
+          'li',
+          null,
+          h('a', { class: 'hidden-name', href: `#/deck/${deck.id}` }, h('span', null, deck.name), deckFrom(deck)),
+          h('span', { class: 'hidden-meta' }, plural(store.counts(deck.id, now).cards, 'card')),
+          h('button', { class: 'btn', type: 'button', onclick: () => setDeckHidden(deck, false) }, 'Show'),
+        ),
+      ),
+    ),
+  );
+  return section;
+}
+
 function renderHome() {
   const now = Date.now();
   const decks = store.decks();
-  const all = decks.map((deck) => ({ deck, c: store.counts(deck.id, now) }));
+  const shown = decks.filter((d) => !store.isHidden(d));
+  const hidden = decks.filter((d) => store.isHidden(d));
+  const all = shown.map((deck) => ({ deck, c: store.counts(deck.id, now) }));
 
   const row = ({ deck, c }) =>
     h(
@@ -1600,6 +1643,7 @@ function renderHome() {
       h(
         'div',
         { class: 'deck-actions' },
+        iconButton('hide', 'Hide deck', () => setDeckHidden(deck, true)),
         iconButton('edit', 'Deck settings', () => openDeckDialog(deck)),
         store.editable(deck.id) && iconButton('trash', 'Delete deck', () => removeDeck(deck), 'danger'),
         c.total
@@ -1635,7 +1679,8 @@ function renderHome() {
             ),
           ),
         ),
-        h('ul', { class: 'deck-list', 'aria-label': 'Decks' }, all.map(row)),
+        all.length > 0 && h('ul', { class: 'deck-list', 'aria-label': 'Decks' }, all.map(row)),
+        hiddenSection(hidden, now),
       ]
     : h(
         'div',

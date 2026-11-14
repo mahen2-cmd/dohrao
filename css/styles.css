@@ -632,6 +632,66 @@ kbd {
   text-decoration: underline;
   text-underline-offset: 3px;
 }
+/* Hidden decks, folded away under the deck list. */
+.hidden-decks {
+  margin-top: 28px;
+}
+.hidden-decks summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 0;
+  color: var(--muted);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  list-style: none;
+}
+.hidden-decks summary::-webkit-details-marker {
+  display: none;
+}
+.hidden-decks summary:hover {
+  color: var(--text);
+}
+.hidden-decks summary svg {
+  width: 16px;
+  height: 16px;
+  transition: transform 0.15s;
+}
+.hidden-decks[open] summary svg {
+  transform: rotate(90deg);
+}
+.hidden-list {
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.hidden-list li {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 10px 0;
+  border-top: 1px solid var(--border);
+}
+.hidden-name {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 10px;
+  color: var(--muted);
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.hidden-name:hover > span:first-child {
+  color: var(--link);
+}
+.hidden-meta {
+  color: var(--muted);
+  font-size: 13.5px;
+  white-space: nowrap;
+}
 .deck .count {
   font-size: 14px;
 }
