@@ -12,14 +12,15 @@ export function listUsers(db) {
 /** The owner's decks with card counts and everyone the deck has been given to. */
 export function ownedDecks(db, ownerId) {
   const recipients = db.prepare(`
-    SELECT a.user_id, u.name, a.active FROM assignments a JOIN users u ON u.id = a.user_id
+    SELECT a.user_id, u.name, a.active, a.urdu FROM assignments a JOIN users u ON u.id = a.user_id
     WHERE a.deck_id = ? ORDER BY a.assigned, u.name`);
   const count = db.prepare('SELECT COUNT(*) AS n FROM cards WHERE deck_id = ?');
   return db.prepare('SELECT id, data FROM decks WHERE owner_id = ? ORDER BY rowid').all(ownerId).map((d) => ({
     id: d.id,
     name: parse(d.data).name,
     cards: count.get(d.id).n,
-    recipients: recipients.all(d.id).map((r) => ({ userId: r.user_id, name: r.name, active: r.active === 1 })),
+    urdu: Boolean(parse(d.data).urdu),
+    recipients: recipients.all(d.id).map((r) => ({ userId: r.user_id, name: r.name, active: r.active === 1, urdu: r.urdu === 1 })),
   }));
 }
 
@@ -83,6 +84,15 @@ export function unassignDeck(db, { ownerId, deckId, userIds }) {
     db.exec('ROLLBACK');
     throw err;
   }
+}
+
+/** Switch Urdu on or off for one person's copy of a deck; they must have been given it. */
+export function setUrduSwitch(db, { ownerId, deckId, userId, on }, now) {
+  const own = db.prepare('SELECT 1 FROM decks WHERE id = ? AND owner_id = ?').get(deckId, ownerId);
+  if (!own) throw new Error('not-owner');
+  const { changes } = db.prepare('UPDATE assignments SET urdu = ?, urdu_at = ? WHERE deck_id = ? AND user_id = ?')
+    .run(on ? 1 : 0, now, deckId, userId);
+  if (!changes) throw new Error('not-given');
 }
 
 /** One person's decks with how far they have got in each, and their answers per day. */

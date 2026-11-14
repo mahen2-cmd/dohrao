@@ -5,7 +5,7 @@ import { URDU_FIELDS } from '../js/urdu.js';
 import { mergeCounts } from '../js/counts.js';
 
 // Keys the view adds to given decks; never stored.
-const VIEW_ONLY = ['assigned', 'from'];
+const VIEW_ONLY = ['assigned', 'from', 'urduSwitch', 'urduSwitchAt'];
 
 const parse = (text) => (text ? JSON.parse(text) : {});
 const validId = (id) => typeof id === 'string' && id.length >= 1 && id.length <= 100;
@@ -16,7 +16,7 @@ function ownDecks(db, userId) {
 
 function givenDecks(db, userId) {
   return db.prepare(`
-    SELECT d.id, d.data, u.name AS owner FROM assignments a
+    SELECT d.id, d.data, u.name AS owner, a.urdu, a.urdu_at FROM assignments a
     JOIN decks d ON d.id = a.deck_id JOIN users u ON u.id = d.owner_id
     WHERE a.user_id = ? AND a.active = 1 AND d.owner_id <> ?
     ORDER BY a.assigned, d.rowid`).all(userId, userId);
@@ -48,7 +48,9 @@ export function buildView(db, userId, now) {
     cards.push(...cardsFor(db, userId, d.id, false));
   }
   for (const d of givenDecks(db, userId)) {
-    decks.push({ id: d.id, ...parse(d.data), ...prefsOf(d.id), assigned: true, from: d.owner });
+    const given = { id: d.id, ...parse(d.data), ...prefsOf(d.id), assigned: true, from: d.owner };
+    if (d.urdu_at !== null) Object.assign(given, { urduSwitch: d.urdu === 1, urduSwitchAt: d.urdu_at });
+    decks.push(given);
     cards.push(...cardsFor(db, userId, d.id, true));
   }
   const s = db.prepare('SELECT daily, log, settings, saved_at FROM user_state WHERE user_id = ?').get(userId);

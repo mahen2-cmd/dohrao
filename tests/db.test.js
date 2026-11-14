@@ -1,6 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import { openDb } from '../server/db.js';
 import { CARD_CONTENT, split } from '../server/fields.js';
 
@@ -9,6 +13,24 @@ test('opens an in-memory db with every table', () => {
   const names = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all().map((r) => r.name);
   for (const t of ['users', 'sessions', 'invites', 'decks', 'deck_prefs', 'cards', 'progress', 'assignments', 'user_state']) {
     assert.ok(names.includes(t), `missing table ${t}`);
+  }
+});
+
+test('an old database gets the assignment Urdu columns', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'recall-db-'));
+  const file = join(dir, 'old.db');
+  try {
+    const old = new DatabaseSync(file);
+    old.exec('CREATE TABLE assignments (deck_id TEXT NOT NULL, user_id TEXT NOT NULL, active INTEGER NOT NULL, assigned INTEGER NOT NULL, PRIMARY KEY (deck_id, user_id))');
+    old.close();
+    for (let i = 0; i < 2; i++) {
+      const db = openDb(file); // twice: the migration is idempotent
+      const cols = db.prepare('PRAGMA table_info(assignments)').all().map((c) => c.name);
+      assert.ok(cols.includes('urdu') && cols.includes('urdu_at'));
+      db.close();
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
   }
 });
 

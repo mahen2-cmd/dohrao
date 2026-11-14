@@ -65,6 +65,13 @@ CREATE INDEX IF NOT EXISTS cards_deck ON cards(deck_id);
 CREATE INDEX IF NOT EXISTS progress_card ON progress(card_id);
 `;
 
+/** The admin's per-person Urdu switch and when it was set; older databases lack the columns. */
+function addAssignmentUrduColumns(db) {
+  const have = db.prepare('PRAGMA table_info(assignments)').all().map((c) => c.name);
+  if (!have.includes('urdu')) db.exec('ALTER TABLE assignments ADD COLUMN urdu INTEGER NOT NULL DEFAULT 0');
+  if (!have.includes('urdu_at')) db.exec('ALTER TABLE assignments ADD COLUMN urdu_at INTEGER');
+}
+
 /** Open (or create) the database at `file`; use ':memory:' in tests. */
 export function openDb(file) {
   const db = new DatabaseSync(file);
@@ -72,5 +79,6 @@ export function openDb(file) {
   if (file !== ':memory:') db.exec('PRAGMA journal_mode = WAL');
   db.exec('PRAGMA busy_timeout = 5000');
   db.exec(SCHEMA);
+  addAssignmentUrduColumns(db);
   return db;
 }

@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { openDb } from '../server/db.js';
 import { createUser } from '../server/auth.js';
 import { buildView, applyChanges } from '../server/sync.js';
-import { listUsers, ownedDecks, assignDeck, unassignDeck, peopleProgress, personProgress } from '../server/admin.js';
+import { listUsers, ownedDecks, assignDeck, unassignDeck, setUrduSwitch, peopleProgress, personProgress } from '../server/admin.js';
 import { newSchedule, State } from '../js/fsrs.js';
 
 const NOW = 1_700_000_000_000;
@@ -118,7 +118,8 @@ test('ownedDecks counts cards and lists recipients; listUsers is ordered by name
   assert.equal(d.id, 'd1');
   assert.equal(d.name, 'Spanish');
   assert.equal(d.cards, 4);
-  assert.deepEqual(d.recipients, [{ userId: ben.id, name: 'Ben', active: true }, { userId: cal.id, name: 'Cal', active: false }]);
+  assert.equal(d.urdu, false);
+  assert.deepEqual(d.recipients, [{ userId: ben.id, name: 'Ben', active: true, urdu: false }, { userId: cal.id, name: 'Cal', active: false, urdu: false }]);
   assert.deepEqual(listUsers(db).map((u) => u.name), ['Ana', 'Ben', 'Cal']);
   assert.deepEqual(Object.keys(listUsers(db)[0]).sort(), ['created', 'id', 'name', 'role', 'username']);
 });
@@ -186,4 +187,35 @@ test("a new recipient does not get the owner's Urdu choice", async () => {
   assignDeck(db, { ownerId: ana.id, deckId: 'd1', userIds: [ben.id] }, NOW);
   const given = buildView(db, ben.id, NOW).decks[0];
   for (const key of ['frontShows', 'frontShowsAt', 'urduScript']) assert.equal(key in given, false);
+});
+
+test("switching Urdu on shows in the recipient's view and survives their sync", async () => {
+  const { db, ana, ben } = await seed();
+  assignDeck(db, { ownerId: ana.id, deckId: 'd1', userIds: [ben.id] }, NOW);
+  assert.equal(buildView(db, ben.id, NOW).decks[0].urduSwitch, undefined);
+  setUrduSwitch(db, { ownerId: ana.id, deckId: 'd1', userId: ben.id, on: true }, NOW + 10);
+  const seen = buildView(db, ben.id, NOW).decks[0];
+  assert.equal(seen.urduSwitch, true);
+  assert.equal(seen.urduSwitchAt, NOW + 10);
+  applyChanges(db, ben.id, { decks: [{ ...seen, frontShows: 'en' }] }, NOW + 5);
+  assert.equal(buildView(db, ben.id, NOW).decks[0].urduSwitch, true);
+  const prefs = db.prepare('SELECT data FROM deck_prefs WHERE user_id = ? AND deck_id = ?').get(ben.id, 'd1');
+  assert.ok(!('urduSwitch' in JSON.parse(prefs.data)) && !('urduSwitchAt' in JSON.parse(prefs.data)));
+});
+
+test("ownedDecks lists each recipient's Urdu switch and the deck's own flag", async () => {
+  const { db, ana, ben, cal } = await seed();
+  assignDeck(db, { ownerId: ana.id, deckId: 'd1', userIds: [ben.id, cal.id] }, NOW);
+  setUrduSwitch(db, { ownerId: ana.id, deckId: 'd1', userId: cal.id, on: true }, NOW);
+  assert.deepEqual(ownedDecks(db, ana.id)[0].recipients.map((r) => [r.name, r.urdu]), [['Ben', false], ['Cal', true]]);
+  assert.equal(ownedDecks(db, ana.id)[0].urdu, false);
+  applyChanges(db, ana.id, { decks: [{ ...deck, urdu: true }] }, NOW);
+  assert.equal(ownedDecks(db, ana.id)[0].urdu, true);
+});
+
+test('setUrduSwitch refuses a deck not given to that person, or not yours', async () => {
+  const { db, ana, ben, cal } = await seed();
+  assignDeck(db, { ownerId: ana.id, deckId: 'd1', userIds: [ben.id] }, NOW);
+  assert.throws(() => setUrduSwitch(db, { ownerId: ana.id, deckId: 'd1', userId: cal.id, on: true }, NOW), { message: 'not-given' });
+  assert.throws(() => setUrduSwitch(db, { ownerId: ben.id, deckId: 'd1', userId: ben.id, on: true }, NOW), { message: 'not-owner' });
 });

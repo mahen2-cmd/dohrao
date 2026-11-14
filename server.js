@@ -18,7 +18,7 @@ import {
   createInvite, listInvites, revokeInvite, createLimiter,
 } from './server/auth.js';
 import { buildView, applyChanges } from './server/sync.js';
-import { listUsers, ownedDecks, assignDeck, unassignDeck, peopleProgress, personProgress } from './server/admin.js';
+import { listUsers, ownedDecks, assignDeck, unassignDeck, setUrduSwitch, peopleProgress, personProgress } from './server/admin.js';
 import { backupDb } from './server/backup.js';
 import { loadSorter } from './server/sorter.js';
 import { ownedDeck, unsortedCards, sortDeck, proposeForDeck, approveProposal } from './server/topics.js';
@@ -368,6 +368,18 @@ export function createRecallServer({ dataDir, origin, tts, translator, ...rest }
       }
       const give = m[2] === 'assign' ? assignDeck : unassignDeck;
       give(db, { ownerId: user.id, deckId: m[1], userIds }, Date.now());
+      return noContent(res);
+    }
+    if (method === 'POST' && (m = path.match(/^\/api\/admin\/decks\/([^/]+)\/urdu$/))) {
+      const { userId, on } = await readJson(req, MAX_FORM);
+      if (typeof userId !== 'string' || typeof on !== 'boolean') throw new HttpError(400, 'bad-request');
+      try {
+        setUrduSwitch(db, { ownerId: user.id, deckId: m[1], userId, on }, Date.now());
+      } catch (err) {
+        if (err.message === 'not-owner') throw new HttpError(404, 'not-found');
+        if (err.message === 'not-given') throw new HttpError(400, 'bad-request');
+        throw err;
+      }
       return noContent(res);
     }
     if (method === 'POST' && (m = path.match(/^\/api\/admin\/users\/([^/]+)\/password$/))) {
