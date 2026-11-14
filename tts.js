@@ -19,7 +19,7 @@ import { join } from 'node:path';
 
 const DEFAULT_VOICE = 'pt-PT-RaquelNeural';
 // Voices for Azure and Edge in the other languages a card side can be read in.
-const VOICES = { 'en-US': 'en-US-JennyNeural', 'en-GB': 'en-GB-SoniaNeural' };
+const VOICES = { 'en-US': 'en-US-JennyNeural', 'en-GB': 'en-GB-SoniaNeural', 'ur-PK': 'ur-PK-UzmaNeural' };
 const PIPER_LANG = 'pt-PT';
 const MAX_TEXT = 2000;
 const TIMEOUT = 30_000;

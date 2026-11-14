@@ -379,15 +379,19 @@ async function uploadImage(blob) {
 
 // ---- Speech ---------------------------------------------------------------
 // Uses the server's voice when there is one, otherwise the browser's own. Only a side's words
-// are read: its maths and images are skipped.
+// are read: its maths and images are skipped. A side that shows Urdu reads it after its
+// English, in an Urdu voice.
 
 const LANGUAGES = [
   ['pt-PT', 'Portuguese (Portugal)'],
   ['en-US', 'English (US)'],
   ['en-GB', 'English (UK)'],
 ];
+const URDU_LANG = 'ur-PK';
 let player = null;
 let speechToken = 0;
+let lastUtterance = null;
+let endPart = null; // ends the part being read, when speech is stopped
 
 const ttsUrl = (text, lang, save = true) => `api/tts?text=${encodeURIComponent(text)}&lang=${encodeURIComponent(lang)}${save ? '' : '&save=0'}`;
 const serverVoice = () => store.storageInfo().voice;
@@ -398,34 +402,61 @@ function stopSpeaking() {
   player?.pause();
   player = null;
   if ('speechSynthesis' in window) speechSynthesis.cancel();
+  endPart?.();
+  endPart = null;
 }
 
-/** Read `text` aloud. With `save` false, the server makes the audio without keeping it. */
-async function speak(text, lang, rate = 1, save = true) {
+/**
+ * Read `parts` (`{ text, lang }`) aloud, each starting when the one before has ended.
+ * With `save` false, the server makes the audio without keeping it.
+ */
+async function speak(parts, rate = 1, save = true) {
   stopSpeaking();
-  if (!text.trim()) return;
+  const token = speechToken;
+  for (const { text, lang } of parts) {
+    if (!text.trim()) continue;
+    if (token !== speechToken || !(await speakPart(text, lang, rate, save, token))) return;
+  }
+}
+
+/** Read one part aloud. Resolves once it has ended: true, or false when it failed or was stopped. */
+async function speakPart(text, lang, rate, save, token) {
   if (!serverVoice()) {
-    const utterance = new SpeechSynthesisUtterance(text);
+    // Kept referenced: Chrome can drop an utterance nothing refers to, and then never end it.
+    const utterance = (lastUtterance = new SpeechSynthesisUtterance(text));
     utterance.lang = lang;
     utterance.rate = rate;
     utterance.voice = speechSynthesis.getVoices().find((v) => v.lang.replace('_', '-') === lang) ?? null;
-    speechSynthesis.speak(utterance);
-    return;
+    return new Promise((resolve) => {
+      utterance.addEventListener('end', () => resolve(true));
+      utterance.addEventListener('error', () => resolve(false));
+      endPart = () => resolve(false);
+      speechSynthesis.speak(utterance);
+    });
   }
-  const token = speechToken;
   try {
     const res = await fetch(ttsUrl(text, lang, save));
     if (!res.ok) throw new Error(await res.text());
     const url = URL.createObjectURL(await res.blob());
-    if (token !== speechToken) return; // moved on while the audio was loading
+    if (token !== speechToken) { // moved on while the audio was loading
+      URL.revokeObjectURL(url);
+      return false;
+    }
     player = new Audio(url);
     player.playbackRate = rate; // the browser keeps the pitch natural
-    player.addEventListener('ended', () => URL.revokeObjectURL(url));
+    const ended = new Promise((resolve) => {
+      player.addEventListener('ended', () => resolve(true));
+      player.addEventListener('error', () => resolve(false));
+      endPart = () => resolve(false);
+    });
+    ended.then(() => URL.revokeObjectURL(url));
     await player.play();
+    return await ended;
   } catch (error) {
     // The browser refuses sound before the first click or key press; that is not an error.
     const blocked = error.name === 'NotAllowedError' || error.name === 'AbortError';
     if (token === speechToken && !blocked) toast(error.message || 'Could not play audio');
+    return false;
   }
 }
 
@@ -439,14 +470,33 @@ function prepareSpeech(text, lang) {
 const deckSide = (card, side) => (card.reversed ? (side === 'front' ? 'back' : 'front') : side);
 const sideLang = (card, deck, side) => deck[`${deckSide(card, side)}Lang`];
 
-/** Read the words on one side of a card aloud, in that side's language. */
-const speakSideOf = (card, deck, side) => speak(speechText(card[side]), sideLang(card, deck, side), deck.speechRate, deck.saveAudio);
+/**
+ * What one side of a card reads aloud, as `{ text, lang }` parts in order: the words it
+ * shows, in its language, then any Urdu it shows. The Urdu is always read from its own
+ * script, even when Roman Urdu is shown.
+ */
+function sideSpeech(card, deck, side) {
+  const lang = sideLang(card, deck, side);
+  const shown = urduShown(card, deck, side);
+  if (!shown) return [{ text: speechText(card[side]), lang }];
+  return [
+    ...(shown.english == null ? [] : [{ text: speechText(shown.english), lang }]),
+    { text: card.urdu, lang: URDU_LANG },
+  ];
+}
+
+/** Whether one side of a card has any words to read aloud. */
+const hasSpeech = (card, deck, side) => sideSpeech(card, deck, side).some(({ text }) => text.trim() !== '');
+
+/** Read the words on one side of a card aloud, each part in its own language. */
+const speakSideOf = (card, deck, side) => speak(sideSpeech(card, deck, side), deck.speechRate, deck.saveAudio);
 
 const speaksSide = (card, deck, side) => deck.speak === deckSide(card, side) || deck.speak === 'both';
 
 /** Make a side's audio ahead of time, unless its deck keeps no audio to play later. */
 function prepareSideSpeech(card, deck, side) {
-  if (deck.saveAudio) prepareSpeech(speechText(card[side]), sideLang(card, deck, side));
+  if (!deck.saveAudio) return;
+  for (const { text, lang } of sideSpeech(card, deck, side)) prepareSpeech(text, lang);
 }
 
 function prepareCardSpeech(card) {
@@ -458,7 +508,7 @@ function prepareCardSpeech(card) {
 
 const speakButton = (card, deck, side) =>
   canSpeak() &&
-  speechText(card[side]) !== '' &&
+  hasSpeech(card, deck, side) &&
   h('button', { class: 'speak', type: 'button', title: `Listen to the ${side} (R)`, 'aria-label': `Listen to the ${side}`, onclick: () => speakSideOf(card, deck, side) }, icon('speaker'));
 
 // ---- Theme ----------------------------------------------------------------
@@ -3065,7 +3115,7 @@ function cardOptions(card, deck) {
   const side = session.revealed ? 'back' : 'front';
   const items = [
     editable && h('button', { type: 'button', onclick: () => openCardDialog({ card }) }, icon('edit'), 'Edit card'),
-    canSpeak() && speechText(card[side]) !== '' && h('button', { type: 'button', onclick: () => speakSideOf(card, deck, side) }, icon('speaker'), 'Listen again'),
+    canSpeak() && hasSpeech(card, deck, side) && h('button', { type: 'button', onclick: () => speakSideOf(card, deck, side) }, icon('speaker'), 'Listen again'),
     editable && h('button', { type: 'button', class: 'danger', onclick: () => removeCard(card) }, icon('trash'), 'Delete card'),
   ].filter(Boolean);
   return items.length > 0 && menu('Card options', items, 'more', 'phone-only');
