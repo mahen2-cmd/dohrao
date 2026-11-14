@@ -22,6 +22,8 @@ import { listUsers, ownedDecks, assignDeck, unassignDeck, peopleProgress, person
 import { backupDb } from './server/backup.js';
 import { loadSorter } from './server/sorter.js';
 import { ownedDeck, unsortedCards, sortDeck, proposeForDeck, approveProposal } from './server/topics.js';
+import { createTranslator } from './server/translate.js';
+import { createUrduQueue } from './server/urdu-queue.js';
 
 const ROOT = fileURLToPath(new URL('.', import.meta.url));
 // A big import arrives in one sync.
@@ -222,9 +224,10 @@ function clientIp(req) {
 
 /**
  * The Recall server. `origin` is the public address (e.g. https://recall.example) when it is
- * served through a proxy; `tts` replaces the speech engine (tests use a fake).
+ * served through a proxy; `tts` replaces the speech engine and `translator` the Urdu
+ * translation (tests use fakes).
  */
-export function createRecallServer({ dataDir, origin, tts, ...rest }) {
+export function createRecallServer({ dataDir, origin, tts, translator, ...rest }) {
   mkdirSync(dataDir, { recursive: true });
   const db = openDb(join(dataDir, 'recall.db'));
   // `sorter: null` means sorting is off; leaving the option out looks for a key (and the SDK).
@@ -232,6 +235,10 @@ export function createRecallServer({ dataDir, origin, tts, ...rest }) {
   // Decks being sorted right now, so a second click does not start a second job.
   const sorting = new Set();
   const voice = tts ?? createTts({ root: ROOT, dataDir });
+  // Google is only reached once a card actually needs translating.
+  let google;
+  const urduTranslator = translator ?? { toUrdu: (text) => (google ??= createTranslator()).toUrdu(text) };
+  const urduQueue = createUrduQueue({ db, translator: urduTranslator });
   const mediaDir = join(dataDir, 'media');
   const ownOrigin = origin ? new URL(origin).origin : null;
   const hosts = ownOrigin ? [...LOOPBACK_HOSTS, new URL(ownOrigin).hostname] : LOOPBACK_HOSTS;
@@ -274,7 +281,10 @@ export function createRecallServer({ dataDir, origin, tts, ...rest }) {
   async function sync(req, res, user) {
     const changes = await readJson(req, MAX_BODY);
     if (!validChanges(changes)) throw new HttpError(400, 'bad-request');
-    sendJson(res, 200, applyChanges(db, user.id, changes, Date.now()));
+    const result = applyChanges(db, user.id, changes, Date.now());
+    const deckIds = new Set([...(changes.cards ?? []).map((c) => c.deckId), ...(changes.decks ?? []).map((d) => d.id)]);
+    for (const id of deckIds) if (typeof id === 'string') urduQueue.scanDeck(id);
+    sendJson(res, 200, result);
   }
 
   async function state(res, user) {
@@ -439,8 +449,12 @@ export function createRecallServer({ dataDir, origin, tts, ...rest }) {
   });
   server.on('close', () => {
     clearInterval(timer);
+    urduQueue.stop();
     db.close();
   });
+  urduQueue.scanAll();
+  // Tests wait on the queue through this.
+  server.urduQueue = urduQueue;
   return server;
 }
 

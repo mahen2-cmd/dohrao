@@ -26,7 +26,7 @@ async function start(t, options = {}) {
     db.close();
     await rm(dataDir, { recursive: true, force: true });
   });
-  return { port: server.address().port, db, admin, invite };
+  return { port: server.address().port, db, admin, invite, server };
 }
 
 /** One request; resolves `{ status, headers, json, text, cookie }`. */
@@ -471,4 +471,18 @@ test('approving a proposal writes the topics and starts a sort', async (t) => {
   assert.deepEqual(names, [['Greetings', 'ai'], ['Hello', 'admin']]);
   assert.equal((await call(port, 'GET', 'api/admin/decks/d1/proposal', { cookie: admin })).status, 404);
   assert.equal(sorter.calls.place, 1);
+});
+
+test('a sync on an urdu deck queues its new cards', async (t) => {
+  const translator = { async toUrdu(text) { return { urdu: `ur:${text}`, urduRoman: `rom:${text}` }; } };
+  const { port, invite, server } = await start(t, { translator });
+  const { cookie } = await signUp(port, invite);
+  const ptDeck = { id: 'd1', name: 'Portuguese', created: NOW, frontLang: 'en-US', backLang: 'pt-PT', urdu: true };
+  const ptCard = { id: 'c1', deckId: 'd1', front: 'hello', back: 'olá', created: NOW, updated: NOW };
+  const sync = await call(port, 'POST', 'api/sync', { cookie, body: { decks: [ptDeck], cards: [ptCard] } });
+  assert.deepEqual(sync.json, { rejected: [] });
+  assert.deepEqual(await server.urduQueue.idle(), { translated: 1, failed: 0 });
+  const state = await call(port, 'GET', 'api/state', { cookie });
+  assert.equal(state.json.cards[0].urdu, 'ur:olá');
+  assert.equal(state.json.cards[0].urduBy, 'google');
 });
