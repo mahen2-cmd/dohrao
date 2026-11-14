@@ -1,6 +1,7 @@
 // Each user's view of the store, and applying their changes under ownership rules.
 import { DECK_SHARED, CARD_CONTENT, split, mergeTopics, mergeDeckTopics } from './fields.js';
 import { newSchedule } from '../js/fsrs.js';
+import { URDU_FIELDS } from '../js/urdu.js';
 import { mergeCounts } from '../js/counts.js';
 
 // Keys the view adds to given decks; never stored.
@@ -83,7 +84,7 @@ function saveProgress(db, userId, cardId, progress) {
     ON CONFLICT (user_id, card_id) DO UPDATE SET data = excluded.data`).run(userId, cardId, JSON.stringify(progress));
 }
 
-function applyDeck(db, userId, deck) {
+function applyDeck(db, userId, deck, now) {
   const clean = { ...deck };
   for (const key of VIEW_ONLY) delete clean[key];
   const [shared, prefs] = split(clean, DECK_SHARED);
@@ -99,6 +100,12 @@ function applyDeck(db, userId, deck) {
     const merged = mergeDeckTopics(stored, shared);
     db.prepare('UPDATE decks SET data = ? WHERE id = ?').run(JSON.stringify(merged), deck.id);
   }
+  // The server stamps when each person last chose what their card fronts show; a device's own
+  // clock is never trusted for it.
+  const storedPrefs = parse(db.prepare('SELECT data FROM deck_prefs WHERE user_id = ? AND deck_id = ?').get(userId, deck.id)?.data);
+  if (prefs.frontShows !== storedPrefs.frontShows) prefs.frontShowsAt = now;
+  else if (storedPrefs.frontShowsAt !== undefined) prefs.frontShowsAt = storedPrefs.frontShowsAt;
+  else delete prefs.frontShowsAt;
   savePrefs(db, userId, deck.id, prefs);
   return true;
 }
@@ -118,7 +125,9 @@ function applyCard(db, userId, card) {
       // Only the sorter writes 'ai', and it never moves a manual card, so a hand placement
       // (even one made offline before the sort) wins over it whatever the times say.
       const manualOverAi = content.topicBy === 'manual' && stored.topicBy === 'ai';
-      const merged = manualOverAi ? content : mergeTopics(stored, content, ['topic', 'topicBy'], 'topicAt');
+      const topicMerged = manualOverAi ? content : mergeTopics(stored, content, ['topic', 'topicBy'], 'topicAt');
+      // The server writes the Urdu itself, so an older device never wipes or overwrites it.
+      const merged = mergeTopics(stored, topicMerged, URDU_FIELDS, 'urduAt');
       db.prepare('UPDATE cards SET deck_id = ?, data = ? WHERE id = ?').run(card.deckId, JSON.stringify(merged), card.id);
     } else if (!(from === 'given' && current === card.deckId)) {
       return false;
@@ -169,7 +178,7 @@ export function applyChanges(db, userId, changes, now) {
       db.prepare('DELETE FROM decks WHERE id = ?').run(id);
       return true;
     });
-    each(changes.decks, (deck) => applyDeck(db, userId, deck));
+    each(changes.decks, (deck) => applyDeck(db, userId, deck, now));
     each(changes.cards, (card) => applyCard(db, userId, card));
     if (['daily', 'log', 'settings', 'savedAt'].some((k) => changes[k] !== undefined)) applyState(db, userId, changes);
     db.exec('COMMIT');

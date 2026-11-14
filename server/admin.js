@@ -47,8 +47,8 @@ function giveTo(db, ownerId, deckId, userId, ids, now) {
   ids.forEach((id, i) => insert.run(userId, id, JSON.stringify({ ...newSchedule(now), reserved: true, order: i })));
   const prefs = db.prepare('SELECT data FROM deck_prefs WHERE user_id = ? AND deck_id = ?').get(ownerId, deckId);
   if (prefs) {
-    // Whether the owner hides the deck is their own choice; it arrives shown.
-    const { hidden, ...copied } = parse(prefs.data);
+    // Whether the owner hides the deck, and what their card fronts show, are their own choices.
+    const { hidden, frontShows, frontShowsAt, urduScript, ...copied } = parse(prefs.data);
     db.prepare('INSERT OR IGNORE INTO deck_prefs (user_id, deck_id, data) VALUES (?, ?, ?)').run(userId, deckId, JSON.stringify(copied));
   }
 }

@@ -1,10 +1,10 @@
 // Which fields are shared content and which are per-user progress.
 
 /** Deck fields every user sees; the rest of a deck's fields are personal. */
-export const DECK_SHARED = ['name', 'created', 'ankiId', 'frontLang', 'backLang', 'saveAudio', 'groups', 'topics', 'topicsAt', 'deletedGroupIds', 'deletedTopicIds'];
+export const DECK_SHARED = ['name', 'created', 'ankiId', 'frontLang', 'backLang', 'saveAudio', 'groups', 'urdu', 'topics', 'topicsAt', 'deletedGroupIds', 'deletedTopicIds'];
 
 /** Card fields that are content; the rest (due, state, ...) are progress. */
-export const CARD_CONTENT = ['front', 'back', 'created', 'updated', 'ankiId', 'reversed', 'topic', 'topicBy', 'topicAt'];
+export const CARD_CONTENT = ['front', 'back', 'created', 'updated', 'ankiId', 'reversed', 'topic', 'topicBy', 'topicAt', 'urdu', 'urduRoman', 'urduOf', 'urduBy', 'urduAt'];
 
 /** Split an object into [shared, personal] by key list, dropping id and deckId. */
 export function split(obj, sharedKeys) {

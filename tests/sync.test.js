@@ -355,3 +355,32 @@ test('a recipient cannot change topics of a given deck', async () => {
   assert.deepEqual(rejected, { rejected: [] });   // ignored, as with other content edits
   assert.deepEqual(buildView(db, ana.id, NOW), before);
 });
+
+const storedCard = (db, id) => JSON.parse(db.prepare('SELECT data FROM cards WHERE id = ?').get(id).data);
+
+test('a stale card without Urdu keeps the stored Urdu', async () => {
+  const { db, ana } = await seed();
+  const data = { ...storedCard(db, 'c1'), urdu: 'x', urduOf: 'back c1', urduBy: 'google', urduAt: NOW + 5 };
+  db.prepare('UPDATE cards SET data = ? WHERE id = ?').run(JSON.stringify(data), 'c1');
+  applyChanges(db, ana.id, { cards: [cardOf('c1', { front: 'new front' })] }, NOW);
+  const stored = storedCard(db, 'c1');
+  assert.equal(stored.urdu, 'x');
+  assert.equal(stored.front, 'new front');
+});
+
+test('newer Urdu from the editor wins, older loses', async () => {
+  const { db, ana } = await seed();
+  applyChanges(db, ana.id, { cards: [cardOf('c1', { urdu: 'manual', urduBy: 'manual', urduAt: NOW + 9 })] }, NOW);
+  assert.equal(storedCard(db, 'c1').urdu, 'manual');
+  applyChanges(db, ana.id, { cards: [cardOf('c1', { urdu: 'old', urduAt: NOW + 1 })] }, NOW);
+  assert.equal(storedCard(db, 'c1').urdu, 'manual');
+});
+
+test('frontShowsAt is stamped by the server when frontShows changes', async () => {
+  const { db, ana } = await seed();
+  const changed = deckOf({ frontShows: 'ur', frontShowsAt: 1 });
+  applyChanges(db, ana.id, { decks: [changed] }, NOW + 100);
+  assert.equal(buildView(db, ana.id, NOW).decks[0].frontShowsAt, NOW + 100);
+  applyChanges(db, ana.id, { decks: [changed] }, NOW + 200);
+  assert.equal(buildView(db, ana.id, NOW).decks[0].frontShowsAt, NOW + 100);
+});

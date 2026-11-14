@@ -798,3 +798,11 @@ test('hiding and showing a deck', () => {
 test('hidden is a personal deck field', () => {
   assert.equal(DECK_SHARED.includes('hidden'), false);
 });
+
+test('Urdu fields of a given deck cannot be edited', () => {
+  store.importData(JSON.stringify({
+    decks: [{ id: 'given', name: 'Words', assigned: true, from: 'Ana', newPerDay: 20 }],
+    cards: [{ id: 'g0', deckId: 'given', front: 'one', back: '-', created: T0 }],
+  }));
+  assert.throws(() => store.updateCard('g0', { urdu: 'x' }), { message: 'read-only deck' });
+});

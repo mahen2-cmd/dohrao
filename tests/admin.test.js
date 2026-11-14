@@ -179,3 +179,11 @@ test("a returning recipient's own hidden choice is kept", async () => {
   assignDeck(db, { ownerId: ana.id, deckId: 'd1', userIds: [ben.id] }, NOW);
   assert.equal(buildView(db, ben.id, NOW).decks[0].hidden, true);
 });
+
+test("a new recipient does not get the owner's Urdu choice", async () => {
+  const { db, ana, ben } = await seed();
+  applyChanges(db, ana.id, { decks: [{ ...deck, frontShows: 'ur', frontShowsAt: 1, urduScript: 'roman' }] }, NOW);
+  assignDeck(db, { ownerId: ana.id, deckId: 'd1', userIds: [ben.id] }, NOW);
+  const given = buildView(db, ben.id, NOW).decks[0];
+  for (const key of ['frontShows', 'frontShowsAt', 'urduScript']) assert.equal(key in given, false);
+});

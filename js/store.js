@@ -4,6 +4,7 @@ import * as api from './api.js';
 import { mergeCounts } from './counts.js';
 import { dayKey, streakOf } from './progress.js';
 import { readableTopicName, prefixGroup, resolveFilter, inFilter, effectiveTopic } from './topics.js';
+import { URDU_FIELDS } from './urdu.js';
 import { DAY, State, dayStart, newSchedule, nextDayAt, preview, schedule } from './fsrs.js';
 
 // Per-deck settings.
@@ -400,7 +401,7 @@ export const deck = (id) => state.decks.find((d) => d.id === id);
 // A deck given by the admin (`assigned: true`, from its owner `from`) is studied like any other,
 // but its name, languages and cards are the owner's. These deck fields come from the owner, as
 // listed in server/fields.js.
-const SHARED_DECK_KEYS = ['name', 'created', 'ankiId', 'frontLang', 'backLang', 'saveAudio', 'groups', 'topics', 'topicsAt', 'deletedGroupIds', 'deletedTopicIds'];
+const SHARED_DECK_KEYS = ['name', 'created', 'ankiId', 'frontLang', 'backLang', 'saveAudio', 'groups', 'urdu', 'topics', 'topicsAt', 'deletedGroupIds', 'deletedTopicIds'];
 
 /** Whether a deck's name and cards can be changed here: not for a deck given by the admin. */
 export const editable = (deckId) => !deck(deckId)?.assigned;
@@ -522,7 +523,7 @@ export function ankiDuplicates(imported) {
 
 export function updateCard(id, patch) {
   const c = card(id);
-  if (['front', 'back', 'deckId'].some((key) => key in patch)) {
+  if (['front', 'back', 'deckId', ...URDU_FIELDS].some((key) => key in patch)) {
     mustEdit(c.deckId);
     if (patch.deckId) mustEdit(patch.deckId);
   }
