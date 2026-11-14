@@ -7,6 +7,7 @@ import { HEAT_WEEKS, PHONE_QUERY, canSwipeFrom, classifySwipe, inTab, isRevealTa
 import { recentStudy, rightShare } from './progress.js';
 import * as store from './store.js';
 import { effectiveTopic, filterLabel, inFilter, readableTopicName, resolveFilter, topicKeyFromFileName, topicLabel } from './topics.js';
+import { englishSide, frontShows, shownSide } from './urdu.js';
 
 const app = document.getElementById('app');
 
@@ -230,6 +231,26 @@ const rich = (text, editMath) => {
     });
   });
 };
+
+/** How a card side is shown with its Urdu, or null when the side shows no Urdu. */
+function urduShown(card, deck, side) {
+  if (side !== englishSide(card, deck)) return null;
+  const shown = shownSide(card, deck);
+  return shown.urdu == null ? null : shown;
+}
+
+/** The nodes that show one side of a card: its text, and the Urdu under or in place of its English. */
+function sideFace(card, deck, side) {
+  const shown = urduShown(card, deck, side);
+  if (!shown) return rich(card[side]);
+  const roman = shown.urduLang === 'ur-Latn';
+  const urdu = h('div', roman ? { class: 'urdu roman', lang: 'ur-Latn' } : { class: 'urdu', lang: 'ur', dir: 'rtl' });
+  urdu.textContent = shown.urdu;
+  if (shown.english == null) return [urdu];
+  // CSS cannot see text before an element, so the gap under the English is marked here.
+  urdu.classList.add('after-english');
+  return [...rich(shown.english), urdu];
+}
 
 // ---- Equation editor ------------------------------------------------------
 // MathLive, from vendor/mathlive/, loaded the first time it is needed. It shares KaTeX's fonts.
@@ -559,6 +580,12 @@ function openDeckDialog(deck) {
   );
   const saveAudio = h('input', { type: 'checkbox', checked: defaults.saveAudio });
   const hidden = h('input', { type: 'checkbox', checked: store.isHidden(deck) });
+  const urdu = h('input', { type: 'checkbox', checked: Boolean(defaults.urdu) });
+  const choiceSelect = (options, selected) =>
+    h('select', null, options.map(([value, label]) => h('option', { value, selected: value === selected }, label)));
+  const shows = deck && frontShows(deck);
+  const frontShowsSelect = choiceSelect([['en', 'English'], ['ur', 'Urdu'], ['both', 'Both']], shows);
+  const urduScript = choiceSelect([['arabic', 'Urdu script'], ['roman', 'Roman Urdu']], deck?.urduScript ?? 'arabic');
 
   const form = h(
     'form',
@@ -575,6 +602,12 @@ function openDeckDialog(deck) {
             name: name.value.trim(),
             ...(canSpeak() && { frontLang: frontLang.value, backLang: backLang.value }),
             ...(serverVoice() && { saveAudio: saveAudio.checked }),
+            urdu: urdu.checked,
+          }),
+          ...(deck?.urdu && {
+            urduScript: urduScript.value,
+            // Only a choice the person made: saving the dialog unchanged must not outrank a later admin switch.
+            ...(frontShowsSelect.value !== shows && { frontShows: frontShowsSelect.value }),
           }),
         };
         if (own && !values.name) return name.focus();
@@ -618,6 +651,16 @@ function openDeckDialog(deck) {
         h('label', { class: 'check', style: 'margin-top: 12px' }, saveAudio, 'Keep the audio made for this deck'),
         h('small', { class: 'field-note' }, 'Turn this off for decks that are mostly maths: audio is then made each time it plays instead of being kept, and “npm run cache-voice” leaves the deck out.'),
       ],
+    ],
+    own && h('label', { class: 'check', style: 'margin-top: 16px' }, urdu, 'Translate the front into Urdu'),
+    deck?.urdu && [
+      h(
+        'div',
+        { class: 'field-row', style: 'margin-top: 16px' },
+        h('label', { class: 'field' }, h('span', null, 'Front shows'), frontShowsSelect),
+        h('label', { class: 'field' }, h('span', null, 'Urdu writing'), urduScript),
+      ),
+      h('small', { class: 'field-note' }, 'Urdu comes from Google Translate. The back stays Portuguese.'),
     ],
     deck && [
       h('label', { class: 'check', style: 'margin-top: 16px' }, hidden, 'Hide deck from the list'),
@@ -2262,8 +2305,8 @@ function cardList(deck, view, { filters, filtering, editable, hasTopics, now, co
               h('input', { type: 'checkbox', 'aria-label': 'Select card', checked: selected.has(card.id), onchange: (e) => pick([card.id], e.target.checked) }),
             ),
             column && h('span', { class: 'place' }, preview.place.get(card.id)?.toLocaleString()),
-            h('div', { class: 'text' }, rich(card.front)),
-            h('div', { class: 'text back-text' }, rich(card.back)),
+            h('div', { class: 'text' }, sideFace(card, deck, 'front')),
+            h('div', { class: 'text back-text' }, sideFace(card, deck, 'back')),
             !column && hasTopics && h('div', { class: 'topic-name' }, topicLabel(deck, card)),
             !column && statusMark(status, status.label, 'due'),
             !column &&
@@ -2901,6 +2944,12 @@ const MAX_SEGMENTS = 24;
 /** A side that is a word or a short phrase, plain text on one line, which the card sets larger. */
 const isShort = (text) => text.length <= 28 && !/\n|\\[([]|\[image:/.test(text);
 
+/** Whether a side, with any Urdu it shows, is short enough for the large type. */
+function isShortSide(card, deck, side) {
+  const shown = urduShown(card, deck, side);
+  return shown ? [shown.english, shown.urdu].every((text) => text == null || isShort(text)) : isShort(card[side]);
+}
+
 function currentStudyCard(deckId, now) {
   const deck = store.deck(deckId);
   let card = session.cardId && store.card(session.cardId);
@@ -3108,9 +3157,9 @@ function renderStudy(deck) {
       h(
         'div',
         { class: 'flashcard' },
-        h('div', { class: `face question ${isShort(card.front) ? 'short' : ''}` }, rich(card.front)),
+        h('div', { class: `face question ${isShortSide(card, deck, 'front') ? 'short' : ''}` }, sideFace(card, deck, 'front')),
         speakButton(card, deck, 'front'),
-        session.revealed && [h('hr'), h('div', { class: `face answer ${isShort(card.back) ? 'short' : ''}` }, rich(card.back)), speakButton(card, deck, 'back')],
+        session.revealed && [h('hr'), h('div', { class: `face answer ${isShortSide(card, deck, 'back') ? 'short' : ''}` }, sideFace(card, deck, 'back')), speakButton(card, deck, 'back')],
       ),
       h(
         'div',

@@ -1205,6 +1205,10 @@ kbd {
 .card-row .text.back-text {
   color: var(--muted);
 }
+/* In the list, the Urdu lines up with the English beside it rather than with the column's far edge. */
+.card-row .urdu {
+  text-align: left;
+}
 .card-row .row-actions {
   display: flex;
   margin-block: -4px;
@@ -1347,6 +1351,21 @@ kbd {
 .face.answer.short {
   font-size: clamp(30px, 4.4vw, 44px);
   line-height: 1.2;
+}
+/* A card's Urdu, on its English side. Nastaliq needs the extra line height. */
+.urdu {
+  font-family: 'Noto Nastaliq Urdu', 'Jameel Noori Nastaleeq', 'Urdu Typesetting', 'Noto Naskh Arabic', serif;
+  font-weight: 400;
+  line-height: 1.9;
+  letter-spacing: 0;
+}
+.urdu.after-english {
+  margin-top: 0.4em;
+}
+.urdu.roman {
+  font-family: var(--font-card);
+  font-style: italic;
+  line-height: inherit;
 }
 /* Maths and images on a card. */
 .math {
