@@ -17,7 +17,10 @@ export function findDeckByName(db, deckName) {
     .find((d) => JSON.parse(d.data).name === deckName) ?? null;
 }
 
-/** Translate the named deck's cards that need Urdu. Returns { translated, failed, alreadyDone }. */
+/**
+ * Translate the named deck's cards that need Urdu. Returns { translated, failed, alreadyDone, left }:
+ * `left` cards were not tried because Google failed too often in a row and the queue paused.
+ */
 export async function translateDeck(db, { deckName, translator, pauseMs, log }) {
   const row = findDeckByName(db, deckName);
   if (!row) throw new Error(`No deck named "${deckName}"`);
@@ -28,12 +31,15 @@ export async function translateDeck(db, { deckName, translator, pauseMs, log }) 
     .filter((card) => card.urdu && !needsUrdu(card, deck)).length;
   const queue = createUrduQueue({ db, translator, pauseMs, log });
   queue.scanDeck(row.id);
-  // The queue's pauses don't hold the process open, so this does until the work is done.
+  // The queue's pauses don't hold the process open, so this does until the work is done. After
+  // failures in a row the queue pauses; the script reports that instead of waiting it out.
   const hold = setInterval(() => {}, 60_000);
   try {
-    return { ...(await queue.idle()), alreadyDone };
+    const done = await queue.idle();
+    return { ...done, alreadyDone, left: queue.waiting() };
   } finally {
     clearInterval(hold);
+    queue.stop();
   }
 }
 
@@ -54,9 +60,11 @@ async function main(args) {
   let db;
   try {
     db = openDb(dbFile);
-    const { translated, failed, alreadyDone } = await translateDeck(db, { deckName, translator: createTranslator() });
+    const { translated, failed, alreadyDone, left } = await translateDeck(db, { deckName, translator: createTranslator() });
     console.log(`Translated ${translated}, failed ${failed}, already done ${alreadyDone}.`);
-    return 0;
+    if (!left) return 0;
+    console.error(`Stopped with ${left} not tried: Google failed several times in a row. Run this again later.`);
+    return 1;
   } catch (err) {
     console.error(err.message);
     return 1;

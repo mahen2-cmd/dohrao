@@ -4,6 +4,14 @@ import { needsUrdu, portugueseText } from '../js/urdu.js';
 
 const parse = (text) => (text ? JSON.parse(text) : {});
 
+const MINUTE = 60_000;
+/** A failed card waits this long before it is tried again, doubling with each failure in a row. */
+const FIRST_RETRY_MS = 5 * MINUTE;
+const LONGEST_RETRY_MS = 6 * 60 * MINUTE;
+/** After this many failures in a row, nothing is sent for PAUSE_MS. */
+const FAILURES_BEFORE_PAUSE = 3;
+const PAUSE_MS = 10 * MINUTE;
+
 export function createUrduQueue({ db, translator, pauseMs = 300, now = Date.now, log = console.error }) {
   const pending = []; // { id, urduAt } in the order they were queued
   const queued = new Set();
@@ -11,6 +19,11 @@ export function createUrduQueue({ db, translator, pauseMs = 300, now = Date.now,
   let running = null;
   let stopped = false;
   let pause = null; // { timer, resolve } while waiting between cards
+  // Google may be refusing or down: back off rather than ask again on every sync.
+  const retries = new Map(); // card id -> { failures, at } after a failure, until a success
+  let failuresInARow = 0;
+  let pausedUntil = 0;
+  let resume = null; // the timer that restarts the work when a pause ends
 
   /** The card and its deck as stored now, or null when the card is gone. */
   function read(id) {
@@ -43,25 +56,42 @@ export function createUrduQueue({ db, translator, pauseMs = 300, now = Date.now,
     pause = { timer: setTimeout(resolve, ms).unref(), resolve };
   }).finally(() => { pause = null; });
 
+  const paused = () => now() < pausedUntil;
+
+  function failed(id, error) {
+    counts.failed++;
+    log(`Urdu translation failed for card ${id}:`, error?.message ?? error);
+    const failures = (retries.get(id)?.failures ?? 0) + 1;
+    const delay = Math.min(FIRST_RETRY_MS * 2 ** (failures - 1), LONGEST_RETRY_MS);
+    retries.set(id, { failures, at: now() + delay });
+    if (++failuresInARow < FAILURES_BEFORE_PAUSE) return;
+    failuresInARow = 0;
+    pausedUntil = now() + PAUSE_MS;
+    log(`Urdu translation paused for ${PAUSE_MS / MINUTE} minutes after ${FAILURES_BEFORE_PAUSE} failures in a row.`);
+    clearTimeout(resume);
+    resume = setTimeout(start, PAUSE_MS).unref();
+  }
+
   async function run() {
     await null; // let the caller (a sync, say) answer before the first card is sent
-    while (pending.length && !stopped) {
+    while (pending.length && !stopped && !paused()) {
       const item = pending.shift();
       let requeued = false;
       try {
         requeued = await work(item);
+        retries.delete(item.id);
+        failuresInARow = 0;
       } catch (error) {
-        counts.failed++;
-        log(`Urdu translation failed for card ${item.id}:`, error?.message ?? error);
+        failed(item.id, error);
       } finally {
         if (!requeued) queued.delete(item.id);
       }
-      if (pending.length && !stopped && pauseMs > 0) await wait(pauseMs);
+      if (pending.length && !stopped && !paused() && pauseMs > 0) await wait(pauseMs);
     }
   }
 
   function start() {
-    if (running || stopped || !pending.length) return;
+    if (running || stopped || !pending.length || paused()) return;
     running = run().finally(() => {
       running = null;
       start(); // a card queued during the last step
@@ -77,6 +107,7 @@ export function createUrduQueue({ db, translator, pauseMs = 300, now = Date.now,
     for (const row of db.prepare('SELECT id, data FROM cards WHERE deck_id = ? ORDER BY rowid').all(deckId)) {
       const card = parse(row.data);
       if (queued.has(row.id) || !needsUrdu(card, deck)) continue;
+      if (now() < (retries.get(row.id)?.at ?? 0)) continue; // failed lately: wait for its retry time
       queued.add(row.id);
       pending.push({ id: row.id, urduAt: card.urduAt });
     }
@@ -90,7 +121,10 @@ export function createUrduQueue({ db, translator, pauseMs = 300, now = Date.now,
     }
   }
 
-  /** Resolves when nothing is queued, with what happened since the last call. */
+  /**
+   * Resolves when there is nothing the queue may do now (nothing is queued, or it is paused after
+   * failures), with what happened since the last call.
+   */
   async function idle() {
     while (running) await running;
     const done = counts;
@@ -103,11 +137,15 @@ export function createUrduQueue({ db, translator, pauseMs = 300, now = Date.now,
     stopped = true;
     pending.length = 0;
     queued.clear();
+    clearTimeout(resume);
     if (pause) {
       clearTimeout(pause.timer);
       pause.resolve();
     }
   }
 
-  return { scanDeck, scanAll, idle, stop };
+  /** How many cards are queued but not yet tried, as when a pause stopped the work. */
+  const waiting = () => pending.length;
+
+  return { scanDeck, scanAll, idle, stop, waiting };
 }
