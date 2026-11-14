@@ -18,19 +18,25 @@ export function createUrduQueue({ db, translator, pauseMs = 300, now = Date.now,
     return row ? { card: parse(row.card), deck: parse(row.deck) } : null;
   }
 
+  /** Translate one card. Returns true when the card was put back on the queue. */
   async function work({ id, urduAt }) {
     const before = read(id);
-    if (!before || !needsUrdu(before.card, before.deck)) return;
+    if (!before || !needsUrdu(before.card, before.deck)) return false;
     const text = portugueseText(before.card, before.deck);
     const { urdu, urduRoman } = await translator.toUrdu(text);
-    if (stopped) return;
+    if (stopped) return false;
     // Someone may have changed the card while it was being translated; their change wins.
     const latest = read(id);
-    if (!latest || !needsUrdu(latest.card, latest.deck)) return;
-    if (portugueseText(latest.card, latest.deck) !== text || latest.card.urduAt !== urduAt) return;
+    if (!latest || !needsUrdu(latest.card, latest.deck)) return false;
+    if (portugueseText(latest.card, latest.deck) !== text || latest.card.urduAt !== urduAt) {
+      // The card still needs Urdu for its new state, and a scan meanwhile skipped it as queued.
+      pending.push({ id, urduAt: latest.card.urduAt });
+      return true;
+    }
     const card = { ...latest.card, urdu, urduRoman, urduOf: text, urduBy: 'google', urduAt: now() };
     db.prepare('UPDATE cards SET data = ? WHERE id = ?').run(JSON.stringify(card), id);
     counts.translated++;
+    return false;
   }
 
   const wait = (ms) => new Promise((resolve) => {
@@ -41,13 +47,14 @@ export function createUrduQueue({ db, translator, pauseMs = 300, now = Date.now,
     await null; // let the caller (a sync, say) answer before the first card is sent
     while (pending.length && !stopped) {
       const item = pending.shift();
+      let requeued = false;
       try {
-        await work(item);
+        requeued = await work(item);
       } catch (error) {
         counts.failed++;
         log(`Urdu translation failed for card ${item.id}:`, error?.message ?? error);
       } finally {
-        queued.delete(item.id);
+        if (!requeued) queued.delete(item.id);
       }
       if (pending.length && !stopped && pauseMs > 0) await wait(pauseMs);
     }

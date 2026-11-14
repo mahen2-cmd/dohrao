@@ -370,10 +370,27 @@ test('a stale card without Urdu keeps the stored Urdu', async () => {
 
 test('newer Urdu from the editor wins, older loses', async () => {
   const { db, ana } = await seed();
-  applyChanges(db, ana.id, { cards: [cardOf('c1', { urdu: 'manual', urduBy: 'manual', urduAt: NOW + 9 })] }, NOW);
+  applyChanges(db, ana.id, { cards: [cardOf('c1', { urdu: 'manual', urduBy: 'manual', urduAt: NOW + 9 })] }, NOW + 10);
   assert.equal(storedCard(db, 'c1').urdu, 'manual');
-  applyChanges(db, ana.id, { cards: [cardOf('c1', { urdu: 'old', urduAt: NOW + 1 })] }, NOW);
+  applyChanges(db, ana.id, { cards: [cardOf('c1', { urdu: 'old', urduAt: NOW + 1 })] }, NOW + 20);
   assert.equal(storedCard(db, 'c1').urdu, 'manual');
+});
+
+test("a newer Urdu edit is stamped with the server's clock, so a slow device's edit still orders after Google", async () => {
+  const { db, ana } = await seed();
+  const google = { ...storedCard(db, 'c1'), urdu: 'google', urduRoman: 'g', urduOf: 'back c1', urduBy: 'google', urduAt: NOW + 1000 };
+  db.prepare('UPDATE cards SET data = ? WHERE id = ?').run(JSON.stringify(google), 'c1');
+  // The device's clock is behind the server's: its edit says NOW + 1500, the server's time is NOW + 2000.
+  const edit = { urdu: 'hand', urduRoman: 'h', urduOf: 'back c1', urduBy: 'manual', urduAt: NOW + 1500 };
+  applyChanges(db, ana.id, { cards: [cardOf('c1', edit)] }, NOW + 2000);
+  assert.equal(storedCard(db, 'c1').urdu, 'hand');
+  assert.equal(storedCard(db, 'c1').urduAt, NOW + 2000);
+  // A Google write the server made at NOW + 1900, before the edit arrived, comes back from another
+  // device. It is older than the edit by the server's clock, so it loses.
+  const later = { urdu: 'google 2', urduRoman: 'g2', urduOf: 'back c1', urduBy: 'google', urduAt: NOW + 1900 };
+  applyChanges(db, ana.id, { cards: [cardOf('c1', later)] }, NOW + 2100);
+  assert.equal(storedCard(db, 'c1').urdu, 'hand');
+  assert.equal(storedCard(db, 'c1').urduAt, NOW + 2000);
 });
 
 test('frontShowsAt is stamped by the server when frontShows changes', async () => {

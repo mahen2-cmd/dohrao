@@ -110,7 +110,7 @@ function applyDeck(db, userId, deck, now) {
   return true;
 }
 
-function applyCard(db, userId, card) {
+function applyCard(db, userId, card, now) {
   if (!validId(card.deckId)) return false;
   const [content, progress] = split(card, CARD_CONTENT);
   const current = deckOfCard(db, card.id);
@@ -126,8 +126,13 @@ function applyCard(db, userId, card) {
       // (even one made offline before the sort) wins over it whatever the times say.
       const manualOverAi = content.topicBy === 'manual' && stored.topicBy === 'ai';
       const topicMerged = manualOverAi ? content : mergeTopics(stored, content, ['topic', 'topicBy'], 'topicAt');
+      // A newer Urdu edit is stamped with the server's clock, the one the translation queue
+      // uses, so a device whose clock runs behind can't lose it to a later Google write.
+      const urduEdited = URDU_FIELDS.some((key) => key in topicMerged && topicMerged[key] !== stored[key]);
+      const urduStamped = urduEdited && (stored.urduAt === undefined || (topicMerged.urduAt ?? 0) > stored.urduAt)
+        ? { ...topicMerged, urduAt: now } : topicMerged;
       // The server writes the Urdu itself, so an older device never wipes or overwrites it.
-      const merged = mergeTopics(stored, topicMerged, URDU_FIELDS, 'urduAt');
+      const merged = mergeTopics(stored, urduStamped, URDU_FIELDS, 'urduAt');
       db.prepare('UPDATE cards SET deck_id = ?, data = ? WHERE id = ?').run(card.deckId, JSON.stringify(merged), card.id);
     } else if (!(from === 'given' && current === card.deckId)) {
       return false;
@@ -179,7 +184,7 @@ export function applyChanges(db, userId, changes, now) {
       return true;
     });
     each(changes.decks, (deck) => applyDeck(db, userId, deck, now));
-    each(changes.cards, (card) => applyCard(db, userId, card));
+    each(changes.cards, (card) => applyCard(db, userId, card, now));
     if (['daily', 'log', 'settings', 'savedAt'].some((k) => changes[k] !== undefined)) applyState(db, userId, changes);
     db.exec('COMMIT');
   } catch (err) {

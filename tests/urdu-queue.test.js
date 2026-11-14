@@ -80,6 +80,32 @@ test('a card edited by hand while queued is not overwritten', async () => {
   assert.equal(stored(db, 'c1').urdu, 'ہیلو');
 });
 
+test('a card whose Portuguese changes while it is being translated is translated again', async () => {
+  const { db, ana } = await seed([cardOf('c1', 'd1', 'Olá')]);
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  let asked;
+  const asking = new Promise((resolve) => { asked = resolve; });
+  const sent = [];
+  const translator = {
+    async toUrdu(text) {
+      sent.push(text);
+      if (sent.length === 1) { asked(); await gate; }
+      return { urdu: `ur:${text}`, urduRoman: '' };
+    },
+  };
+  const queue = queueFor(db, translator);
+  queue.scanDeck('d1');
+  await asking;
+  assert.deepEqual(applyChanges(db, ana.id, { cards: [cardOf('c1', 'd1', 'Olá a todos')] }, NOW), { rejected: [] });
+  queue.scanDeck('d1'); // skipped: the card is still queued
+  release();
+  assert.deepEqual(await queue.idle(), { translated: 1, failed: 0 });
+  assert.deepEqual(sent, ['Olá', 'Olá a todos']);
+  assert.equal(stored(db, 'c1').urdu, 'ur:Olá a todos');
+  assert.equal(stored(db, 'c1').urduOf, 'Olá a todos');
+});
+
 test('a failure is counted, logged and retried on the next scan', async () => {
   const { db } = await seed([cardOf('c1', 'd1', 'Olá'), cardOf('c2', 'd1', 'Adeus'), cardOf('c3', 'd1', 'Sim')]);
   const fake = fakeTranslator();
@@ -111,7 +137,7 @@ test('a card changed to new Portuguese is translated again; a manual one is not'
 
   const manual = { urdu: 'خدا حافظ', urduRoman: 'khuda hafiz', urduOf: 'Adeus', urduBy: 'manual', urduAt: NOW + 100 };
   const changes = { cards: [cardOf('c1', 'd1', 'Olá a todos'), cardOf('c2', 'd1', 'Adeus a todos', manual)] };
-  assert.deepEqual(applyChanges(db, ana.id, changes, NOW), { rejected: [] });
+  assert.deepEqual(applyChanges(db, ana.id, changes, NOW + 20), { rejected: [] });
   queue.scanDeck('d1');
   assert.deepEqual(await queue.idle(), { translated: 1, failed: 0 });
   assert.equal(stored(db, 'c1').urdu, 'ur:Olá a todos');
