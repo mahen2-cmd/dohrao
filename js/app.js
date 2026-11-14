@@ -657,7 +657,12 @@ function openDeckDialog(deck) {
           ...(deck?.urdu && {
             urduScript: urduScript.value,
             // Only a choice the person made: saving the dialog unchanged must not outrank a later admin switch.
-            ...(frontShowsSelect.value !== shows && { frontShows: frontShowsSelect.value }),
+            // Stamped newer than the switch so it shows at once, even when it repeats the stored value;
+            // the server replaces the stamp with its own clock.
+            ...(frontShowsSelect.value !== shows && {
+              frontShows: frontShowsSelect.value,
+              frontShowsAt: Math.max(Date.now(), (deck.urduSwitchAt ?? 0) + 1),
+            }),
           }),
         };
         if (own && !values.name) return name.focus();

@@ -5,6 +5,8 @@ import { openDb } from '../server/db.js';
 import { createUser } from '../server/auth.js';
 import { buildView, applyChanges } from '../server/sync.js';
 import { newSchedule } from '../js/fsrs.js';
+import { setUrduSwitch } from '../server/admin.js';
+import { frontShows } from '../js/urdu.js';
 
 const NOW = 1_700_000_000_000;
 
@@ -399,5 +401,32 @@ test('frontShowsAt is stamped by the server when frontShows changes', async () =
   applyChanges(db, ana.id, { decks: [changed] }, NOW + 100);
   assert.equal(buildView(db, ana.id, NOW).decks[0].frontShowsAt, NOW + 100);
   applyChanges(db, ana.id, { decks: [changed] }, NOW + 200);
+  assert.equal(buildView(db, ana.id, NOW).decks[0].frontShowsAt, NOW + 100);
+});
+
+test('picking the stored front choice again after a newer admin switch wins over the switch', async () => {
+  const { db, ana, ben } = await seed();
+  give(db, 'd1', ben.id);
+  const viewDeck = () => buildView(db, ben.id, NOW).decks[0];
+  applyChanges(db, ben.id, { decks: [{ ...viewDeck(), frontShows: 'en' }] }, NOW + 100);
+  setUrduSwitch(db, { ownerId: ana.id, deckId: 'd1', userId: ben.id, on: true }, NOW + 200);
+  assert.equal(frontShows(viewDeck()), 'ur');
+  // The person picks English again: the value is unchanged, but the choice is newer than the switch.
+  const seen = viewDeck();
+  const chosenAt = Math.max(NOW + 150, seen.urduSwitchAt + 1);
+  applyChanges(db, ben.id, { decks: [{ ...seen, frontShows: 'en', frontShowsAt: chosenAt }] }, NOW + 300);
+  assert.equal(viewDeck().frontShowsAt, NOW + 300);
+  assert.equal(frontShows(viewDeck()), 'en');
+});
+
+test('a device echoing the stored frontShowsAt does not re-stamp it', async () => {
+  const { db, ana } = await seed();
+  applyChanges(db, ana.id, { decks: [deckOf({ frontShows: 'ur', frontShowsAt: NOW + 50 })] }, NOW + 100);
+  const seen = buildView(db, ana.id, NOW).decks[0];
+  assert.equal(seen.frontShowsAt, NOW + 100);
+  applyChanges(db, ana.id, { decks: [{ ...seen, newPerDay: 5 }] }, NOW + 200);
+  assert.equal(buildView(db, ana.id, NOW).decks[0].frontShowsAt, NOW + 100);
+  // A stale device still holding its own older stamp doesn't re-stamp either.
+  applyChanges(db, ana.id, { decks: [{ ...seen, frontShowsAt: NOW + 50 }] }, NOW + 300);
   assert.equal(buildView(db, ana.id, NOW).decks[0].frontShowsAt, NOW + 100);
 });

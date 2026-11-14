@@ -103,9 +103,11 @@ function applyDeck(db, userId, deck, now) {
     db.prepare('UPDATE decks SET data = ? WHERE id = ?').run(JSON.stringify(merged), deck.id);
   }
   // The server stamps when each person last chose what their card fronts show; a device's own
-  // clock is never trusted for it.
+  // clock is never trusted for it. A newer stamp from the device marks a fresh choice, even of
+  // the value already stored; an echo of the stored stamp is not one.
   const storedPrefs = parse(db.prepare('SELECT data FROM deck_prefs WHERE user_id = ? AND deck_id = ?').get(userId, deck.id)?.data);
-  if (prefs.frontShows !== storedPrefs.frontShows) prefs.frontShowsAt = now;
+  const chosen = prefs.frontShows !== storedPrefs.frontShows || (prefs.frontShowsAt ?? 0) > (storedPrefs.frontShowsAt ?? 0);
+  if (chosen) prefs.frontShowsAt = now;
   else if (storedPrefs.frontShowsAt !== undefined) prefs.frontShowsAt = storedPrefs.frontShowsAt;
   else delete prefs.frontShowsAt;
   savePrefs(db, userId, deck.id, prefs);
