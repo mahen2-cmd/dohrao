@@ -11,6 +11,7 @@ A small, fast flashcard app with Anki's scheduling and a cleaner interface, host
 - **Accounts.** Each person signs up with an invite code and logs in with a username and password, on a phone or a laptop. Their decks, progress, statistics and settings are their own.
 - **Given decks.** The admin gives a deck to the people who should study it. It arrives on their reserve, and they pull cards in at their own pace. When the admin edits, adds or deletes cards, everyone who has the deck sees the change, and nobody's progress is lost.
 - **Decks and cards.** Create as many decks as you like; add, edit, move, search and delete cards.
+- **Urdu on the front.** On a deck where the owner ticks **Translate the front into Urdu**, every card gets an Urdu translation of its Portuguese from Google Translate, in Urdu script and in Roman Urdu. Cards added or edited later are translated automatically, in the background on the server. Each person chooses in their own deck settings whether the front shows English, Urdu or both, and which Urdu writing to use; the back stays Portuguese. The admin can correct a translation in the card editor, and the fix reaches everyone. The Urdu is read aloud in an Urdu voice. See [Urdu on the front](#urdu-on-the-front).
 - **Filters.** Narrow a deck's card list to new, learning, due, not-yet-due or reserve cards, by when the next review falls, when a card was added or how often it was forgotten, and sort it. Tick cards, or everything the filters show, to delete them together.
 - **Maths and images.** Build equations in a visual editor, or write them in LaTeX, and they are typeset on the card. Paste a screenshot, drop a picture or pick a file to put it on either side.
 - **Import from Excel.** Turn a spreadsheet of words into cards in one step, pictures and maths included.
@@ -30,6 +31,7 @@ A small, fast flashcard app with Anki's scheduling and a cleaner interface, host
 - **Signing up needs an invite code.** There is no public sign-up. The admin makes codes on the Admin screen and sends them; each can be used by one or more people (up to 20).
 - **The admin** is the owner's account, made when the owner's existing data is moved in (see the [runbook](deploy/RUNBOOK.md)). The account menu, under the name at the top right, has **Admin**, which lists the people, the invite codes and the admin's decks.
 - **Giving decks.** On the Admin screen, **Give to…** on a deck chooses who has it. The whole deck lands on each person's reserve, in the admin's order: the cards the admin has studied first, then the admin's reserve. Cards added to the deck later join the end of everyone's reserve.
+  On a deck with Urdu switched on, **Give to…** also has an **Urdu** checkbox for each person. Ticking it sets that person's front to Urdu from the start; they can still change it themselves in their deck settings afterwards.
 - **What is shared and what is not.** The cards' text and the deck's name and languages come from the admin and follow the admin's changes. Everything else is each person's own: their schedule on every card, the reserve order, new cards per day, the scheduler, retention and the voice settings. A given deck cannot be edited by the person it was given to, but they can study it and use its reserve.
 - **Taking a deck back** hides it from that person and keeps their progress, so giving it again picks up where they left off. **Deleting** a deck the admin has given removes it, and everyone's progress on it, after a warning that says how many people have it.
 - **Forgotten passwords.** There is no reset email. The admin sets a new password with **Reset password** on the Admin screen.
@@ -165,6 +167,17 @@ In the card editor, put an image on a side in any of these ways:
 - Press **Add image** above the text box and choose one or more files.
 
 PNG, JPEG, GIF, WebP and SVG images up to 20 MB are accepted. Each is kept on the server in the data folder's `media/` and appears in the text box as `[image:...]`, which you can move about like any other text or delete to take the image off the card. The same picture added twice is only kept once.
+
+### Urdu on the front
+
+For learners whose first language is Urdu, a deck can show Urdu on the front instead of English.
+
+- **Switching it on.** The deck's owner ticks **Translate the front into Urdu** in Deck settings. Every card then gets an Urdu translation of its Portuguese, in Urdu script and in Roman Urdu (Urdu in Latin letters). It fills in over a while; cards added or edited later are translated automatically, in the background on the server, so nobody waits for it.
+- **Choosing what you see.** Each person sets two things in their own Deck settings: **Front shows** (English, Urdu or Both) and **Urdu writing** (Urdu script or Roman Urdu). The back stays Portuguese. Urdu is read aloud in an Urdu voice, and with Both the English is read first, then the Urdu.
+- **Correcting a translation.** In the card editor, the admin sees **Urdu** and **Roman Urdu** boxes. Changing them fixes the card for everyone who has the deck. **Translate again** discards the correction and brings Google's version back shortly after the card is saved.
+- **Giving a deck.** In **Give to…**, an **Urdu** checkbox per person switches their front to Urdu. They can change it themselves afterwards.
+- **Where the translations come from.** Google Translate's free, unofficial service, the same kind the app uses for voices. Google publishes no address for this, so it could stop answering without notice. If it does, new cards wait without a translation, and every translation already saved keeps working.
+- **Filling a deck at once.** On the server, `node scripts/translate-urdu.js --data <dir> --deck "<name>"` translates every card that needs it and prints `Translated N, failed M, already done K.` Run it again to retry the failures. It refuses if the deck does not exist or **Translate the front into Urdu** is not switched on.
 
 ### Reading aloud
 

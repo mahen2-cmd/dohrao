@@ -279,3 +279,31 @@ and copy that backup over `recall.db` (see step 7).
 Then open Portuguese A1 in the app and press **Sort now** to place the remaining cards, about
 1,700, with the AI. That costs a small charge per batch of about 100 cards.
 
+## 10. Urdu on the front
+
+A deck can show Urdu on the front, translated from its Portuguese by Google Translate's free,
+unofficial service. Turning it on sends the deck's Portuguese text to Google, and the deck's
+cards are translated for everyone who has the deck. Nothing needs installing, and no key.
+
+1. In the app, open the deck's settings and tick **Translate the front into Urdu**. The
+   server starts translating in the background, a card at a time, and translates cards added
+   or edited later by itself.
+2. Optionally, translate the whole deck at once instead of waiting:
+
+   ```bash
+   # On the server. The service can keep running.
+   cd /opt/recall
+   sudo -u recall node scripts/translate-urdu.js --data /var/lib/recall --deck "Portuguese A1"
+   ```
+
+   It prints `Translated N, failed M, already done K.` Cards it could not translate are
+   counted as failed; run it again to retry them. It stops with a message if there is no such
+   deck or the box in step 1 is not ticked.
+3. Spot-check a few translations: open the deck's cards as the admin, look at the **Urdu** and
+   **Roman Urdu** boxes in the card editor, and correct any that are wrong. A correction
+   reaches everyone. **Translate again** brings Google's version back shortly after saving.
+4. Under **Give to…** on the Admin screen, tick **Urdu** for each person who should see Urdu
+   on the front. They can change it themselves in their own deck settings afterwards.
+
+If Google stops answering, new cards simply wait without a translation, and translations
+already saved keep working. Nothing else is affected.
