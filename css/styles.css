@@ -2658,6 +2658,42 @@ table.upcoming {
   color: var(--muted);
   font-size: 13.5px;
 }
+.give-row {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+.give-row .check {
+  margin-bottom: 0;
+}
+.give-row .check:first-child {
+  flex: 1;
+  min-width: 0;
+}
+.give-urdu:has(input:disabled) {
+  color: var(--muted);
+  cursor: default;
+}
+/* Correcting a card's Urdu in the editor. */
+.urdu-fields {
+  margin: -4px 0 14px;
+  padding-left: 12px;
+  border-left: 2px solid var(--border);
+}
+.urdu-fields .field input.urdu {
+  line-height: 1.9;
+  padding-top: 4px;
+  padding-bottom: 4px;
+}
+.urdu-note {
+  margin: 0 0 10px;
+}
+.urdu-note[hidden] {
+  display: none;
+}
+.urdu-actions {
+  margin-bottom: 6px;
+}
 
 @media (max-width: 760px) {
   .today {

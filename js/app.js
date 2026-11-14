@@ -7,7 +7,7 @@ import { HEAT_WEEKS, PHONE_QUERY, canSwipeFrom, classifySwipe, inTab, isRevealTa
 import { recentStudy, rightShare } from './progress.js';
 import * as store from './store.js';
 import { effectiveTopic, filterLabel, inFilter, readableTopicName, resolveFilter, topicKeyFromFileName, topicLabel } from './topics.js';
-import { englishSide, frontShows, shownSide } from './urdu.js';
+import { englishSide, frontShows, portugueseText, shownSide } from './urdu.js';
 
 const app = document.getElementById('app');
 
@@ -825,6 +825,65 @@ function sideEditor(label, textarea) {
   );
 }
 
+/**
+ * The Urdu and Roman Urdu boxes for a card of the user's own Urdu deck, to correct Google's
+ * translation or ask for a fresh one. Null when the card has no place for Urdu.
+ * `patch(edited)` gives the Urdu fields to save for the edited card: none when nothing changed.
+ */
+function urduEditor(card, deck, onKeydown) {
+  if (!deck?.urdu || !store.editable(deck.id)) return null;
+  const script = h('input', { type: 'text', value: card.urdu ?? '', dir: 'rtl', lang: 'ur', class: 'urdu', 'aria-label': 'Urdu' });
+  const roman = h('input', { type: 'text', value: card.urduRoman ?? '', lang: 'ur-Latn', 'aria-label': 'Roman Urdu' });
+  const again = h('small', { class: 'field-note urdu-note', hidden: true }, 'Google will translate this again shortly after you save.');
+  let translateAgain = false;
+  for (const box of [script, roman]) {
+    box.addEventListener('keydown', onKeydown);
+    // Typing after Translate again makes it a correction by hand.
+    box.addEventListener('input', () => {
+      translateAgain = false;
+      again.hidden = true;
+    });
+  }
+  const stale =
+    card.urduBy === 'manual' && Boolean(card.urdu) && card.urduOf !== portugueseText(card, deck)
+      ? h('small', { class: 'field-note urdu-note' }, 'The Portuguese has changed since this Urdu was written.')
+      : null;
+  const fields = h(
+    'div',
+    { class: 'urdu-fields' },
+    h('label', { class: 'field' }, h('span', null, 'Urdu'), script),
+    h('label', { class: 'field' }, h('span', null, 'Roman Urdu'), roman),
+    stale,
+    h(
+      'div',
+      { class: 'urdu-actions' },
+      h(
+        'button',
+        {
+          class: 'btn sm',
+          type: 'button',
+          onclick: () => {
+            script.value = roman.value = '';
+            translateAgain = true;
+            again.hidden = false;
+            if (stale) stale.hidden = true;
+          },
+        },
+        'Translate again',
+      ),
+    ),
+    again,
+  );
+  const patch = (edited) => {
+    if (translateAgain) return { urdu: '', urduRoman: '', urduBy: 'google', urduAt: Date.now() };
+    const urdu = script.value.trim();
+    const urduRoman = roman.value.trim();
+    if (urdu === (card.urdu ?? '').trim() && urduRoman === (card.urduRoman ?? '').trim()) return {};
+    return { urdu, urduRoman, urduOf: portugueseText(edited, deck), urduBy: 'manual', urduAt: Date.now() };
+  };
+  return { side: englishSide(card, deck), fields, patch };
+}
+
 function openCardDialog({ card, deckId }) {
   if (!store.editable(card?.deckId ?? deckId)) return;
   const front = h('textarea', { required: true, value: card?.front ?? '', placeholder: 'Question or prompt' });
@@ -858,6 +917,7 @@ function openCardDialog({ card, deckId }) {
   };
   front.addEventListener('keydown', submitOnCtrlEnter);
   back.addEventListener('keydown', submitOnCtrlEnter);
+  const urdu = card && urduEditor(card, store.deck(card.deckId), submitOnCtrlEnter);
 
   const form = h(
     'form',
@@ -872,7 +932,8 @@ function openCardDialog({ card, deckId }) {
           const wasIn = currentTopic(store.deck(deckSelect.value));
           const moved = deckSelect.value !== card.deckId;
           const chosen = topic !== wasIn || (moved && topic);
-          store.updateCard(card.id, { ...values, deckId: deckSelect.value, reserved: (canReserve && reserved.checked) || undefined });
+          const urduPatch = urdu?.patch({ ...card, ...values }) ?? {};
+          store.updateCard(card.id, { ...values, ...urduPatch, deckId: deckSelect.value, reserved: (canReserve && reserved.checked) || undefined });
           if (chosen) store.setCardsTopic([card.id], topic || null, Date.now());
           // A topic from the old deck means nothing in the new one.
           else if (moved && card.topic) store.clearCardTopic(card.id, Date.now());
@@ -894,7 +955,9 @@ function openCardDialog({ card, deckId }) {
       },
     },
     sideEditor('Front', front),
+    urdu?.side === 'front' && urdu.fields,
     sideEditor('Back', back),
+    urdu?.side === 'back' && urdu.fields,
     h('small', { class: 'field-note', style: 'margin: -6px 0 14px' }, 'Paste or drop images into a side. Press Maths to write an equation, or click one in the preview to change it. Maths can also be typed as LaTeX: \\( x^2 \\) within a line, \\[ x^2 \\] on its own line.'),
     h('label', { class: 'field' }, h('span', null, 'Deck'), deckSelect),
     topicField,
@@ -3912,6 +3975,15 @@ function openGiveDialog(deck, users) {
   const had = new Set(deck.recipients.filter((r) => r.active).map((r) => r.userId));
   const boxes = people.map((u) => h('input', { type: 'checkbox', value: u.id, checked: had.has(u.id) }));
   const nameOf = (id) => people.find((u) => u.id === id).name;
+  // On an Urdu deck each person can be switched to the Urdu front. Only someone who has the deck can be.
+  const hadUrdu = new Set(deck.recipients.filter((r) => r.urdu).map((r) => r.userId));
+  const urduBoxes = deck.urdu
+    ? people.map((u, i) => {
+        const box = h('input', { type: 'checkbox', checked: hadUrdu.has(u.id), disabled: !boxes[i].checked, 'aria-label': `Urdu for ${u.name}` });
+        boxes[i].addEventListener('change', () => (box.disabled = !boxes[i].checked));
+        return box;
+      })
+    : [];
   const form = h(
     'form',
     {
@@ -3920,22 +3992,42 @@ function openGiveDialog(deck, users) {
         const now = new Set(boxes.filter((box) => box.checked).map((box) => box.value));
         const added = [...now].filter((id) => !had.has(id));
         const removed = [...had].filter((id) => !now.has(id));
+        // Only the people who have the deck after saving can have their Urdu switched.
+        const switched = urduBoxes.filter((box, i) => now.has(boxes[i].value) && box.checked !== hadUrdu.has(boxes[i].value));
+        const urduOn = switched.filter((box) => box.checked).map((box) => boxes[urduBoxes.indexOf(box)].value);
+        const urduOff = switched.filter((box) => !box.checked).map((box) => boxes[urduBoxes.indexOf(box)].value);
         dialog.close();
-        if (!added.length && !removed.length) return;
+        if (!added.length && !removed.length && !switched.length) return;
         const said = [
           added.length && `Given to ${listFormat.format(added.map(nameOf))}`,
-          removed.length && `${added.length ? 'taken' : 'Taken'} back from ${listFormat.format(removed.map(nameOf))}`,
+          removed.length && `taken back from ${listFormat.format(removed.map(nameOf))}`,
+          urduOn.length && `Urdu on for ${listFormat.format(urduOn.map(nameOf))}`,
+          urduOff.length && `Urdu off for ${listFormat.format(urduOff.map(nameOf))}`,
         ].filter(Boolean);
+        const toastText = said.join(', ');
         await adminChange(async () => {
           if (added.length) await api.admin.assign(deck.id, added);
           if (removed.length) await api.admin.unassign(deck.id, removed);
-        }, said.join(', '));
+          for (const id of urduOn) await api.admin.setUrdu(deck.id, id, true);
+          for (const id of urduOff) await api.admin.setUrdu(deck.id, id, false);
+        }, toastText[0].toUpperCase() + toastText.slice(1));
       },
     },
     people.length
       ? [
           h('p', { class: 'message' }, 'They study it with their own progress and cannot change its cards. Taking it back hides it from them and keeps their progress.'),
-          h('div', { class: 'give-list' }, people.map((u, i) => h('label', { class: 'check' }, boxes[i], h('span', null, u.name, ' ', h('span', { class: 'give-user' }, u.username))))),
+          h(
+            'div',
+            { class: 'give-list' },
+            people.map((u, i) =>
+              h(
+                'div',
+                { class: 'give-row' },
+                h('label', { class: 'check' }, boxes[i], h('span', null, u.name, ' ', h('span', { class: 'give-user' }, u.username))),
+                urduBoxes[i] && h('label', { class: 'check give-urdu' }, urduBoxes[i], 'Urdu'),
+              ),
+            ),
+          ),
         ]
       : h('p', { class: 'message' }, 'No one else has an account yet. Make an invite code and send it to them.'),
     h(
