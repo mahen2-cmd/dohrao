@@ -279,6 +279,9 @@ function fillTemplate(template, fields, { ord, answer }) {
     template = template.replace(section, (_, kind, name, body) => (filled(name) === (kind === '#') ? body : ''));
   } while (template !== previous);
 
+  // A template can name a field many times over, so what goes in is counted as it goes, and a
+  // side that would pass MAX_SIDE is refused before it is built.
+  let length = template.length;
   return template.replace(/\{\{([^{}]*)\}\}/g, (_, reference) => {
     const parts = reference.split(':').map((part) => part.trim());
     const name = parts.pop();
@@ -286,7 +289,10 @@ function fillTemplate(template, fields, { ord, answer }) {
     // Typed answers and Anki's own text-to-speech have no place on a plain card.
     if (filters.includes('type') || filters.includes('tts') || filters.includes('tts-voices')) return '';
     const value = fields.get(name) ?? ''; // {{FrontSide}}, {{Tags}} and the like are left out
-    return filters.includes('cloze') ? cloze(value, ord, answer) : value;
+    const text = filters.includes('cloze') ? cloze(value, ord, answer) : value;
+    length += text.length;
+    if (length > MAX_SIDE) throw new Error(TOO_LARGE);
+    return text;
   });
 }
 
@@ -410,6 +416,9 @@ function convert(all, now) {
     return date.getTime() + DAY / 2; // mid-day, clear of the rollover and of clock changes
   };
 
+  // Real templates are a few KB; a huge one could build a huge card out of a short note.
+  const longTemplate = (t) => [t.front, t.back].some((side) => Buffer.byteLength(String(side ?? '')) > MAX_TEMPLATE);
+  if (source.notetypes.some((n) => n.templates.some(longTemplate))) throw new Error(TOO_LARGE);
   const notetypes = new Map(source.notetypes.map((n) => [n.id, n]));
   const history = groupBy(all('select id, cid, ease from revlog where ease between 1 and 4 and type < 3 order by id'), 'cid');
   // Each card is read with its note's text, so one long note shared by many cards would be held
@@ -530,6 +539,9 @@ const TOO_LARGE = 'This Anki file is too large to open.';
 // hundred cards and tens of thousands of characters.
 const MAX_CARDS = 100_000;
 const MAX_TEXT = 64_000_000;
+// The most one card template may take, and the most characters one side may be filled to.
+const MAX_TEMPLATE = 64 * 1024;
+const MAX_SIDE = 1_000_000;
 
 async function unzstd(bytes, limit) {
   const { zstdDecompressSync } = await import('node:zlib');

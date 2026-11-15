@@ -429,14 +429,14 @@ test('a collection holding a view or a trigger is refused', async () => {
  * A small older-layout collection, as the review's attack scripts build it: `notesFlds` is the
  * notes table's flds column, `qfmt` the front template, and `notes(db)` adds notes and cards.
  */
-function hostileCollection({ notesFlds = 'flds text', qfmt = '{{F}}', extra = '', notes }) {
+function hostileCollection({ notesFlds = 'flds text', qfmt = '{{F}}', afmt = '{{F}}', extra = '', notes }) {
   return database((db) => {
     db.exec(`drop table notes; drop table cards;
       create table col (id integer primary key, crt integer, mod integer, scm integer, ver integer, dty integer, usn integer, ls integer, conf text, models text, decks text, dconf text, tags text);
       create table notes (id integer primary key, guid text, mid integer, mod integer, usn integer, tags text, n integer, ${notesFlds}, sfld text, csum integer, flags integer, data text);
       create table cards (id integer primary key, nid integer, did integer, ord integer, mod integer, usn integer, type integer, queue integer, due integer, ivl integer, factor integer, reps integer, lapses integer, left integer, odue integer, odid integer, flags integer, data text);
       ${extra}`);
-    const models = { 1: { id: 1, name: 'B', type: 0, flds: [{ name: 'F', ord: 0 }], tmpls: [{ name: 'c', ord: 0, qfmt, afmt: '{{F}}' }], css: '' } };
+    const models = { 1: { id: 1, name: 'B', type: 0, flds: [{ name: 'F', ord: 0 }], tmpls: [{ name: 'c', ord: 0, qfmt, afmt }], css: '' } };
     db.prepare("insert into col values (1, 1600000000, 0, 0, 11, 0, 0, 0, '{}', ?, ?, '{\"1\":{\"id\":1}}', '{}')")
       .run(JSON.stringify(models), JSON.stringify({ 1: { id: 1, name: 'D', conf: 1 } }));
     notes(db);
@@ -517,4 +517,38 @@ test('one import saves at most its share of image bytes; the rest of its images 
   sizes.length = 0;
   assert.equal((await readAnkiPackage(file, { now: NOW, saveImage: store })).missingImages, 0);
   assert.equal(sizes.length, 2);
+});
+
+/** How much the memory in use grows, at most, while `task` runs. */
+async function peakGrowth(task) {
+  const start = process.memoryUsage().rss;
+  let peak = start;
+  const timer = setInterval(() => (peak = Math.max(peak, process.memoryUsage().rss)), 5);
+  try {
+    await task();
+  } finally {
+    clearInterval(timer);
+  }
+  return Math.max(peak, process.memoryUsage().rss) - start;
+}
+
+test('a template that repeats a field to build a huge side is refused before the side is built', async () => {
+  const MB = 1024 * 1024;
+  const note = (db) => { addNote(db, 1, 'x'.repeat(300)); addCard(db, 1, 1); };
+  // From the review: {{F}} 1.6 million times over a 300-character note, on both sides.
+  const huge = '{{F}}'.repeat(1_600_000);
+  const attack = hostileCollection({ qfmt: huge, afmt: huge, notes: note });
+  const grew = await peakGrowth(() => assert.rejects(readAnkiCollection(attack, NOW), /too large/));
+  assert.ok(grew < 200 * MB, `memory grew by ${Math.round(grew / MB)} MB`);
+  // A template over 64 KB is refused on its own, front or back.
+  const long = '{{F}}'.repeat(14_000);
+  await assert.rejects(readAnkiCollection(hostileCollection({ qfmt: long, notes: note }), NOW), /too large/);
+  await assert.rejects(readAnkiCollection(hostileCollection({ afmt: long, notes: note }), NOW), /too large/);
+  // Under 64 KB, a side is refused once it passes a million characters.
+  const repeated = hostileCollection({ qfmt: '{{F}}'.repeat(12_000), notes: note });
+  const grewToo = await peakGrowth(() => assert.rejects(readAnkiCollection(repeated, NOW), /too large/));
+  assert.ok(grewToo < 200 * MB, `memory grew by ${Math.round(grewToo / MB)} MB`);
+  // A template that repeats a field a few times is still read.
+  const fine = hostileCollection({ qfmt: '{{F}} / {{F}}', notes: note });
+  assert.equal((await readAnkiCollection(fine, NOW)).decks[0].cards[0].front, `${'x'.repeat(300)} / ${'x'.repeat(300)}`);
 });
