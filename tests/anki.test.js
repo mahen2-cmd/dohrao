@@ -424,3 +424,48 @@ test('a collection holding a view or a trigger is refused', async () => {
   // An ordinary collection is still read.
   checkDeck(await readAnkiCollection(legacy(), NOW));
 });
+
+/**
+ * A small older-layout collection, as the review's attack scripts build it: `notesFlds` is the
+ * notes table's flds column, `qfmt` the front template, and `notes(db)` adds notes and cards.
+ */
+function hostileCollection({ notesFlds = 'flds text', qfmt = '{{F}}', extra = '', notes }) {
+  return database((db) => {
+    db.exec(`drop table notes; drop table cards;
+      create table col (id integer primary key, crt integer, mod integer, scm integer, ver integer, dty integer, usn integer, ls integer, conf text, models text, decks text, dconf text, tags text);
+      create table notes (id integer primary key, guid text, mid integer, mod integer, usn integer, tags text, n integer, ${notesFlds}, sfld text, csum integer, flags integer, data text);
+      create table cards (id integer primary key, nid integer, did integer, ord integer, mod integer, usn integer, type integer, queue integer, due integer, ivl integer, factor integer, reps integer, lapses integer, left integer, odue integer, odid integer, flags integer, data text);
+      ${extra}`);
+    const models = { 1: { id: 1, name: 'B', type: 0, flds: [{ name: 'F', ord: 0 }], tmpls: [{ name: 'c', ord: 0, qfmt, afmt: '{{F}}' }], css: '' } };
+    db.prepare("insert into col values (1, 1600000000, 0, 0, 11, 0, 0, 0, '{}', ?, ?, '{\"1\":{\"id\":1}}', '{}')")
+      .run(JSON.stringify(models), JSON.stringify({ 1: { id: 1, name: 'D', conf: 1 } }));
+    notes(db);
+  });
+}
+
+const addNote = (db, id, flds) => (flds === undefined
+  ? db.prepare("insert into notes (id, guid, mid, mod, usn, tags, n, sfld, csum, flags, data) values (?, ?, 1, 0, 0, '', 0, '', 0, 0, '')").run(id, `g${id}`)
+  : db.prepare("insert into notes (id, guid, mid, mod, usn, tags, n, flds, sfld, csum, flags, data) values (?, ?, 1, 0, 0, '', 0, ?, '', 0, 0, '')").run(id, `g${id}`, flds));
+const addCard = (db, id, nid) => db.prepare("insert into cards values (?, ?, 1, 0, 0, 0, 0, 0, ?, 0, 0, 0, 0, 0, 0, 0, 0, '')").run(id, nid, id);
+
+test('a collection with a generated column or a virtual table is refused before it is read', async () => {
+  // From the review: every note's flds is made 200 MB long as it is read.
+  const generated = hostileCollection({
+    notesFlds: "flds text as (printf('%.*c', 200000000, 'x'))",
+    notes: (db) => { for (let i = 1; i <= 20; i++) { addNote(db, i); addCard(db, i, i); } },
+  });
+  await assert.rejects(readAnkiCollection(generated, NOW), /Recall cannot open/);
+  const stored = hostileCollection({
+    notesFlds: "flds text, big text as (upper(flds)) stored",
+    notes: (db) => { addNote(db, 1, 'Olá'); addCard(db, 1, 1); },
+  });
+  await assert.rejects(readAnkiCollection(stored, NOW), /Recall cannot open/);
+  const virtual = hostileCollection({
+    extra: 'create virtual table search using fts5(body);',
+    notes: (db) => { addNote(db, 1, 'Olá'); addCard(db, 1, 1); },
+  });
+  await assert.rejects(readAnkiCollection(virtual, NOW), /Recall cannot open/);
+  // The same collection without them is read.
+  const plain = hostileCollection({ notes: (db) => { addNote(db, 1, 'Olá'); addCard(db, 1, 1); } });
+  assert.equal((await readAnkiCollection(plain, NOW)).decks[0].cards[0].front, 'Olá');
+});

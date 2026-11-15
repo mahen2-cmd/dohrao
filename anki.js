@@ -530,12 +530,17 @@ async function unzstd(bytes, limit) {
 
 /**
  * Refuse a collection whose schema could run code of its own while it is read: a view (which
- * can hide an endless query behind a table's name) or a trigger.
+ * can hide an endless query behind a table's name), a trigger, a generated column (which can
+ * make a huge value out of nothing as a row is read) or a virtual table. Anki uses none.
  */
 function checkSchema(db) {
   db.exec('PRAGMA trusted_schema = OFF');
-  const { n } = db.prepare("SELECT count(*) AS n FROM sqlite_master WHERE type IN ('view', 'trigger')").get();
-  if (n > 0) throw new Error('This Anki collection has parts Recall cannot open.');
+  const count = (sql) => db.prepare(sql).get().n;
+  const refused =
+    count("SELECT count(*) AS n FROM sqlite_master WHERE type IN ('view', 'trigger')") > 0 ||
+    count("SELECT count(*) AS n FROM sqlite_master WHERE sql LIKE '%CREATE%VIRTUAL%TABLE%'") > 0 ||
+    count("SELECT count(*) AS n FROM sqlite_master m, pragma_table_xinfo(m.name) x WHERE m.type = 'table' AND x.hidden IN (2, 3)") > 0;
+  if (refused) throw new Error('This Anki collection has parts Recall cannot open.');
 }
 
 /**
