@@ -101,8 +101,10 @@ export function createUrduQueue({ db, translator, pauseMs = 300, now = Date.now,
   /** Queue the deck's cards that need Urdu and aren't queued already. */
   function scanDeck(deckId) {
     if (stopped) return;
-    const deckRow = db.prepare('SELECT data FROM decks WHERE id = ?').get(deckId);
-    const deck = parse(deckRow?.data);
+    // Only the admin's decks are translated, so another user can't drive Google traffic.
+    const deckRow = db.prepare(`SELECT d.data, u.role FROM decks d JOIN users u ON u.id = d.owner_id WHERE d.id = ?`).get(deckId);
+    if (deckRow?.role !== 'admin') return;
+    const deck = parse(deckRow.data);
     if (!deck.urdu) return;
     for (const row of db.prepare('SELECT id, data FROM cards WHERE deck_id = ? ORDER BY rowid').all(deckId)) {
       const card = parse(row.data);
@@ -114,9 +116,11 @@ export function createUrduQueue({ db, translator, pauseMs = 300, now = Date.now,
     start();
   }
 
-  /** Scan every deck that has Urdu switched on. */
+  /** Scan every deck of the admin's that has Urdu switched on. */
   function scanAll() {
-    for (const row of db.prepare('SELECT id, data FROM decks ORDER BY rowid').all()) {
+    const decks = db.prepare(`SELECT d.id, d.data FROM decks d JOIN users u ON u.id = d.owner_id
+      WHERE u.role = 'admin' ORDER BY d.rowid`).all();
+    for (const row of decks) {
       if (parse(row.data).urdu) scanDeck(row.id);
     }
   }

@@ -20,10 +20,10 @@ function fakeTranslator() {
   return { sent, async toUrdu(text) { sent.push(text); return { urdu: `ur:${text}`, urduRoman: `rom:${text}` }; } };
 }
 
-/** ana owns an Urdu deck d1 with cards c1, c2 and a plain deck d2 with c3. */
+/** ana, the admin, owns an Urdu deck d1 with cards c1, c2 and a plain deck d2 with c3. */
 async function seed(cards) {
   const db = openDb(':memory:');
-  const ana = await createUser(db, { username: 'ana', name: 'Ana', password: 'password-ana' }, NOW);
+  const ana = await createUser(db, { username: 'ana', name: 'Ana', password: 'password-ana', role: 'admin' }, NOW);
   const all = cards ?? [cardOf('c1', 'd1', 'Olá'), cardOf('c2', 'd1', 'Adeus'), cardOf('c3', 'd2', 'Obrigado')];
   assert.deepEqual(applyChanges(db, ana.id, { decks: [urduDeck, plainDeck], cards: all }, NOW), { rejected: [] });
   return { db, ana };
@@ -280,4 +280,21 @@ test('the script reports the cards left when Google keeps failing, instead of wa
   const translator = { async toUrdu() { throw new Error('google-503'); } };
   const result = await translateDeck(db, { deckName: 'Portuguese', translator, pauseMs: 0, log: () => {} });
   assert.deepEqual(result, { translated: 0, failed: 3, alreadyDone: 0, left: 2 });
+});
+
+test("only the admin's decks are translated; a user's deck with Urdu on is left alone", async () => {
+  const db = openDb(':memory:');
+  const admin = await createUser(db, { username: 'boss', name: 'Boss', password: 'password-boss', role: 'admin' }, NOW);
+  const eve = await createUser(db, { username: 'eve', name: 'Eve', password: 'password-eve' }, NOW);
+  applyChanges(db, admin.id, { decks: [urduDeck], cards: [cardOf('a1', 'd1', 'Olá')] }, NOW);
+  applyChanges(db, eve.id, { decks: [{ ...urduDeck, id: 'e1' }], cards: [cardOf('e1c', 'e1', 'Adeus')] }, NOW);
+  const translator = fakeTranslator();
+  const queue = queueFor(db, translator);
+  queue.scanDeck('e1');
+  assert.deepEqual(await queue.idle(), { translated: 0, failed: 0 });
+  queue.scanAll();
+  assert.deepEqual(await queue.idle(), { translated: 1, failed: 0 });
+  assert.deepEqual(translator.sent, ['Olá']);
+  assert.equal(stored(db, 'a1').urdu, 'ur:Olá');
+  assert.equal(stored(db, 'e1c').urdu, undefined);
 });

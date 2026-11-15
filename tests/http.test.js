@@ -494,10 +494,10 @@ test('approving a proposal writes the topics and starts a sort', async (t) => {
   assert.equal(sorter.calls.place, 1);
 });
 
-test('a sync on an urdu deck queues its new cards', async (t) => {
+test("a sync on the admin's urdu deck queues its new cards", async (t) => {
   const translator = { async toUrdu(text) { return { urdu: `ur:${text}`, urduRoman: `rom:${text}` }; } };
-  const { port, invite, server } = await start(t, { translator });
-  const { cookie } = await signUp(port, invite);
+  const { port, server } = await start(t, { translator });
+  const { cookie } = await logIn(port, 'admin', 'admin-password');
   const ptDeck = { id: 'd1', name: 'Portuguese', created: NOW, frontLang: 'en-US', backLang: 'pt-PT', urdu: true };
   const ptCard = { id: 'c1', deckId: 'd1', front: 'hello', back: 'olá', created: NOW, updated: NOW };
   const sync = await call(port, 'POST', 'api/sync', { cookie, body: { decks: [ptDeck], cards: [ptCard] } });
