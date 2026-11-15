@@ -511,3 +511,23 @@ test('deck prefs over 8 KB, or with a front or Urdu script the app does not have
   assert.deepEqual(applyChanges(db, ana.id, { decks: [deckOf({ frontShows: 'nope' })] }, NOW).rejected, ['d1']);
   assert.equal(buildView(db, ana.id, NOW).decks[0].frontShows, undefined);
 });
+
+test('a deck of 200,000 cards builds a view without overflowing the stack', async () => {
+  const { db, ana, ben } = await seed();
+  const N = 200_000;
+  db.exec('BEGIN');
+  db.prepare('INSERT INTO decks (id, owner_id, data) VALUES (?, ?, ?)').run('big', ana.id, JSON.stringify({ name: 'Big', created: NOW }));
+  const card = db.prepare('INSERT INTO cards (id, deck_id, data) VALUES (?, ?, ?)');
+  const progress = db.prepare('INSERT INTO progress (user_id, card_id, data) VALUES (?, ?, ?)');
+  for (let i = 0; i < N; i++) {
+    card.run(`b${i}`, 'big', `{"front":"f","back":"b","created":${NOW}}`);
+    if (i % 2 === 0) progress.run(ben.id, `b${i}`, `{"state":0,"order":${i}}`);
+  }
+  db.exec('COMMIT');
+  give(db, 'big', ben.id);
+  assert.equal(buildView(db, ana.id, NOW).cards.length, N + 3);
+  const view = buildView(db, ben.id, NOW);
+  assert.equal(view.cards.length, N);
+  // New arrivals go after the largest order already on the reserve.
+  assert.equal(view.cards[1].order, N - 2 + 1);
+});

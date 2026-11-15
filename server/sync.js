@@ -60,7 +60,8 @@ function cardsFor(db, userId, deckId, given) {
   const cards = rows.map((r) => ({ id: r.id, deckId, ...parse(r.data), ...parse(r.progress) }));
   if (!given) return cards;
   const orders = rows.filter((r) => r.progress).map((r) => parse(r.progress).order).filter(Number.isFinite);
-  const maxOrder = orders.length ? Math.max(...orders) : -1;
+  // A loop, not Math.max(...orders): spreading a big deck's cards into a call overflows the stack.
+  const maxOrder = orders.length ? orders.reduce((max, order) => (order > max ? order : max)) : -1;
   const fresh = cards.filter((_, i) => !rows[i].progress).sort((a, b) => a.created - b.created);
   fresh.forEach((c, i) => Object.assign(c, newSchedule(c.created), { reserved: true, order: maxOrder + 1 + i }));
   return cards;
@@ -74,13 +75,13 @@ export function buildView(db, userId, now) {
   const cards = [];
   for (const d of ownDecks(db, userId)) {
     decks.push({ id: d.id, ...parse(d.data), ...prefsOf(d.id) });
-    cards.push(...cardsFor(db, userId, d.id, false));
+    for (const c of cardsFor(db, userId, d.id, false)) cards.push(c);
   }
   for (const d of givenDecks(db, userId)) {
     const given = { id: d.id, ...parse(d.data), ...prefsOf(d.id), assigned: true, from: d.owner };
     if (d.urdu_at !== null) Object.assign(given, { urduSwitch: switchedFront(d), urduSwitchAt: d.urdu_at });
     decks.push(given);
-    cards.push(...cardsFor(db, userId, d.id, true));
+    for (const c of cardsFor(db, userId, d.id, true)) cards.push(c);
   }
   const s = db.prepare('SELECT daily, log, settings, saved_at FROM user_state WHERE user_id = ?').get(userId);
   return {
