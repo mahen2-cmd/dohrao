@@ -27,9 +27,10 @@ import { createUrduQueue } from './server/urdu-queue.js';
 import { FRONTS } from './js/urdu.js';
 
 const ROOT = fileURLToPath(new URL('.', import.meta.url));
-// A big import arrives in one sync. The largest account's whole state is under 5 MB as JSON,
-// and 50,000 cards (the most one person may own) about 25 MB.
-const MAX_BODY = 40 * 1024 * 1024;
+// A big import arrives in one sync. The largest account's whole state is under 5 MB as JSON.
+// What is stored is bounded by the per-card, per-deck and per-owner limits in server/sync.js;
+// this cap stays generous because a refused body makes the app drop every change in it.
+const MAX_BODY = 100 * 1024 * 1024;
 // The app's settings are a few bytes.
 const MAX_SETTINGS = 16 * 1024;
 // Images one person may upload a day.

@@ -564,10 +564,13 @@ test('an Anki package over 100 MB is refused with a message the app shows', asyn
   assert.match(res.text, /larger than 100 MB/);
 });
 
-test('a sync body over 40 MB is refused', async (t) => {
+test('a sync body up to 100 MB is read; a larger one is refused', async (t) => {
   const { port, invite } = await start(t);
   const { cookie } = await signUp(port, invite);
-  const big = await call(port, 'POST', 'api/sync', { cookie, body: { padding: 'x'.repeat(40 * 1024 * 1024 + 1) } });
+  // A refused body makes the app drop every change in it, so the cap is kept generous.
+  const large = await call(port, 'POST', 'api/sync', { cookie, body: { padding: 'x'.repeat(41 * 1024 * 1024) } });
+  assert.equal(large.status, 200);
+  const big = await call(port, 'POST', 'api/sync', { cookie, body: { padding: 'x'.repeat(100 * 1024 * 1024) } });
   assert.equal(big.status, 413);
 });
 
