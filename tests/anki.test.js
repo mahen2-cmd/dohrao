@@ -469,3 +469,36 @@ test('a collection with a generated column or a virtual table is refused before 
   const plain = hostileCollection({ notes: (db) => { addNote(db, 1, 'Olá'); addCard(db, 1, 1); } });
   assert.equal((await readAnkiCollection(plain, NOW)).decks[0].cards[0].front, 'Olá');
 });
+
+test('a note shared by many cards is refused when the cards would hold too much text', async () => {
+  // From the review: one 10 MB note behind 200 cards would be read 200 times over.
+  const shared = hostileCollection({
+    notes: (db) => { addNote(db, 1, 'x'.repeat(10_000_000)); for (let i = 1; i <= 200; i++) addCard(db, i, 1); },
+  });
+  await assert.rejects(readAnkiCollection(shared, NOW), /too large/);
+  // More than 100,000 cards is refused too, however short they are.
+  const many = hostileCollection({
+    notes: (db) => {
+      addNote(db, 1, 'a');
+      db.exec('BEGIN');
+      for (let i = 1; i <= 100_001; i++) addCard(db, i, 1);
+      db.exec('COMMIT');
+    },
+  });
+  await assert.rejects(readAnkiCollection(many, NOW), /too large/);
+  // A template can repeat a field, so the text made is counted as well.
+  const repeated = hostileCollection({
+    qfmt: '{{F}}<br>{{F}}<br>{{F}}',
+    notes: (db) => { for (let i = 1; i <= 20; i++) { addNote(db, i, `${i}${'y'.repeat(1_000_000)}`); addCard(db, i, i); } },
+  });
+  await assert.rejects(readAnkiCollection(repeated, NOW), /too large/);
+  // 100,000 short cards are still read.
+  const fine = hostileCollection({
+    notes: (db) => {
+      db.exec('BEGIN');
+      for (let i = 1; i <= 100_000; i++) { addNote(db, i, `word ${i}`); addCard(db, i, i); }
+      db.exec('COMMIT');
+    },
+  });
+  assert.equal((await readAnkiCollection(fine, NOW)).decks[0].cards.length, 100_000);
+});

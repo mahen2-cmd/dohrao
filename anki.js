@@ -412,6 +412,10 @@ function convert(all, now) {
 
   const notetypes = new Map(source.notetypes.map((n) => [n.id, n]));
   const history = groupBy(all('select id, cid, ease from revlog where ease between 1 and 4 and type < 3 order by id'), 'cid');
+  // Each card is read with its note's text, so one long note shared by many cards would be held
+  // many times over: the total is checked before anything is read.
+  const [size] = all('select count(*) as cards, sum(length(n.flds)) as chars from cards c join notes n on n.id = c.nid');
+  if (size.cards > MAX_CARDS || (size.chars ?? 0) > MAX_TEXT) throw new Error(TOO_LARGE);
   const rows = all(
     `select c.id, c.did, c.ord, c.mod, c.type, c.queue, c.due, c.ivl, c.factor, c.reps, c.lapses,
             c.left, c.odue, c.odid, c.data, n.mid, n.flds
@@ -419,6 +423,8 @@ function convert(all, now) {
   );
 
   const result = { decks: [], suspended: 0, blank: 0, sound: false, missingImages: 0 };
+  // Templates can repeat a field, so the text the cards are given is counted as well.
+  let text = 0;
   const byDeck = groupBy(rows.map((row) => ({ ...row, deck: row.odid || row.did })), 'deck');
   for (const deck of source.decks) {
     const options = withDefaults(deck.options);
@@ -435,6 +441,8 @@ function convert(all, now) {
         result.blank++;
         continue;
       }
+      text += front.length + back.length;
+      if (text > MAX_TEXT) throw new Error(TOO_LARGE);
       if (/\[sound:/i.test(row.flds)) result.sound = true;
       cards.push({
         ankiId: row.id,
@@ -516,6 +524,10 @@ const isZstd = (bytes) => ZSTD.every((byte, i) => bytes[i] === byte);
 const MAX_COLLECTION = 64 * 1024 * 1024;
 const MAX_MEDIA_FILE = 25 * 1024 * 1024;
 const TOO_LARGE = 'This Anki file is too large to open.';
+// The most cards, and characters of card text, one collection may give. A real one has a few
+// hundred cards and tens of thousands of characters.
+const MAX_CARDS = 100_000;
+const MAX_TEXT = 64_000_000;
 
 async function unzstd(bytes, limit) {
   const { zstdDecompressSync } = await import('node:zlib');
