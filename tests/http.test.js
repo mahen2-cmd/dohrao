@@ -31,7 +31,8 @@ async function start(t, options = {}) {
 
 /** One request; resolves `{ status, headers, json, text, cookie }`. */
 function call(port, method, path, { body, cookie, headers = {} } = {}) {
-  const data = body === undefined ? undefined : Buffer.from(typeof body === 'string' ? body : JSON.stringify(body));
+  const data = body === undefined ? undefined
+    : Buffer.isBuffer(body) ? body : Buffer.from(typeof body === 'string' ? body : JSON.stringify(body));
   return new Promise((resolve, reject) => {
     const req = request({
       host: '127.0.0.1', port, method, path: `/${path}`,
@@ -561,4 +562,34 @@ test('an Anki package over 100 MB is refused with a message the app shows', asyn
   const res = await upload.answer;
   assert.equal(res.status, 400);
   assert.match(res.text, /larger than 100 MB/);
+});
+
+test('a sync body over 40 MB is refused', async (t) => {
+  const { port, invite } = await start(t);
+  const { cookie } = await signUp(port, invite);
+  const big = await call(port, 'POST', 'api/sync', { cookie, body: { padding: 'x'.repeat(40 * 1024 * 1024 + 1) } });
+  assert.equal(big.status, 413);
+});
+
+test('settings over 16 KB refuse the whole sync; smaller ones save', async (t) => {
+  const { port, invite } = await start(t);
+  const { cookie } = await signUp(port, invite);
+  const bad = await call(port, 'POST', 'api/sync', { cookie, body: { decks: [deck], settings: { note: 'x'.repeat(16 * 1024) } } });
+  assert.equal(bad.status, 400);
+  assert.deepEqual((await call(port, 'GET', 'api/state', { cookie })).json.decks, []);
+  const ok = await call(port, 'POST', 'api/sync', { cookie, body: { settings: { theme: 'dark' } } });
+  assert.equal(ok.status, 200);
+});
+
+test('a person can add 300 images a day; the next one is refused', async (t) => {
+  const { port, invite } = await start(t);
+  const { cookie } = await signUp(port, invite);
+  const { cookie: other } = await call(port, 'POST', 'api/signup', { body: { code: invite, username: 'cal', name: 'Cal', password: 'cal-password' } });
+  const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3]);
+  const send = (c) => call(port, 'POST', 'api/media', { cookie: c, body: png, headers: { 'Content-Type': 'image/png' } });
+  for (let i = 0; i < 300; i++) assert.equal((await send(cookie)).status, 200, `upload ${i + 1}`);
+  const over = await send(cookie);
+  assert.equal(over.status, 429);
+  assert.match(over.text, /300 images/);
+  assert.equal((await send(other)).status, 200, 'someone else still can');
 });

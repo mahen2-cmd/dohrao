@@ -27,8 +27,14 @@ import { createUrduQueue } from './server/urdu-queue.js';
 import { FRONTS } from './js/urdu.js';
 
 const ROOT = fileURLToPath(new URL('.', import.meta.url));
-// A big import arrives in one sync.
-const MAX_BODY = 100 * 1024 * 1024;
+// A big import arrives in one sync. The largest account's whole state is under 5 MB as JSON,
+// and 50,000 cards (the most one person may own) about 25 MB.
+const MAX_BODY = 40 * 1024 * 1024;
+// The app's settings are a few bytes.
+const MAX_SETTINGS = 16 * 1024;
+// Images one person may upload a day.
+const IMAGES_PER_DAY = 300;
+const DAY = 24 * 60 * 60 * 1000;
 // Sign-up, login and admin forms are small; this keeps huge passwords from burning CPU.
 const MAX_FORM = 16 * 1024;
 // An Anki package carries its images, so it may be much larger.
@@ -103,6 +109,7 @@ function validChanges(c) {
   return list('decks', isPlain) && list('cards', isPlain)
     && list('deletedDecks', (id) => typeof id === 'string') && list('deletedCards', (id) => typeof id === 'string')
     && object('daily') && object('log') && object('settings')
+    && (c.settings === undefined || Buffer.byteLength(JSON.stringify(c.settings)) <= MAX_SETTINGS)
     && (c.savedAt === undefined || Number.isFinite(c.savedAt));
 }
 
@@ -251,6 +258,8 @@ export function createRecallServer({ dataDir, origin, tts, translator, ...rest }
   const limits = {
     login: createLimiter({ max: 10, windowMs: 15 * 60 * 1000 }),
     signup: createLimiter({ max: 10, windowMs: 15 * 60 * 1000 }),
+    // Keyed by user id, unlike the two above.
+    media: createLimiter({ max: IMAGES_PER_DAY, windowMs: DAY }),
   };
 
   const backup = () => {
@@ -438,7 +447,13 @@ export function createRecallServer({ dataDir, origin, tts, translator, ...rest }
         importing = false;
       }
     }
-    if (method === 'POST' && path === '/api/media') return fileRoute(res, () => upload(mediaDir, req, res));
+    if (method === 'POST' && path === '/api/media') {
+      if (!limits.media.hit(user.id, Date.now())) {
+        return res.writeHead(429, { 'Content-Type': 'text/plain' })
+          .end(`You have added ${IMAGES_PER_DAY} images today, the most for one day. Try again tomorrow.`);
+      }
+      return fileRoute(res, () => upload(mediaDir, req, res));
+    }
     if (method === 'GET' && path.startsWith('/api/media/')) return image(mediaDir, path.slice('/api/media/'.length), res);
     if (path.startsWith('/api/admin/')) {
       if (user.role !== 'admin') throw new HttpError(403, 'forbidden');

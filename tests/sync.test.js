@@ -531,3 +531,50 @@ test('a deck of 200,000 cards builds a view without overflowing the stack', asyn
   // New arrivals go after the largest order already on the reserve.
   assert.equal(view.cards[1].order, N - 2 + 1);
 });
+
+test('a card side over 20,000 characters, or card content over 64 KB, is rejected, never cut short', async () => {
+  const { db, ana } = await seed();
+  const cards = [
+    cardOf('n1', { front: 'x'.repeat(20_001) }),
+    cardOf('n2', { back: 'x'.repeat(20_001) }),
+    cardOf('n3', { front: 'x'.repeat(20_000), back: 'y'.repeat(20_000), urdu: 'z'.repeat(20_000), urduRoman: 'w'.repeat(6_000) }),
+    cardOf('c1', { front: 'x'.repeat(20_001) }),
+    cardOf('n4', { front: 'x'.repeat(20_000), back: 'y'.repeat(20_000) }),
+    cardOf('n5', { back: 'b'.repeat(910) }),
+    cardOf('n6'),
+  ];
+  assert.deepEqual(applyChanges(db, ana.id, { cards }, NOW).rejected, ['n1', 'n2', 'n3', 'c1']);
+  const view = buildView(db, ana.id, NOW);
+  assert.equal(view.cards.find((c) => c.id === 'c1').front, 'front c1');
+  assert.equal(view.cards.find((c) => c.id === 'n4').front.length, 20_000);
+  assert.equal(view.cards.find((c) => c.id === 'n5').back.length, 910);
+  assert.equal(view.cards.find((c) => c.id === 'n6').front, 'front n6');
+});
+
+test('a deck name over 300 characters, or a shared deck over 512 KB, is rejected', async () => {
+  const { db, ana } = await seed();
+  const decks = [
+    deckOf({ id: 'k1', name: 'n'.repeat(301) }),
+    deckOf({ id: 'k2', topics: [{ id: 't1', name: 'x'.repeat(512 * 1024) }] }),
+    deckOf({ id: 'd1', name: 'n'.repeat(301) }),
+    deckOf({ id: 'k3', name: 'n'.repeat(300), topics: [{ id: 't1', name: 'x'.repeat(11_000) }] }),
+  ];
+  assert.deepEqual(applyChanges(db, ana.id, { decks }, NOW).rejected, ['k1', 'k2', 'd1']);
+  assert.deepEqual(buildView(db, ana.id, NOW).decks.map((d) => d.name), ['Spanish', 'n'.repeat(300)]);
+});
+
+test('an owner can hold 50,000 cards; a new card past that is rejected, edits are not', async () => {
+  const { db, ana, ben } = await seed();
+  db.exec('BEGIN');
+  const insert = db.prepare('INSERT INTO cards (id, deck_id, data) VALUES (?, ?, ?)');
+  for (let i = 0; i < 49_996; i++) insert.run(`m${i}`, 'd1', '{"front":"f","back":"b"}');
+  db.exec('COMMIT');
+  // 49,999 cards now; one more fits, the next does not.
+  const { rejected } = applyChanges(db, ana.id, { cards: [cardOf('n1'), cardOf('n2'), cardOf('c1', { front: 'edited' })] }, NOW);
+  assert.deepEqual(rejected, ['n2']);
+  assert.equal(buildView(db, ana.id, NOW).cards.find((c) => c.id === 'c1').front, 'edited');
+  // Deleting a card in the same sync makes room for a new one.
+  assert.deepEqual(applyChanges(db, ana.id, { deletedCards: ['c2'], cards: [cardOf('n2')] }, NOW).rejected, []);
+  // Another owner has their own allowance.
+  assert.deepEqual(applyChanges(db, ben.id, { decks: [deckOf({ id: 'b1' })], cards: [cardOf('x1', { deckId: 'b1' })] }, NOW).rejected, []);
+});

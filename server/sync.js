@@ -15,6 +15,14 @@ const bytes = (value) => Buffer.byteLength(JSON.stringify(value));
 const MAX_PROGRESS = 4 * 1024;
 const MAX_PREFS = 8 * 1024;
 const URDU_SCRIPTS = ['arabic', 'roman'];
+// The most a card's sides, its content and a deck may take, and how many cards one person may
+// own. Real ones are far smaller: the longest side is under 1,000 characters, the largest card
+// about 1 KB, the largest deck 11 KB and the biggest account under 10,000 cards.
+const MAX_SIDE = 20_000;
+const MAX_CARD = 64 * 1024;
+const MAX_DECK = 512 * 1024;
+const MAX_DECK_NAME = 300;
+export const MAX_CARDS = 50_000;
 // Progress fields the app reads, which must be finite numbers. Others (from a newer version
 // of the app) are kept as they come.
 const PROGRESS_NUMBERS = ['stability', 'difficulty', 'due', 'scheduledDays', 'ease', 'left', 'reps', 'lapses', 'introduced', 'order', 'pulled'];
@@ -30,6 +38,15 @@ function validProgress(p) {
   if (has(p, 'reserved') && typeof p.reserved !== 'boolean') return false;
   return bytes(p) <= MAX_PROGRESS;
 }
+
+/** Whether a card's content fits the limits. Too much is refused, never cut short. */
+function validContent(c) {
+  const side = (key) => typeof c[key] !== 'string' || c[key].length <= MAX_SIDE;
+  return side('front') && side('back') && bytes(c) <= MAX_CARD;
+}
+
+/** Whether a deck's shared fields fit the limits. */
+const validShared = (d) => (typeof d.name !== 'string' || d.name.length <= MAX_DECK_NAME) && bytes(d) <= MAX_DECK;
 
 /** Whether one person's prefs for a deck hold choices the app has, at a sensible size. */
 function validPrefs(p) {
@@ -104,6 +121,9 @@ function access(db, userId, deckId) {
   return a ? 'given' : 'other';
 }
 
+const ownedCards = (db, userId) =>
+  db.prepare('SELECT count(*) AS n FROM cards c JOIN decks d ON d.id = c.deck_id WHERE d.owner_id = ?').get(userId).n;
+
 const deckOfCard = (db, cardId) => db.prepare('SELECT deck_id FROM cards WHERE id = ?').get(cardId)?.deck_id;
 
 function savePrefs(db, userId, deckId, prefs) {
@@ -123,6 +143,7 @@ function applyDeck(db, userId, deck, now) {
   if (!validPrefs(prefs)) return false;
   const kind = access(db, userId, deck.id);
   if (kind === 'other') return false;
+  if ((kind === null || kind === 'own') && !validShared(shared)) return false;
   // A given deck that no longer exists was deleted by its owner; a device still showing it must
   // not bring it back as the recipient's own.
   if (kind === null && deck.assigned) return false;
@@ -145,18 +166,26 @@ function applyDeck(db, userId, deck, now) {
   return true;
 }
 
-function applyCard(db, userId, card, now) {
+/**
+ * `room.left` is how many more cards the user may own; it is counted once per sync and goes
+ * down with each card added.
+ */
+function applyCard(db, userId, card, now, room) {
   if (!validId(card.deckId)) return false;
   const [content, progress] = split(card, CARD_CONTENT);
   if (!validProgress(progress)) return false;
   const current = deckOfCard(db, card.id);
   const target = access(db, userId, card.deckId);
   if (current === undefined) {
-    if (target !== 'own') return false;
+    if (target !== 'own' || !validContent(content)) return false;
+    room.left ??= MAX_CARDS - ownedCards(db, userId);
+    if (room.left <= 0) return false;
+    room.left--;
     db.prepare('INSERT INTO cards (id, deck_id, data) VALUES (?, ?, ?)').run(card.id, card.deckId, JSON.stringify(content));
   } else {
     const from = access(db, userId, current);
     if (from === 'own' && target === 'own') {
+      if (!validContent(content)) return false;
       const stored = parse(db.prepare('SELECT data FROM cards WHERE id = ?').get(card.id).data);
       // Only the sorter writes 'ai', and it never moves a manual card, so a hand placement
       // (even one made offline before the sort) wins over it whatever the times say.
@@ -223,7 +252,9 @@ export function applyChanges(db, userId, changes, now) {
       return true;
     });
     each(changes.decks, (deck) => applyDeck(db, userId, deck, now));
-    each(changes.cards, (card) => applyCard(db, userId, card, now));
+    // Counted after the deletions above, so cards removed in this sync make room.
+    const room = {};
+    each(changes.cards, (card) => applyCard(db, userId, card, now, room));
     if (['daily', 'log', 'settings', 'savedAt'].some((k) => changes[k] !== undefined)) applyState(db, userId, changes, now);
     db.exec('COMMIT');
   } catch (err) {
