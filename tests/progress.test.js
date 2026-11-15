@@ -62,3 +62,9 @@ test('right share is the part of answers that were not Again, for one deck or al
   // Answers older than 30 days are left out.
   assert.equal(rightShare({ [dayKey(NOW - 45 * DAY)]: { d1: [5, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0] } }, 'd1', NOW), null);
 });
+
+test('recent study ignores day keys that are not dates', () => {
+  const key = (daysAgo) => dayKey(NOW - daysAgo * DAY);
+  const daily = { [key(1)]: 3, 'invalid-date': 42, '9999-99-99': 100 };
+  assert.equal(recentStudy(daily, NOW).lastStudied, key(1));
+});

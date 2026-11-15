@@ -2,7 +2,7 @@
 import { DECK_SHARED, CARD_CONTENT, split, mergeTopics, mergeDeckTopics } from './fields.js';
 import { newSchedule } from '../js/fsrs.js';
 import { URDU_FIELDS } from '../js/urdu.js';
-import { mergeCounts } from '../js/counts.js';
+import { cleanCounts, mergeCounts } from '../js/counts.js';
 
 // Keys the view adds to given decks; never stored.
 const VIEW_ONLY = ['assigned', 'from', 'urduSwitch', 'urduSwitchAt'];
@@ -146,11 +146,14 @@ function applyCard(db, userId, card, now) {
   return true;
 }
 
-function applyState(db, userId, changes) {
+function applyState(db, userId, changes, now) {
   const s = db.prepare('SELECT daily, log, settings, saved_at FROM user_state WHERE user_id = ?').get(userId);
   const pick = (key, column) => (changes[key] !== undefined ? JSON.stringify(changes[key]) : (s?.[column] ?? '{}'));
   // Answer counts from two devices are merged; neither one's count for a day is lost.
-  const merge = (key) => (changes[key] !== undefined ? JSON.stringify(mergeCounts(parse(s?.[key]), changes[key])) : (s?.[key] ?? '{}'));
+  // Only real days and whole counts are kept, on both sides, so hand-made data never sticks.
+  const merge = (key) => (changes[key] !== undefined
+    ? JSON.stringify(mergeCounts(cleanCounts(parse(s?.[key]), key, now), cleanCounts(changes[key], key, now)))
+    : (s?.[key] ?? '{}'));
   db.prepare(`INSERT INTO user_state (user_id, daily, log, settings, saved_at) VALUES (?, ?, ?, ?, ?)
     ON CONFLICT (user_id) DO UPDATE SET daily = excluded.daily, log = excluded.log,
       settings = excluded.settings, saved_at = excluded.saved_at`)
@@ -189,7 +192,7 @@ export function applyChanges(db, userId, changes, now) {
     });
     each(changes.decks, (deck) => applyDeck(db, userId, deck, now));
     each(changes.cards, (card) => applyCard(db, userId, card, now));
-    if (['daily', 'log', 'settings', 'savedAt'].some((k) => changes[k] !== undefined)) applyState(db, userId, changes);
+    if (['daily', 'log', 'settings', 'savedAt'].some((k) => changes[k] !== undefined)) applyState(db, userId, changes, now);
     db.exec('COMMIT');
   } catch (err) {
     db.exec('ROLLBACK');

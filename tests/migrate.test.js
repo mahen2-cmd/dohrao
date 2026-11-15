@@ -15,8 +15,8 @@ const NOW = 1_700_000_000_000;
 const fixture = () => ({
   version: 1,
   savedAt: NOW + 9,
-  daily: { '2026-11-01': 12 },
-  log: { '2026-11-01': { new: 3, review: 9 } },
+  daily: { '2023-11-01': 12 },
+  log: { '2023-11-01': { new: 3, review: 9 } },
   settings: { dayStart: 4 },
   decks: [
     { ...DECK_DEFAULTS, id: 'd1', name: 'Spanish', created: NOW, ankiId: 77, scheduler: 'fsrs' },

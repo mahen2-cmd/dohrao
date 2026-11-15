@@ -199,23 +199,23 @@ test('deleting something already gone is done, not rejected', async () => {
 
 test('daily, log and settings are per user', async () => {
   const { db, ana, ben } = await seed();
-  applyChanges(db, ana.id, { daily: { a: 1 }, log: { x: [1] }, settings: { theme: 'dark' }, savedAt: NOW }, NOW);
+  applyChanges(db, ana.id, { daily: { '2023-11-01': 1 }, log: { '2023-11-01': { d1: [1] } }, settings: { theme: 'dark' }, savedAt: NOW }, NOW);
   applyChanges(db, ben.id, { settings: { theme: 'light' } }, NOW);
-  applyChanges(db, ana.id, { log: { x: [1, 2] } }, NOW);
+  applyChanges(db, ana.id, { log: { '2023-11-01': { d1: [1, 2] } } }, NOW);
   const a = buildView(db, ana.id, NOW);
   const b = buildView(db, ben.id, NOW);
-  assert.deepEqual([a.daily, a.log, a.settings, a.savedAt], [{ a: 1 }, { x: [1, 2] }, { theme: 'dark' }, NOW]);
+  assert.deepEqual([a.daily, a.log, a.settings, a.savedAt], [{ '2023-11-01': 1 }, { '2023-11-01': { d1: [1, 2] } }, { theme: 'dark' }, NOW]);
   assert.deepEqual([b.daily, b.log, b.settings, b.savedAt], [{}, {}, { theme: 'light' }, 0]);
 });
 
 test('daily and log from two devices are merged, keeping the larger count', async () => {
   const { db, ana } = await seed();
-  applyChanges(db, ana.id, { daily: { '2026-01-01': 5, '2026-01-02': 3 }, log: { '2026-01-02': { d1: [3, 0, 0, 0] } } }, NOW);
+  applyChanges(db, ana.id, { daily: { '2023-01-01': 5, '2023-01-02': 3 }, log: { '2023-01-02': { d1: [3, 0, 0, 0] } } }, NOW);
   // The laptop answered twice on the 2nd, and once on the 3rd, without knowing the phone's counts.
-  applyChanges(db, ana.id, { daily: { '2026-01-02': 2, '2026-01-03': 1 }, log: { '2026-01-02': { d1: [0, 2, 0, 0], d2: [1] } } }, NOW);
+  applyChanges(db, ana.id, { daily: { '2023-01-02': 2, '2023-01-03': 1 }, log: { '2023-01-02': { d1: [0, 2, 0, 0], d2: [1] } } }, NOW);
   const view = buildView(db, ana.id, NOW);
-  assert.deepEqual(view.daily, { '2026-01-01': 5, '2026-01-02': 3, '2026-01-03': 1 });
-  assert.deepEqual(view.log, { '2026-01-02': { d1: [3, 2, 0, 0], d2: [1] } });
+  assert.deepEqual(view.daily, { '2023-01-01': 5, '2023-01-02': 3, '2023-01-03': 1 });
+  assert.deepEqual(view.log, { '2023-01-02': { d1: [3, 2, 0, 0], d2: [1] } });
 });
 
 const setStored = (db, table, id, patch) => {
@@ -429,4 +429,33 @@ test('a device echoing the stored frontShowsAt does not re-stamp it', async () =
   // A stale device still holding its own older stamp doesn't re-stamp either.
   applyChanges(db, ana.id, { decks: [{ ...seen, frontShowsAt: NOW + 50 }] }, NOW + 300);
   assert.equal(buildView(db, ana.id, NOW).decks[0].frontShowsAt, NOW + 100);
+});
+
+test('answer counts keep only real days up to tomorrow, with whole counts of zero or more', async () => {
+  const { db, ana } = await seed();
+  const { dayKey } = await import('../js/progress.js');
+  const DAY = 86_400_000;
+  const today = dayKey(NOW);
+  const yesterday = dayKey(NOW - DAY);
+  const tomorrow = dayKey(NOW + DAY);
+  const later = dayKey(NOW + 5 * DAY);
+  const daily = { [today]: 4, [yesterday]: -500, [tomorrow]: 2, [later]: 7, 'invalid-date': 42, '9999-99-99': 100, '2023-02-30': 9, '2023-01-01': 2.5 };
+  const log = {
+    [today]: { d1: [1, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0], d2: [1, -3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], d3: 'x' },
+    'invalid-date': { d1: [9, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0] },
+  };
+  applyChanges(db, ana.id, { daily, log, savedAt: NOW }, NOW);
+  const view = buildView(db, ana.id, NOW);
+  assert.deepEqual(view.daily, { [today]: 4, [tomorrow]: 2 });
+  assert.deepEqual(view.log, { [today]: { d1: [1, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0] } });
+});
+
+test('bad answer counts already stored are dropped at the next save', async () => {
+  const { db, ana } = await seed();
+  const { dayKey } = await import('../js/progress.js');
+  const today = dayKey(NOW);
+  db.prepare(`INSERT INTO user_state (user_id, daily, log, settings, saved_at) VALUES (?, ?, '{}', '{}', 0)`)
+    .run(ana.id, JSON.stringify({ [today]: 1, 'invalid-date': 42 }));
+  applyChanges(db, ana.id, { daily: { [today]: 3 }, savedAt: NOW }, NOW);
+  assert.deepEqual(buildView(db, ana.id, NOW).daily, { [today]: 3 });
 });

@@ -15,6 +15,14 @@ export function dayKey(t) {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
 
+/** Whether `key` is a real calendar day written as '2026-01-31'. */
+export function isDayKey(key) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(key);
+  if (!m) return false;
+  const d = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3]));
+  return d.getUTCFullYear() === +m[1] && d.getUTCMonth() === +m[2] - 1 && d.getUTCDate() === +m[3];
+}
+
 /**
  * Where a card stands for the person studying it: 'reserve' (not pulled in yet), 'waiting'
  * (pulled in, never answered), 'struggling', 'known' (well) or 'learning'.
@@ -63,7 +71,7 @@ function lastDays(daily, n, now) {
 export function recentStudy(daily, now) {
   const month = lastDays(daily, 30, now);
   const sum = (days) => days.reduce((total, d) => total + d.n, 0);
-  const studied = Object.keys(daily).filter((key) => daily[key] > 0).sort();
+  const studied = Object.keys(daily).filter((key) => isDayKey(key) && daily[key] > 0).sort();
   return {
     ...streakOf(daily, now),
     last14: month.slice(-14),
