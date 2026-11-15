@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
-import { parseDelimited, parseSpreadsheet } from '../js/importer.js';
+import { inflate, parseDelimited, parseSpreadsheet, readZip } from '../js/importer.js';
 import { PNG, arrayBuffer, zip } from './zip.js';
 
 function read(name) {
@@ -107,4 +107,51 @@ test('reads pictures placed in a cell and pictures placed over the sheet', async
   assert.deepEqual([...images.keys()], ['xl/media/image1.png', 'xl/media/image2.gif']);
   assert.deepEqual(Buffer.from(images.get('xl/media/image1.png')), PNG);
   assert.deepEqual(Buffer.from(images.get('xl/media/image2.gif')), GIF);
+});
+
+// ---- Limits on what a ZIP may unpack to ------------------------------------
+
+/** `total` bytes of zeros, deflated without holding them all in memory. */
+async function deflatedZeros(total) {
+  const { createDeflateRaw } = await import('node:zlib');
+  const deflate = createDeflateRaw({ level: 9 });
+  const chunks = [];
+  deflate.on('data', (chunk) => chunks.push(chunk));
+  const done = new Promise((resolve, reject) => deflate.on('end', resolve).on('error', reject));
+  const block = Buffer.alloc(16 * 1024 * 1024);
+  for (let left = total; left > 0; left -= block.length) {
+    if (!deflate.write(left >= block.length ? block : block.subarray(0, left))) await new Promise((r) => deflate.once('drain', r));
+  }
+  deflate.end();
+  await done;
+  return Buffer.concat(chunks);
+}
+
+test('inflate stops with an error once its output passes the cap', async () => {
+  const { deflateRawSync } = await import('node:zlib');
+  const packed = deflateRawSync(Buffer.alloc(10_000, 7));
+  assert.equal((await inflate(packed, 10_000)).length, 10_000);
+  await assert.rejects(inflate(packed, 9_999), /too large/);
+});
+
+test('a deflate bomb that lies about its size is refused, not unpacked', async () => {
+  const bomb = await deflatedZeros(256 * 1024 * 1024);
+  const files = readZip(arrayBuffer(zip({ 'collection.anki2': { data: bomb, method: 8, size: 1000 } })), 'Anki');
+  await assert.rejects(files.get('collection.anki2')(), /too large/);
+});
+
+test('an entry that says it unpacks to more than the cap is refused', async () => {
+  const { deflateRawSync } = await import('node:zlib');
+  const files = readZip(arrayBuffer(zip({ big: { data: deflateRawSync(Buffer.from('x')), method: 8, size: 64 * 1024 * 1024 + 1 } })), 'Anki');
+  await assert.rejects(files.get('big')(), /too large/);
+  // A smaller cap can be asked for one entry.
+  const small = readZip(arrayBuffer(zip({ a: { data: deflateRawSync(Buffer.alloc(100)), method: 8, size: 100 } })), 'Anki');
+  await assert.rejects(small.get('a')(99), /too large/);
+  assert.equal((await small.get('a')(100)).length, 100);
+});
+
+test('a ZIP with more than 20,000 entries is refused', () => {
+  const many = (n) => Object.fromEntries(Array.from({ length: n }, (_, i) => [`f${i}`, '']));
+  assert.equal(readZip(arrayBuffer(zip(many(20_000))), 'Anki').size, 20_000);
+  assert.throws(() => readZip(arrayBuffer(zip(many(20_001))), 'Anki'), /too many files/);
 });

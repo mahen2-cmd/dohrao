@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -370,4 +370,57 @@ test('an Anki import can put its new cards on reserve, in Anki’s order, leavin
   assert.deepEqual(store.counts(deck.id, NOW), { new: 0, learning: 2, review: 1, total: 3, newLeft: 14, tomorrow: { new: 0, learning: 0, review: 0, total: 0 }, cards: 8, reserve: 3 });
   assert.equal(store.pullFromReserve(deck.id, 1, NOW), 1);
   assert.equal(store.counts(deck.id, NOW).new, 1);
+});
+
+// ---- Hostile packages -------------------------------------------------------
+
+/** One zstd stream that unpacks to `total` bytes of zeros: one frame, repeated. */
+function zstdZeros(total) {
+  const block = 16 * 1024 * 1024;
+  const frame = zstdCompressSync(Buffer.alloc(block));
+  return Buffer.concat(Array.from({ length: Math.ceil(total / block) }, () => frame));
+}
+
+/** The bytes of `collection` after running `sql` on it. */
+function altered(collection, sql) {
+  const folder = mkdtempSync(join(tmpdir(), 'recall-test-'));
+  try {
+    writeFileSync(join(folder, 'c.db'), collection);
+    const db = new DatabaseSync(join(folder, 'c.db'));
+    db.exec(sql);
+    db.close();
+    return readFileSync(join(folder, 'c.db'));
+  } finally {
+    rmSync(folder, { recursive: true });
+  }
+}
+
+test('a zstd bomb for a collection is refused before it fills memory', async () => {
+  await assert.rejects(readAnkiCollection(zstdZeros(512 * 1024 * 1024), NOW), /too large/);
+  await assert.rejects(readAnkiPackage(zip({ 'collection.anki21b': zstdZeros(512 * 1024 * 1024) }), { now: NOW }), /too large/);
+});
+
+test('a zstd bomb for an image leaves the image out, and the cards still come in', async () => {
+  const entries = blob([...tag(1, 2), 13, ...pbString(1, 'arm one.png')]);
+  const saved = [];
+  const result = await readAnkiPackage(packageWithImages(zstdCompressSync(entries), { 0: zstdZeros(64 * 1024 * 1024) }), {
+    now: NOW,
+    saveImage: async (bytes) => {
+      saved.push(bytes.length);
+      return 'stored.png';
+    },
+  });
+  assert.deepEqual(saved, [], 'nothing past the 25 MB cap reaches saveImage');
+  assert.equal(result.decks[0].cards.length, 2);
+  assert.equal(result.missingImages, 3, 'both names of the left-out image, and the one never in the package');
+});
+
+test('a collection holding a view or a trigger is refused', async () => {
+  const view = altered(legacy(), 'create view endless as select 1');
+  await assert.rejects(readAnkiCollection(view, NOW), /Recall cannot open/);
+  const trigger = altered(legacy(), 'create trigger t after insert on notes begin select 1; end');
+  await assert.rejects(readAnkiCollection(trigger, NOW), /Recall cannot open/);
+  await assert.rejects(readAnkiPackage(zip({ 'collection.anki2': view }), { now: NOW }), /Recall cannot open/);
+  // An ordinary collection is still read.
+  checkDeck(await readAnkiCollection(legacy(), NOW));
 });

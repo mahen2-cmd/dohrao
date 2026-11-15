@@ -32,8 +32,9 @@ const MAX_BODY = 100 * 1024 * 1024;
 // Sign-up, login and admin forms are small; this keeps huge passwords from burning CPU.
 const MAX_FORM = 16 * 1024;
 // An Anki package carries its images, so it may be much larger.
-// It is held in memory while it is read, so it is capped well below the server's memory.
-const MAX_PACKAGE = 300 * 1024 * 1024;
+// It is held in memory while it is read, so it is capped well below the server's memory, and
+// only one is read at a time.
+const MAX_PACKAGE = 100 * 1024 * 1024;
 const MAX_IMAGE = 20 * 1024 * 1024;
 const COOKIE = 'recall_session';
 const COOKIE_AGE = 15552000; // 180 days, as long as a session
@@ -155,7 +156,7 @@ async function image(mediaDir, name, res) {
  */
 async function anki(mediaDir, req, res) {
   const bytes = await readBody(req, MAX_PACKAGE).catch(() => {
-    throw new Error('That package is larger than 300 MB.');
+    throw new Error('That package is larger than 100 MB.');
   });
   const decks = await readAnkiPackage(bytes, { saveImage: (image) => saveImage(mediaDir, image) });
   sendJson(res, 200, decks);
@@ -235,6 +236,8 @@ export function createRecallServer({ dataDir, origin, tts, translator, ...rest }
   const sorterReady = 'sorter' in rest ? Promise.resolve(rest.sorter) : loadSorter(dataDir);
   // Decks being sorted right now, so a second click does not start a second job.
   const sorting = new Set();
+  // Whether an Anki package is being read; each takes a lot of memory, so one runs at a time.
+  let importing = false;
   const voice = tts ?? createTts({ root: ROOT, dataDir });
   // Google is only reached once a card actually needs translating.
   let google;
@@ -423,7 +426,18 @@ export function createRecallServer({ dataDir, origin, tts, translator, ...rest }
     if (method === 'GET' && path === '/api/state') return state(res, user);
     if (method === 'POST' && path === '/api/sync') return sync(req, res, user);
     if (method === 'GET' && path === '/api/tts') return speech(req, res);
-    if (method === 'POST' && path === '/api/anki') return fileRoute(res, () => anki(mediaDir, req, res));
+    if (method === 'POST' && path === '/api/anki') {
+      if (importing) {
+        return res.writeHead(429, { 'Content-Type': 'text/plain', 'Retry-After': '10' })
+          .end('Another Anki import is being read. Try again in a moment.');
+      }
+      importing = true;
+      try {
+        return await fileRoute(res, () => anki(mediaDir, req, res));
+      } finally {
+        importing = false;
+      }
+    }
     if (method === 'POST' && path === '/api/media') return fileRoute(res, () => upload(mediaDir, req, res));
     if (method === 'GET' && path.startsWith('/api/media/')) return image(mediaDir, path.slice('/api/media/'.length), res);
     if (path.startsWith('/api/admin/')) {

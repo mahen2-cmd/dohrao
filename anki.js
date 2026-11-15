@@ -511,10 +511,31 @@ async function storeImages(result, store) {
 const ZSTD = [0x28, 0xb5, 0x2f, 0xfd];
 const isZstd = (bytes) => ZSTD.every((byte, i) => bytes[i] === byte);
 
-async function unzstd(bytes) {
+// The most a package's collection, and each of its other files, may unpack to; a small hostile
+// file must not be able to fill the server's memory.
+const MAX_COLLECTION = 64 * 1024 * 1024;
+const MAX_MEDIA_FILE = 25 * 1024 * 1024;
+const TOO_LARGE = 'This Anki file is too large to open.';
+
+async function unzstd(bytes, limit) {
   const { zstdDecompressSync } = await import('node:zlib');
   if (!zstdDecompressSync) throw new Error('This Anki file needs Node.js 22.15 or newer to open.');
-  return zstdDecompressSync(bytes);
+  try {
+    return zstdDecompressSync(bytes, { maxOutputLength: limit });
+  } catch (error) {
+    if (error instanceof RangeError) throw new Error(TOO_LARGE);
+    throw error;
+  }
+}
+
+/**
+ * Refuse a collection whose schema could run code of its own while it is read: a view (which
+ * can hide an endless query behind a table's name) or a trigger.
+ */
+function checkSchema(db) {
+  db.exec('PRAGMA trusted_schema = OFF');
+  const { n } = db.prepare("SELECT count(*) AS n FROM sqlite_master WHERE type IN ('view', 'trigger')").get();
+  if (n > 0) throw new Error('This Anki collection has parts Recall cannot open.');
 }
 
 /**
@@ -531,7 +552,7 @@ export async function readAnkiCollection(bytes, now = Date.now(), storeImagesFor
     throw new Error('Importing from Anki needs Node.js 22.5 or newer.');
   }
   // Current Anki compresses the database inside the package.
-  if (isZstd(bytes)) bytes = await unzstd(bytes);
+  if (isZstd(bytes)) bytes = await unzstd(bytes, MAX_COLLECTION);
   if (utf8.decode(bytes.subarray(0, 15)) !== 'SQLite format 3') throw new Error('This is not an Anki collection.');
 
   // SQLite reads from a file, so the database spends a moment in a temporary folder.
@@ -542,6 +563,7 @@ export async function readAnkiCollection(bytes, now = Date.now(), storeImagesFor
     const file = join(folder, 'collection.db');
     await writeFile(file, bytes);
     db = new DatabaseSync(file, { readOnly: true });
+    checkSchema(db);
     result = convert((sql) => db.prepare(sql).all(), now);
   } finally {
     db?.close();
@@ -557,8 +579,8 @@ export async function readAnkiCollection(bytes, now = Date.now(), storeImagesFor
  */
 async function mediaFiles(files) {
   if (!files.has('media')) return new Map();
-  let bytes = await files.get('media')();
-  if (isZstd(bytes)) bytes = await unzstd(bytes);
+  let bytes = await files.get('media')(MAX_MEDIA_FILE);
+  if (isZstd(bytes)) bytes = await unzstd(bytes, MAX_MEDIA_FILE);
   if (utf8.decode(bytes.subarray(0, 64)).trimStart().startsWith('{')) {
     return new Map(Object.entries(JSON.parse(utf8.decode(bytes))).map(([file, name]) => [name, file]));
   }
@@ -582,7 +604,7 @@ export async function readAnkiPackage(bytes, { now = Date.now(), saveImage } = {
   const name = ['collection.anki21b', 'collection.anki21', 'collection.anki2'].find((n) => files.has(n));
   if (!name) throw new Error('This file has no Anki collection in it.');
   const media = await mediaFiles(files);
-  return readAnkiCollection(await files.get(name)(), now, async (names) => {
+  return readAnkiCollection(await files.get(name)(MAX_COLLECTION), now, async (names) => {
     const stored = new Map();
     // A card may name the same file in a second way, such as with its spaces written as %20.
     const byFile = new Map();
@@ -590,10 +612,12 @@ export async function readAnkiPackage(bytes, { now = Date.now(), saveImage } = {
       const file = media.get(image) ?? media.get(decodeName(image));
       if (!file || !files.has(file) || !saveImage) continue;
       if (!byFile.has(file)) {
-        let data = await files.get(file)();
-        if (isZstd(data)) data = await unzstd(data);
-        // Not an image Recall can show: the cards go without it.
-        byFile.set(file, await saveImage(data).catch(() => null));
+        // Not an image Recall can show, or larger than any image it takes: the cards go without it.
+        const unpack = async () => {
+          const data = await files.get(file)(MAX_MEDIA_FILE);
+          return isZstd(data) ? unzstd(data, MAX_MEDIA_FILE) : data;
+        };
+        byFile.set(file, await unpack().then(saveImage).catch(() => null));
       }
       if (byFile.get(file)) stored.set(image, byFile.get(file));
     }

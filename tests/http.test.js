@@ -520,3 +520,45 @@ test('a sync that is saved still answers 200 when the Urdu scan fails', async (t
   assert.equal((await call(port, 'GET', 'api/state', { cookie })).json.decks[0].name, 'Mine');
   assert.match(errors.mock.calls.map((c) => c.arguments.join(' ')).join('\n'), /Urdu scan failed/);
 });
+
+/** Start an upload to `path` that sends `first` and waits; `finish()` sends the rest. */
+function openUpload(port, path, cookie, first) {
+  let req;
+  const answer = new Promise((resolve, reject) => {
+    req = request({ host: '127.0.0.1', port, method: 'POST', path: `/${path}`, headers: { Cookie: cookie } }, (res) => {
+      const chunks = [];
+      res.on('data', (c) => chunks.push(c));
+      res.on('end', () => resolve({ status: res.statusCode, text: Buffer.concat(chunks).toString('utf8') }));
+    });
+    req.on('error', reject);
+  });
+  req.write(first);
+  return { answer, finish: (rest = Buffer.alloc(0)) => req.end(rest) };
+}
+
+test('only one Anki import runs at a time; a second one is told the server is busy', async (t) => {
+  const { port, invite } = await start(t);
+  const { cookie } = await signUp(port, invite);
+  const first = openUpload(port, 'api/anki', cookie, Buffer.from('PK'));
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  const second = await call(port, 'POST', 'api/anki', { cookie, body: 'PK' });
+  first.finish();
+  const done = await first.answer;
+  assert.equal(second.status, 429);
+  assert.match(second.text, /another Anki import/i);
+  assert.equal(done.status, 400, 'the first one goes on and gives its own answer');
+  // Once it has finished, the next import is read.
+  const third = await call(port, 'POST', 'api/anki', { cookie, body: 'not a zip' });
+  assert.equal(third.status, 400);
+  assert.match(third.text, /not a valid Anki file/);
+});
+
+test('an Anki package over 100 MB is refused with a message the app shows', async (t) => {
+  const { port, invite } = await start(t);
+  const { cookie } = await signUp(port, invite);
+  const upload = openUpload(port, 'api/anki', cookie, Buffer.alloc(60 * 1024 * 1024));
+  upload.finish(Buffer.alloc(41 * 1024 * 1024));
+  const res = await upload.answer;
+  assert.equal(res.status, 400);
+  assert.match(res.text, /larger than 100 MB/);
+});

@@ -4,14 +4,45 @@
 
 // ---- ZIP --------------------------------------------------------------------
 
-async function inflate(bytes) {
+// The most a ZIP may hold, and the most one of its files may unpack to, so a small hostile
+// file (a "zip bomb") cannot fill the memory of the server or the browser.
+export const MAX_ENTRIES = 20_000;
+export const MAX_UNPACKED = 64 * 1024 * 1024;
+
+const tooLarge = (kind = 'compressed') => new Error(`This ${kind} file is too large to open.`);
+
+/** Unpack deflated `bytes`, stopping with an error once the output passes `limit` bytes. */
+export async function inflate(bytes, limit = MAX_UNPACKED, kind) {
   const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('deflate-raw'));
-  return new Uint8Array(await new Response(stream).arrayBuffer());
+  const reader = stream.getReader();
+  const chunks = [];
+  let size = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.length;
+    if (size > limit) {
+      await reader.cancel().catch(() => {});
+      throw tooLarge(kind);
+    }
+    chunks.push(value);
+  }
+  const out = new Uint8Array(size);
+  let at = 0;
+  for (const chunk of chunks) {
+    out.set(chunk, at);
+    at += chunk.length;
+  }
+  return out;
 }
 
 const utf8 = new TextDecoder();
 
-/** Map of file name to a function returning that file's bytes. `kind` names the file in errors. */
+/**
+ * Map of file name to a function returning that file's bytes. `kind` names the file in errors.
+ * A ZIP of more than MAX_ENTRIES files is refused; a file is refused when it says, or turns out,
+ * to unpack to more than MAX_UNPACKED bytes, or to the smaller `limit` its function is given.
+ */
 export function readZip(buffer, kind = '.xlsx') {
   const view = new DataView(buffer);
   const bytes = new Uint8Array(buffer);
@@ -28,20 +59,26 @@ export function readZip(buffer, kind = '.xlsx') {
 
   const files = new Map();
   let at = view.getUint32(end + 16, true);
-  for (let n = view.getUint16(end + 10, true); n > 0; n--) {
+  const count = view.getUint16(end + 10, true);
+  if (count > MAX_ENTRIES) throw new Error(`This ${kind} file holds too many files to open.`);
+  for (let n = count; n > 0; n--) {
     if (view.getUint32(at, true) !== 0x02014b50) break;
     const method = view.getUint16(at + 10, true);
     const size = view.getUint32(at + 20, true);
+    const unpacked = view.getUint32(at + 24, true);
     const nameLength = view.getUint16(at + 28, true);
     const extraLength = view.getUint16(at + 30, true);
     const commentLength = view.getUint16(at + 32, true);
     const local = view.getUint32(at + 42, true);
     const name = utf8.decode(bytes.subarray(at + 46, at + 46 + nameLength));
-    files.set(name, async () => {
+    files.set(name, async (limit = MAX_UNPACKED) => {
+      const cap = Math.min(limit, MAX_UNPACKED);
+      if (unpacked > cap) throw tooLarge(kind);
       const start = local + 30 + view.getUint16(local + 26, true) + view.getUint16(local + 28, true);
       const data = bytes.subarray(start, start + size);
       if (method !== 0 && method !== 8) throw new Error(`Unsupported compression in ${kind} file.`);
-      return method === 8 ? inflate(data) : data;
+      if (method === 0 && data.length > cap) throw tooLarge(kind);
+      return method === 8 ? inflate(data, cap, kind) : data;
     });
     at += 46 + nameLength + extraLength + commentLength;
   }

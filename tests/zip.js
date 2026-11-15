@@ -1,4 +1,6 @@
 // Builds ZIP files for tests: stored without compression, which is all the readers need.
+// An entry may instead be `{ data, method, size }`: bytes already compressed with `method`
+// (8 is deflate), and the uncompressed size the archive declares for them.
 
 export function zip(files) {
   const local = [];
@@ -6,17 +8,22 @@ export function zip(files) {
   let offset = 0;
   for (const [name, content] of Object.entries(files)) {
     const nameBytes = Buffer.from(name);
-    const data = Buffer.from(content);
+    const raw = content?.data !== undefined;
+    const data = Buffer.from(raw ? content.data : content);
+    const method = raw ? (content.method ?? 0) : 0;
+    const size = raw ? (content.size ?? data.length) : data.length;
     const header = Buffer.alloc(30);
     header.writeUInt32LE(0x04034b50, 0);
+    header.writeUInt16LE(method, 8);
     header.writeUInt32LE(data.length, 18);
-    header.writeUInt32LE(data.length, 22);
+    header.writeUInt32LE(size, 22);
     header.writeUInt16LE(nameBytes.length, 26);
     local.push(header, nameBytes, data);
     const entry = Buffer.alloc(46);
     entry.writeUInt32LE(0x02014b50, 0);
+    entry.writeUInt16LE(method, 10);
     entry.writeUInt32LE(data.length, 20);
-    entry.writeUInt32LE(data.length, 24);
+    entry.writeUInt32LE(size, 24);
     entry.writeUInt16LE(nameBytes.length, 28);
     entry.writeUInt32LE(offset, 42);
     central.push(entry, nameBytes);
