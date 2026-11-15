@@ -35,6 +35,8 @@ const MAX_SETTINGS = 16 * 1024;
 // Images one person may upload a day.
 const IMAGES_PER_DAY = 300;
 const DAY = 24 * 60 * 60 * 1000;
+// The languages a card side can be read in; an empty one means the voice's own.
+const TTS_LANGS = ['pt-PT', 'pt-BR', 'en-US', 'en-GB', 'ur-PK'];
 // Sign-up, login and admin forms are small; this keeps huge passwords from burning CPU.
 const MAX_FORM = 16 * 1024;
 // An Anki package carries its images, so it may be much larger.
@@ -260,6 +262,8 @@ export function createRecallServer({ dataDir, origin, tts, translator, ...rest }
     signup: createLimiter({ max: 10, windowMs: 15 * 60 * 1000 }),
     // Keyed by user id, unlike the two above.
     media: createLimiter({ max: IMAGES_PER_DAY, windowMs: DAY }),
+    // Studying with auto-play asks for a few a card, far fewer than this.
+    tts: createLimiter({ max: 120, windowMs: 60 * 1000 }),
   };
 
   const backup = () => {
@@ -282,10 +286,13 @@ export function createRecallServer({ dataDir, origin, tts, translator, ...rest }
     sendJson(res, status, { user }, { 'Set-Cookie': cookie(token, COOKIE_AGE) });
   };
 
-  async function speech(req, res) {
+  async function speech(req, res, user) {
     const params = new URL(req.url, 'http://localhost').searchParams;
+    const lang = params.get('lang');
+    if (lang && !TTS_LANGS.includes(lang)) throw new HttpError(400, 'bad-request');
+    if (!limits.tts.hit(user.id, Date.now())) throw new HttpError(429, 'rate-limited');
     const save = params.get('save') !== '0';
-    const { body, type } = await voice.speak(params.get('text'), params.get('lang'), { save });
+    const { body, type } = await voice.speak(params.get('text'), lang, { save });
     // Saved audio never changes, so phones can keep what they have played.
     const cache = save ? 'private, max-age=31536000, immutable' : 'no-store';
     res.writeHead(200, { 'Content-Type': type, 'Cache-Control': cache }).end(body);
@@ -434,7 +441,7 @@ export function createRecallServer({ dataDir, origin, tts, translator, ...rest }
     if (method === 'GET' && path === '/api/me') return sendJson(res, 200, { user });
     if (method === 'GET' && path === '/api/state') return state(res, user);
     if (method === 'POST' && path === '/api/sync') return sync(req, res, user);
-    if (method === 'GET' && path === '/api/tts') return speech(req, res);
+    if (method === 'GET' && path === '/api/tts') return speech(req, res, user);
     if (method === 'POST' && path === '/api/anki') {
       if (importing) {
         return res.writeHead(429, { 'Content-Type': 'text/plain', 'Retry-After': '10' })

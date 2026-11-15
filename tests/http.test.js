@@ -301,12 +301,12 @@ test('the app files are cached by the phone and revalidated with an ETag', async
 test('tts audio is cacheable on the phone', async (t) => {
   const { port, invite } = await start(t);
   const { cookie } = await signUp(port, invite);
-  const saved = await call(port, 'GET', 'api/tts?text=hola&lang=es-ES', { cookie });
+  const saved = await call(port, 'GET', 'api/tts?text=ola&lang=pt-PT', { cookie });
   assert.equal(saved.status, 200);
   assert.equal(saved.headers['content-type'], 'audio/mpeg');
   assert.equal(saved.headers['cache-control'], 'private, max-age=31536000, immutable');
   assert.equal(saved.text, 'x');
-  const unsaved = await call(port, 'GET', 'api/tts?text=hola&lang=es-ES&save=0', { cookie });
+  const unsaved = await call(port, 'GET', 'api/tts?text=ola&lang=pt-PT&save=0', { cookie });
   assert.equal(unsaved.headers['cache-control'], 'no-store');
 });
 
@@ -592,4 +592,34 @@ test('a person can add 300 images a day; the next one is refused', async (t) => 
   assert.equal(over.status, 429);
   assert.match(over.text, /300 images/);
   assert.equal((await send(other)).status, 200, 'someone else still can');
+});
+
+test('speech is only made in the languages the app reads', async (t) => {
+  const spoken = [];
+  const tts = { ...fakeTts, speak: async (text, lang) => (spoken.push(lang), { body: Buffer.from('x'), type: 'audio/mpeg' }) };
+  const { port, invite } = await start(t, { tts });
+  const { cookie } = await signUp(port, invite);
+  for (const lang of ['pt-PT', 'pt-BR', 'en-US', 'en-GB', 'ur-PK']) {
+    assert.equal((await call(port, 'GET', `api/tts?text=hi&lang=${lang}`, { cookie })).status, 200, lang);
+  }
+  // No language means the voice's own, as before.
+  assert.equal((await call(port, 'GET', 'api/tts?text=hi&lang=', { cookie })).status, 200);
+  assert.equal((await call(port, 'GET', 'api/tts?text=hi', { cookie })).status, 200);
+  for (const lang of ['es-ES', 'xx', 'pt-pt', 'en-US;rm', 'ur']) {
+    const res = await call(port, 'GET', `api/tts?text=hi&lang=${encodeURIComponent(lang)}`, { cookie });
+    assert.equal(res.status, 400, lang);
+    assert.deepEqual(res.json, { error: 'bad-request' });
+  }
+  assert.deepEqual(spoken, ['pt-PT', 'pt-BR', 'en-US', 'en-GB', 'ur-PK', '', null]);
+});
+
+test('each person may ask for 120 pieces of speech a minute', async (t) => {
+  const { port, invite } = await start(t);
+  const { cookie } = await signUp(port, invite);
+  const { cookie: other } = await call(port, 'POST', 'api/signup', { body: { code: invite, username: 'cal', name: 'Cal', password: 'cal-password' } });
+  for (let i = 0; i < 120; i++) assert.equal((await call(port, 'GET', `api/tts?text=word${i}&lang=pt-PT`, { cookie })).status, 200, `request ${i + 1}`);
+  const over = await call(port, 'GET', 'api/tts?text=again&lang=pt-PT', { cookie });
+  assert.equal(over.status, 429);
+  assert.deepEqual(over.json, { error: 'rate-limited' });
+  assert.equal((await call(port, 'GET', 'api/tts?text=hi&lang=pt-PT', { cookie: other })).status, 200);
 });

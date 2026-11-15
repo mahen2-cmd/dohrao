@@ -25,6 +25,8 @@ const MAX_TEXT = 2000;
 const TIMEOUT = 30_000;
 const GOOGLE_CHUNK = 200; // most characters Google Translate reads in one request
 const TYPES = { mp3: 'audio/mpeg', wav: 'audio/wav' };
+// How many pieces of audio are made at once across the server; the rest wait their turn.
+const MAX_JOBS = 4;
 
 const exists = (file) => access(file).then(() => true, () => false);
 
@@ -71,6 +73,20 @@ export function createTts({ root, dataDir }) {
   const piperModel = join(root, '.tts', 'voices', 'pt_PT-medium.onnx');
   const inFlight = new Map();
   let piperQueue = Promise.resolve();
+  // Making audio starts a process or calls a voice service, so only MAX_JOBS run at once.
+  let jobs = 0;
+  const turns = [];
+  async function inTurn(task) {
+    if (jobs >= MAX_JOBS) await new Promise((resolve) => turns.push(resolve));
+    else jobs++;
+    try {
+      return await task();
+    } finally {
+      // The slot passes straight to the next one waiting, if any.
+      if (turns.length) turns.shift()();
+      else jobs--;
+    }
+  }
   let ffmpeg; // undefined until first checked
 
   // 'pt-PT-RaquelNeural' -> 'pt-PT'
@@ -207,7 +223,9 @@ export function createTts({ root, dataDir }) {
       const base = join(dir, folder, hash);
       await mkdir(join(base, '..'), { recursive: true });
       try {
-        return { file: await make(text, base), engine: name, preferred, fresh: true };
+        // Audio cached while this waited for its turn is used as it is.
+        const file = await inTurn(async () => (await cached(join(audioDir, folder, hash))) ?? make(text, base));
+        return { file, engine: name, preferred, fresh: true };
       } catch (error) {
         if (error.http) throw error; // a problem with the Azure key or voice: report it
         failure = error;
