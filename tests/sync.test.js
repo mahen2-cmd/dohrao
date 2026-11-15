@@ -459,3 +459,55 @@ test('bad answer counts already stored are dropped at the next save', async () =
   applyChanges(db, ana.id, { daily: { [today]: 3 }, savedAt: NOW }, NOW);
   assert.deepEqual(buildView(db, ana.id, NOW).daily, { [today]: 3 });
 });
+
+test('card progress with a value of the wrong type is rejected, and nothing of it is saved', async () => {
+  const { db, ana } = await seed();
+  const bad = [
+    ['c1', { due: 'not-a-time' }],
+    ['c2', { state: 9 }],
+    ['c3', { state: 1.5 }],
+    ['n1', { stability: null }],
+    ['n2', { reps: '3' }],
+    ['n3', { lastReview: 'yesterday' }],
+    ['n4', { reserved: 'yes' }],
+    ['n5', { order: [] }],
+    ['n6', { pulled: {} }],
+  ];
+  const { rejected } = applyChanges(db, ana.id, { cards: bad.map(([id, over]) => cardOf(id, { ...over, front: 'changed' })) }, NOW);
+  assert.deepEqual(rejected, bad.map(([id]) => id));
+  const view = buildView(db, ana.id, NOW);
+  assert.deepEqual(view.cards.map((c) => c.front).sort(), ['front c1', 'front c2', 'front c3']);
+  assert.equal(view.cards[0].due, NOW);
+});
+
+test('valid card progress still saves, with null lastReview, a reserve flag and keys from newer versions', async () => {
+  const { db, ana } = await seed();
+  const card = cardOf('c1', { state: 2, due: NOW + 5, lastReview: NOW - 1, reserved: true, order: 3, pulled: NOW, introduced: NOW, someFutureField: { any: 'thing' } });
+  const fresh = cardOf('c9', { lastReview: null });
+  assert.deepEqual(applyChanges(db, ana.id, { cards: [card, fresh] }, NOW), { rejected: [] });
+  const saved = buildView(db, ana.id, NOW).cards.find((c) => c.id === 'c1');
+  assert.equal(saved.due, NOW + 5);
+  assert.deepEqual(saved.someFutureField, { any: 'thing' });
+});
+
+test('a progress record over 4 KB is rejected', async () => {
+  const { db, ana } = await seed();
+  const { rejected } = applyChanges(db, ana.id, { cards: [cardOf('c1', { note: 'x'.repeat(4096) }), cardOf('c2', { note: 'x'.repeat(3500) })] }, NOW);
+  assert.deepEqual(rejected, ['c1']);
+});
+
+test('deck prefs over 8 KB, or with a front or Urdu script the app does not have, are rejected', async () => {
+  const { db, ana } = await seed();
+  const decks = [
+    deckOf({ id: 'p1', bulky: 'x'.repeat(8192) }),
+    deckOf({ id: 'p2', frontShows: 'klingon' }),
+    deckOf({ id: 'p3', urduScript: 'cursive' }),
+    deckOf({ id: 'p4', frontShows: 'both', urduScript: 'roman' }),
+    deckOf({ id: 'p5', fsrsParams: Array.from({ length: 21 }, (_, i) => i / 7), learnSteps: [1, 10], relearnSteps: [10] }),
+  ];
+  assert.deepEqual(applyChanges(db, ana.id, { decks }, NOW).rejected, ['p1', 'p2', 'p3']);
+  assert.deepEqual(buildView(db, ana.id, NOW).decks.map((d) => d.id), ['d1', 'p4', 'p5']);
+  // The prefs of a deck already stored are not changed by a rejected sync of it.
+  assert.deepEqual(applyChanges(db, ana.id, { decks: [deckOf({ frontShows: 'nope' })] }, NOW).rejected, ['d1']);
+  assert.equal(buildView(db, ana.id, NOW).decks[0].frontShows, undefined);
+});

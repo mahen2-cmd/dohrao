@@ -68,3 +68,11 @@ test('recent study ignores day keys that are not dates', () => {
   const daily = { [key(1)]: 3, 'invalid-date': 42, '9999-99-99': 100 };
   assert.equal(recentStudy(daily, NOW).lastStudied, key(1));
 });
+
+test('right share skips a log row that is not a list of counts', () => {
+  const key = dayKey(NOW);
+  const log = { [key]: { d1: 5, d2: [1, 0, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0], d3: { evil: 5 }, d4: null } };
+  assert.equal(rightShare(log, null, NOW), 0.75);
+  assert.equal(rightShare(log, 'd1', NOW), null);
+  assert.equal(rightShare({ [key]: null }, null, NOW), null);
+});

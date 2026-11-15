@@ -4177,6 +4177,21 @@ function progressBar(p) {
   );
 }
 
+/**
+ * `build()`, or `fallback()` when it throws: one bad value in a person's hand-made data then
+ * shows as "—" in its own row instead of leaving the whole admin page blank.
+ */
+function guarded(build, fallback) {
+  try {
+    return build();
+  } catch (error) {
+    console.error('Could not show a row:', error);
+    return fallback();
+  }
+}
+
+const textOr = (value) => (typeof value === 'string' && value ? value : '—');
+
 function progressSection({ progress }) {
   return h(
     'section',
@@ -4185,7 +4200,7 @@ function progressSection({ progress }) {
     h(
       'ul',
       { class: 'admin-list progress-list' },
-      progress.map((p) => {
+      progress.map((p) => guarded(() => {
         const r = recentStudy(p.daily, Date.now());
         const learned = sum(p.decks.map((d) => d.learned));
         const total = sum(p.decks.map((d) => d.total));
@@ -4202,7 +4217,7 @@ function progressSection({ progress }) {
             h('span', { class: 'progress-fact muted' }, `last studied ${lastStudiedText(r.lastStudied)}`),
           ),
         );
-      }),
+      }, () => h('li', null, h('span', { class: 'progress-row' }, h('b', { class: 'progress-name' }, textOr(p?.user?.name)), h('span', { class: 'progress-fact muted' }, '—'))))),
     ),
   );
 }
@@ -4243,18 +4258,20 @@ function renderPerson(id) {
     return;
   }
   const now = Date.now();
-  const r = recentStudy(p.daily, now);
-  const right = rightShare(p.log, null, now);
-  const summary = [
-    `Studied ${r.daysIn30} of the last 30 days`,
-    r.streak ? `${r.streak}-day streak` : 'no streak',
-    `${plural(r.answersIn7, 'answer')} this week`,
-    `${plural(r.answersIn30, 'answer')} in 30 days`,
-    right !== null && `right ${Math.round(right * 100)}% of the time`,
-    `last studied ${lastStudiedText(r.lastStudied)}`,
-  ].filter(Boolean);
+  const summary = guarded(() => {
+    const r = recentStudy(p.daily, now);
+    const right = rightShare(p.log, null, now);
+    return [
+      `Studied ${r.daysIn30} of the last 30 days`,
+      r.streak ? `${r.streak}-day streak` : 'no streak',
+      `${plural(r.answersIn7, 'answer')} this week`,
+      `${plural(r.answersIn30, 'answer')} in 30 days`,
+      right !== null && `right ${Math.round(right * 100)}% of the time`,
+      `last studied ${lastStudiedText(r.lastStudied)}`,
+    ].filter(Boolean);
+  }, () => ['—']);
 
-  const decks = p.decks.map((d) => {
+  const decks = p.decks.map((d) => guarded(() => {
     const share = rightShare(p.log, d.id, now);
     return h(
       'div',
@@ -4276,19 +4293,20 @@ function renderPerson(id) {
         share !== null ? ` · right ${Math.round(share * 100)}% of the time in the last 30 days` : '',
       ),
     );
-  });
+  }, () => h('div', { class: 'person-deck' }, h('h3', null, textOr(d?.name)), h('p', { class: 'muted' }, '—'))));
 
   const deckName = Object.fromEntries(p.decks.map((d) => [d.id, d.name]));
   const order = { struggling: 0, learning: 1, known: 2 };
   const list = h('ul', { class: 'person-cards' });
   const drawCards = () => {
     const q = personState.query.trim().toLowerCase();
+    const cardText = (c) => guarded(() => `${speechText(c.front)} ${speechText(c.back)}`.toLowerCase(), () => '');
     const shown = p.cards
-      .filter((c) => !q || `${speechText(c.front)} ${speechText(c.back)}`.toLowerCase().includes(q))
+      .filter((c) => !q || cardText(c).includes(q))
       .sort((a, b) => order[a.status] - order[b.status] || b.lapses - a.lapses || a.due - b.due);
     list.replaceChildren(
       ...(shown.length
-        ? shown.map((c) =>
+        ? shown.map((c) => guarded(() =>
             h(
               'li',
               null,
@@ -4302,7 +4320,7 @@ function renderPerson(id) {
                 p.decks.length > 1 ? ` · ${deckName[c.deckId] ?? ''}` : '',
               ),
             ),
-          )
+          () => h('li', { class: 'muted' }, '—')))
         : [h('li', { class: 'muted' }, p.cards.length ? 'No cards match.' : 'No cards started yet.')]),
     );
   };

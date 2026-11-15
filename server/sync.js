@@ -1,13 +1,42 @@
 // Each user's view of the store, and applying their changes under ownership rules.
 import { DECK_SHARED, CARD_CONTENT, split, mergeTopics, mergeDeckTopics } from './fields.js';
 import { newSchedule } from '../js/fsrs.js';
-import { URDU_FIELDS, switchedFront } from '../js/urdu.js';
+import { FRONTS, URDU_FIELDS, switchedFront } from '../js/urdu.js';
 import { cleanCounts, mergeCounts } from '../js/counts.js';
 
 // Keys the view adds to given decks; never stored.
 const VIEW_ONLY = ['assigned', 'from', 'urduSwitch', 'urduSwitchAt'];
 
 const parse = (text) => (text ? JSON.parse(text) : {});
+const bytes = (value) => Buffer.byteLength(JSON.stringify(value));
+
+// The most one card's progress and one deck's prefs may take, as JSON. Real ones are a few
+// hundred bytes; these leave plenty of room and keep hand-made records small.
+const MAX_PROGRESS = 4 * 1024;
+const MAX_PREFS = 8 * 1024;
+const URDU_SCRIPTS = ['arabic', 'roman'];
+// Progress fields the app reads, which must be finite numbers. Others (from a newer version
+// of the app) are kept as they come.
+const PROGRESS_NUMBERS = ['stability', 'difficulty', 'due', 'scheduledDays', 'ease', 'left', 'reps', 'lapses', 'introduced', 'order', 'pulled'];
+
+/** Whether a card's progress has the types the app relies on, and a sensible size. */
+// A key set to undefined is left out, as it is when sent as JSON.
+const has = (obj, key) => obj[key] !== undefined;
+
+function validProgress(p) {
+  if (has(p, 'state') && !(Number.isInteger(p.state) && p.state >= 0 && p.state <= 3)) return false;
+  if (PROGRESS_NUMBERS.some((key) => has(p, key) && !Number.isFinite(p[key]))) return false;
+  if (has(p, 'lastReview') && p.lastReview !== null && !Number.isFinite(p.lastReview)) return false;
+  if (has(p, 'reserved') && typeof p.reserved !== 'boolean') return false;
+  return bytes(p) <= MAX_PROGRESS;
+}
+
+/** Whether one person's prefs for a deck hold choices the app has, at a sensible size. */
+function validPrefs(p) {
+  if (has(p, 'frontShows') && !FRONTS.includes(p.frontShows)) return false;
+  if (has(p, 'urduScript') && !URDU_SCRIPTS.includes(p.urduScript)) return false;
+  return bytes(p) <= MAX_PREFS;
+}
 const validId = (id) => typeof id === 'string' && id.length >= 1 && id.length <= 100;
 
 function ownDecks(db, userId) {
@@ -90,6 +119,7 @@ function applyDeck(db, userId, deck, now) {
   const clean = { ...deck };
   for (const key of VIEW_ONLY) delete clean[key];
   const [shared, prefs] = split(clean, DECK_SHARED);
+  if (!validPrefs(prefs)) return false;
   const kind = access(db, userId, deck.id);
   if (kind === 'other') return false;
   // A given deck that no longer exists was deleted by its owner; a device still showing it must
@@ -117,6 +147,7 @@ function applyDeck(db, userId, deck, now) {
 function applyCard(db, userId, card, now) {
   if (!validId(card.deckId)) return false;
   const [content, progress] = split(card, CARD_CONTENT);
+  if (!validProgress(progress)) return false;
   const current = deckOfCard(db, card.id);
   const target = access(db, userId, card.deckId);
   if (current === undefined) {

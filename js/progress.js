@@ -92,10 +92,12 @@ export function rightShare(log, deckId, now) {
   let again = 0;
   let total = 0;
   for (const [key, byDeck] of Object.entries(log)) {
-    if (key < from) continue;
+    // Hand-made data may hold anything; only lists of counts are read.
+    if (key < from || !byDeck || typeof byDeck !== 'object') continue;
     for (const [id, row] of Object.entries(byDeck)) {
-      if (deckId && id !== deckId) continue;
+      if ((deckId && id !== deckId) || !Array.isArray(row)) continue;
       row.forEach((n, i) => {
+        if (!Number.isFinite(n)) return;
         total += n;
         if (i % 4 === 0) again += n;
       });
