@@ -496,6 +496,18 @@ test('a progress record over 4 KB is rejected', async () => {
   assert.deepEqual(rejected, ['c1']);
 });
 
+test('a homeOrder that is not a finite number is refused', async () => {
+  const { db, ana } = await seed();
+  const decks = [
+    deckOf({ id: 'o1', homeOrder: 'x' }),
+    deckOf({ id: 'o2', homeOrder: null }),
+    deckOf({ id: 'o3', homeOrder: 3 }),
+  ];
+  assert.deepEqual(applyChanges(db, ana.id, { decks }, NOW).rejected, ['o1', 'o2']);
+  const saved = buildView(db, ana.id, NOW).decks.find((d) => d.id === 'o3');
+  assert.equal(saved.homeOrder, 3);
+});
+
 test('deck prefs over 8 KB, or with a front, Urdu script or folder the app does not have, are rejected', async () => {
   const { db, ana } = await seed();
   const decks = [

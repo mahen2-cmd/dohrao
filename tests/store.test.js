@@ -883,6 +883,53 @@ test('homeGroups puts hidden decks only under hidden, keeps folder order and emp
   assert.deepEqual(store.homeGroups(store.decks()).folders[0].decks.map((x) => x.id), [c.id, d.id]);
 });
 
+test('reorderDecks orders decks within a folder and within the loose list', () => {
+  const a = setup();
+  const b = store.createDeck({ name: 'B' });
+  const c = store.createDeck({ name: 'C' });
+  const d = store.createDeck({ name: 'D' });
+  const f = store.createFolder('F');
+  store.setDeckFolder(c.id, f.id);
+  store.setDeckFolder(d.id, f.id);
+  store.reorderDecks([d.id, b.id, 'no-such-deck', c.id, a.id]);
+  assert.equal(store.deck(d.id).homeOrder, 0);
+  assert.equal(store.deck(c.id).homeOrder, 3);
+  const groups = store.homeGroups(store.decks());
+  assert.deepEqual(groups.folders[0].decks.map((x) => x.id), [d.id, c.id]);
+  assert.deepEqual(groups.loose.map((x) => x.id), [b.id, a.id]);
+});
+
+test('decks without homeOrder sort after ordered ones, keeping their order', () => {
+  const a = setup();
+  const b = store.createDeck({ name: 'B' });
+  const c = store.createDeck({ name: 'C' });
+  const d = store.createDeck({ name: 'D' });
+  store.reorderDecks([c.id]);
+  assert.deepEqual(store.homeGroups(store.decks()).loose.map((x) => x.id), [c.id, a.id, b.id, d.id]);
+});
+
+test("reorderDecks never changes a deck's folder", () => {
+  const a = setup();
+  const b = store.createDeck({ name: 'B' });
+  const f = store.createFolder('F');
+  store.setDeckFolder(a.id, f.id);
+  store.reorderDecks([b.id, a.id]);
+  assert.equal(store.folderOf(store.deck(a.id)), f.id);
+  assert.equal(store.folderOf(store.deck(b.id)), null);
+});
+
+test('homeOrder is a personal deck field', () => {
+  assert.equal(DECK_SHARED.includes('homeOrder'), false);
+  store.importData(JSON.stringify({
+    decks: [{ id: 'given', name: 'Words', assigned: true, from: 'Ana', newPerDay: 20 }],
+    cards: [],
+  }));
+  store.reorderDecks(['given']);
+  assert.equal(store.deck('given').homeOrder, 0);
+  store.updateDeck('given', { homeOrder: 4 });
+  assert.equal(store.deck('given').homeOrder, 4);
+});
+
 test('folder is a personal deck field', () => {
   assert.equal(DECK_SHARED.includes('folder'), false);
   store.importData(JSON.stringify({

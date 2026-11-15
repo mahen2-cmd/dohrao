@@ -56,6 +56,7 @@ function validPrefs(p) {
   if (has(p, 'frontShows') && !FRONTS.includes(p.frontShows)) return false;
   if (has(p, 'urduScript') && !URDU_SCRIPTS.includes(p.urduScript)) return false;
   if (has(p, 'folder') && !(typeof p.folder === 'string' && p.folder.length <= MAX_FOLDER_ID)) return false;
+  if (has(p, 'homeOrder') && !Number.isFinite(p.homeOrder)) return false;
   return bytes(p) <= MAX_PREFS;
 }
 const validId = (id) => typeof id === 'string' && id.length >= 1 && id.length <= 100;

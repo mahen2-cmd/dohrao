@@ -496,15 +496,34 @@ export function setDeckFolder(deckId, folderId) {
 export const folderOf = (d) => (d?.folder && folders().some((f) => f.id === d.folder) ? d.folder : null);
 
 /**
- * The home page's grouping: folders in list order (empty ones too), then loose decks in the
- * order given. A hidden deck goes only under hidden, whatever its folder.
+ * Number decks by their place in ids, as their personal `homeOrder`. Ids that are not decks
+ * are ignored. A deck's folder is untouched.
+ */
+export function reorderDecks(ids) {
+  ids.forEach((id, i) => {
+    const d = deck(id);
+    if (d) d.homeOrder = i;
+  });
+  save();
+}
+
+/** A stable sort by homeOrder; decks without one come last, in the order given. */
+const byHomeOrder = (list) => [...list].sort((a, b) => {
+  const x = a.homeOrder ?? Infinity;
+  const y = b.homeOrder ?? Infinity;
+  return x === y ? 0 : x < y ? -1 : 1; // not x - y, which is NaN for two Infinitys
+});
+
+/**
+ * The home page's grouping: folders in list order (empty ones too), then loose decks, each
+ * group sorted by homeOrder and otherwise in the order given. A hidden deck goes only under hidden, whatever its folder.
  */
 export function homeGroups(list) {
   const hidden = list.filter(isHidden);
   const shown = list.filter((d) => !isHidden(d));
   return {
-    folders: folders().map((folder) => ({ folder, decks: shown.filter((d) => folderOf(d) === folder.id) })),
-    loose: shown.filter((d) => folderOf(d) === null),
+    folders: folders().map((folder) => ({ folder, decks: byHomeOrder(shown.filter((d) => folderOf(d) === folder.id)) })),
+    loose: byHomeOrder(shown.filter((d) => folderOf(d) === null)),
     hidden,
   };
 }

@@ -182,6 +182,16 @@ test("the owner's folder is not copied to a new recipient", async () => {
   assert.equal(given.newPerDay, 15); // other prefs still copied
 });
 
+test("the owner's homeOrder is not copied to a new recipient", async () => {
+  const { db, ana, ben } = await seed();
+  applyChanges(db, ana.id, { decks: [{ ...deck, homeOrder: 2 }] }, NOW);
+  assert.equal(buildView(db, ana.id, NOW).decks[0].homeOrder, 2);
+  assignDeck(db, { ownerId: ana.id, deckId: 'd1', userIds: [ben.id] }, NOW);
+  const given = buildView(db, ben.id, NOW).decks[0];
+  assert.equal('homeOrder' in given, false);
+  assert.equal(given.newPerDay, 15); // other prefs still copied
+});
+
 test("a returning recipient's own hidden choice is kept", async () => {
   const { db, ana, ben } = await seed();
   assignDeck(db, { ownerId: ana.id, deckId: 'd1', userIds: [ben.id] }, NOW);
