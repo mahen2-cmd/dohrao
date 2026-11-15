@@ -71,3 +71,31 @@ test('at most four pieces of audio are made at once; cached audio does not wait'
   assert.ok(done.every((d) => d.fresh));
   assert.equal(most, 4);
 });
+
+test('an Azure call that hangs is given up, so it cannot hold a slot for ever', async (t) => {
+  const dataDir = await mkdtemp(join(tmpdir(), 'recall-tts-test-'));
+  const realFetch = globalThis.fetch;
+  const realTimeout = AbortSignal.timeout;
+  t.after(async () => {
+    globalThis.fetch = realFetch;
+    AbortSignal.timeout = realTimeout;
+    await rm(dataDir, { recursive: true, force: true });
+  });
+  await writeFile(join(dataDir, 'tts.json'), JSON.stringify({ azureKey: 'fake-key', azureRegion: 'westeurope', engine: 'azure' }));
+  // Time runs out at once, and the stub only ever answers by being aborted.
+  AbortSignal.timeout = () => AbortSignal.abort(new DOMException('timed out', 'TimeoutError'));
+  const urls = [];
+  globalThis.fetch = (url, options = {}) => {
+    urls.push(String(url));
+    if (String(url).includes('microsoft')) {
+      return new Promise((_, reject) => {
+        if (options.signal?.aborted) reject(options.signal.reason);
+        options.signal?.addEventListener('abort', () => reject(options.signal.reason));
+      });
+    }
+    return Promise.reject(new Error('offline'));
+  };
+  const tts = createTts({ root: dataDir, dataDir });
+  await assert.rejects(tts.prepare('olá', 'pt-PT'));
+  assert.match(urls[0], /microsoft/);
+});

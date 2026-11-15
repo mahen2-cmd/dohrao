@@ -149,6 +149,8 @@ export function createTts({ root, dataDir }) {
         'User-Agent': 'recall-flashcards',
       },
       body: `<speak version='1.0' xml:lang='${lang}'><voice name='${escapeXml(voice)}'>${escapeXml(text)}</voice></speak>`,
+      // A call that hangs is given up, so it cannot hold one of the few audio slots for ever.
+      signal: AbortSignal.timeout(TIMEOUT),
     });
     if (!res.ok) {
       const hint =
