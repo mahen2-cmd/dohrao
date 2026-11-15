@@ -972,3 +972,40 @@ test('at most 50 folders, with names cut to 80 characters', () => {
   store.renameFolder(f.id, 'r'.repeat(81));
   assert.equal(store.folders()[0].name, 'r'.repeat(80));
 });
+
+test('a deck filed into another folder goes to the end of it', () => {
+  const a = setup();
+  const b = store.createDeck({ name: 'B' });
+  const c = store.createDeck({ name: 'C' });
+  const f = store.createFolder('F');
+  store.setDeckFolder(b.id, f.id);
+  store.setDeckFolder(c.id, f.id);
+  store.reorderDecks([a.id, b.id, c.id]);
+  store.setDeckFolder(a.id, f.id);
+  assert.equal(store.deck(a.id).homeOrder, undefined);
+  assert.deepEqual(store.homeGroups(store.decks()).folders[0].decks.map((x) => x.id), [b.id, c.id, a.id]);
+});
+
+test("setDeckFolder to the same folder keeps the deck's place", () => {
+  const a = setup();
+  const b = store.createDeck({ name: 'B' });
+  const f = store.createFolder('F');
+  store.setDeckFolder(a.id, f.id);
+  store.setDeckFolder(b.id, f.id);
+  store.reorderDecks([b.id, a.id]);
+  store.setDeckFolder(b.id, f.id);
+  assert.equal(store.deck(b.id).homeOrder, 0);
+  assert.deepEqual(store.homeGroups(store.decks()).folders[0].decks.map((x) => x.id), [b.id, a.id]);
+});
+
+test('deleting a folder puts its decks at the end of the loose list', () => {
+  const a = setup();
+  const b = store.createDeck({ name: 'B' });
+  const c = store.createDeck({ name: 'C' });
+  const f = store.createFolder('F');
+  store.setDeckFolder(c.id, f.id);
+  store.reorderDecks([c.id, a.id, b.id]);
+  store.deleteFolder(f.id);
+  assert.equal(store.deck(c.id).homeOrder, undefined);
+  assert.deepEqual(store.homeGroups(store.decks()).loose.map((x) => x.id), [a.id, b.id, c.id]);
+});

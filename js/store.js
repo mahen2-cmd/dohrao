@@ -476,6 +476,7 @@ export function deleteFolder(id) {
   for (const d of state.decks) {
     if (d.folder === id) {
       delete d.folder;
+      delete d.homeOrder;
       moved++;
     }
   }
@@ -483,10 +484,11 @@ export function deleteFolder(id) {
   return moved;
 }
 
-/** File a deck in a folder, or take it out with null. */
+/** File a deck in a folder, or take it out with null. A deck that changes group goes to the end of it. */
 export function setDeckFolder(deckId, folderId) {
   const d = deck(deckId);
   if (!d) return;
+  if ((d.folder ?? null) !== (folderId ?? null)) delete d.homeOrder; // its old place was in another group
   if (folderId) d.folder = folderId;
   else delete d.folder;
   save();
