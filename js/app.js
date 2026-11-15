@@ -7,7 +7,7 @@ import { HEAT_WEEKS, PHONE_QUERY, canSwipeFrom, classifySwipe, inTab, isRevealTa
 import { recentStudy, rightShare } from './progress.js';
 import * as store from './store.js';
 import { effectiveTopic, filterLabel, inFilter, readableTopicName, resolveFilter, topicKeyFromFileName, topicLabel } from './topics.js';
-import { englishSide, frontShows, portugueseText, shownSide } from './urdu.js';
+import { canTranslateDecks, englishSide, frontShows, portugueseText, shownSide } from './urdu.js';
 
 const app = document.getElementById('app');
 
@@ -436,7 +436,7 @@ async function speakPart(text, lang, rate, save, token) {
   }
   try {
     const res = await fetch(ttsUrl(text, lang, save));
-    if (!res.ok) throw new Error(await res.text());
+    if (!res.ok) throw new Error(api.speechErrorMessage(res.status));
     const url = URL.createObjectURL(await res.blob());
     if (token !== speechToken) { // moved on while the audio was loading
       URL.revokeObjectURL(url);
@@ -652,7 +652,7 @@ function openDeckDialog(deck) {
             name: name.value.trim(),
             ...(canSpeak() && { frontLang: frontLang.value, backLang: backLang.value }),
             ...(serverVoice() && { saveAudio: saveAudio.checked }),
-            urdu: urdu.checked,
+            ...(canTranslateDecks(account) && { urdu: urdu.checked }),
           }),
           ...(deck?.urdu && {
             urduScript: urduScript.value,
@@ -707,7 +707,7 @@ function openDeckDialog(deck) {
         h('small', { class: 'field-note' }, 'Turn this off for decks that are mostly maths: audio is then made each time it plays instead of being kept, and “npm run cache-voice” leaves the deck out.'),
       ],
     ],
-    own && h('label', { class: 'check', style: 'margin-top: 16px' }, urdu, 'Translate the front into Urdu'),
+    own && canTranslateDecks(account) && h('label', { class: 'check', style: 'margin-top: 16px' }, urdu, 'Translate the front into Urdu'),
     deck?.urdu && [
       h(
         'div',

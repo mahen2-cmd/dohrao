@@ -5,6 +5,9 @@ import { speechText } from './content.js';
 /** The card fields that hold Urdu. */
 export const URDU_FIELDS = ['urdu', 'urduRoman', 'urduOf', 'urduBy'];
 
+/** Whether `user` may switch on Urdu translation for a deck; the server translates only the admin's. */
+export const canTranslateDecks = (user) => user?.role === 'admin';
+
 /** What a card's English side can show. */
 export const FRONTS = ['en', 'ur', 'both'];
 

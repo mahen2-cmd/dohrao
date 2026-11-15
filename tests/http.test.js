@@ -537,21 +537,40 @@ function openUpload(port, path, cookie, first) {
   return { answer, finish: (rest = Buffer.alloc(0)) => req.end(rest) };
 }
 
-test('only one Anki import runs at a time; a second one is told the server is busy', async (t) => {
-  const { port, invite } = await start(t);
+test('only one Anki import is read at a time; a second one meanwhile is told the server is busy', async (t) => {
+  let release;
+  const held = new Promise((resolve) => (release = resolve));
+  const reads = [];
+  const ankiReader = async (bytes) => {
+    reads.push(bytes.length);
+    if (reads.length === 1) await held;
+    return { decks: [], suspended: 0, blank: 0, sound: false, missingImages: 0 };
+  };
+  const { port, invite } = await start(t, { ankiReader });
   const { cookie } = await signUp(port, invite);
-  const first = openUpload(port, 'api/anki', cookie, Buffer.from('PK'));
-  await new Promise((resolve) => setTimeout(resolve, 50));
-  const second = await call(port, 'POST', 'api/anki', { cookie, body: 'PK' });
-  first.finish();
-  const done = await first.answer;
+  const first = call(port, 'POST', 'api/anki', { cookie, body: 'first' });
+  for (let i = 0; i < 200 && !reads.length; i++) await new Promise((resolve) => setTimeout(resolve, 5));
+  assert.equal(reads.length, 1, 'the first package is being read');
+  const second = await call(port, 'POST', 'api/anki', { cookie, body: 'second' });
+  release();
   assert.equal(second.status, 429);
   assert.match(second.text, /another Anki import/i);
-  assert.equal(done.status, 400, 'the first one goes on and gives its own answer');
+  assert.equal((await first).status, 200, 'the first one goes on and gives its own answer');
   // Once it has finished, the next import is read.
-  const third = await call(port, 'POST', 'api/anki', { cookie, body: 'not a zip' });
-  assert.equal(third.status, 400);
-  assert.match(third.text, /not a valid Anki file/);
+  assert.equal((await call(port, 'POST', 'api/anki', { cookie, body: 'third' })).status, 200);
+  assert.deepEqual(reads, [5, 5]);
+});
+
+test('an Anki upload still being sent does not hold up another import', async (t) => {
+  const { port, invite } = await start(t);
+  const { cookie } = await signUp(port, invite);
+  const slow = openUpload(port, 'api/anki', cookie, Buffer.from('PK'));
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  const other = await call(port, 'POST', 'api/anki', { cookie, body: 'not a zip' });
+  slow.finish();
+  await slow.answer;
+  assert.equal(other.status, 400);
+  assert.match(other.text, /not a valid Anki file/);
 });
 
 test('an Anki package over 100 MB is refused with a message the app shows', async (t) => {

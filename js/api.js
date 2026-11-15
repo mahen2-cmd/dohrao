@@ -25,6 +25,13 @@ async function call(method, path, body) {
 
 const part = encodeURIComponent;
 
+/** What to tell the person when the server refuses to read something aloud. */
+export function speechErrorMessage(status) {
+  if (status === 429) return 'Too many audio requests. Wait a minute.';
+  if (status === 400) return "That language can't be read aloud.";
+  return 'Could not play audio';
+}
+
 /** The signed-in user: `{ user }`. */
 export const me = () => call('GET', 'api/me');
 export const logIn = (username, password) => call('POST', 'api/login', { username, password });

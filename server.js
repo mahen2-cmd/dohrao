@@ -164,12 +164,12 @@ async function image(mediaDir, name, res) {
  * Turn an uploaded Anki package into decks and cards. Only the images the cards show are
  * saved here; the cards are added by the app once they are confirmed.
  */
-async function anki(mediaDir, req, res) {
+async function anki(mediaDir, req, res, readPackage) {
   const bytes = await readBody(req, MAX_PACKAGE).catch(() => {
     throw new Error('That package is larger than 100 MB.');
   });
-  const decks = await readAnkiPackage(bytes, { saveImage: (image) => saveImage(mediaDir, image) });
-  sendJson(res, 200, decks);
+  const decks = await readPackage(bytes, { saveImage: (image) => saveImage(mediaDir, image) });
+  if (decks) sendJson(res, 200, decks);
 }
 
 /** Image and Anki failures say what was wrong with the file, as plain text the app shows. */
@@ -239,7 +239,7 @@ function clientIp(req) {
  * served through a proxy; `tts` replaces the speech engine and `translator` the Urdu
  * translation (tests use fakes).
  */
-export function createRecallServer({ dataDir, origin, tts, translator, ...rest }) {
+export function createRecallServer({ dataDir, origin, tts, translator, ankiReader = readAnkiPackage, ...rest }) {
   mkdirSync(dataDir, { recursive: true });
   const db = openDb(join(dataDir, 'recall.db'));
   // `sorter: null` means sorting is off; leaving the option out looks for a key (and the SDK).
@@ -247,7 +247,21 @@ export function createRecallServer({ dataDir, origin, tts, translator, ...rest }
   // Decks being sorted right now, so a second click does not start a second job.
   const sorting = new Set();
   // Whether an Anki package is being read; each takes a lot of memory, so one runs at a time.
+  // The lock is taken once a package has arrived, so a slow upload does not hold up others.
   let importing = false;
+  async function readOnePackage(res, bytes, options) {
+    if (importing) {
+      res.writeHead(429, { 'Content-Type': 'text/plain', 'Retry-After': '10' })
+        .end('Another Anki import is being read. Try again in a moment.');
+      return null;
+    }
+    importing = true;
+    try {
+      return await ankiReader(bytes, options);
+    } finally {
+      importing = false;
+    }
+  }
   const voice = tts ?? createTts({ root: ROOT, dataDir });
   // Google is only reached once a card actually needs translating.
   let google;
@@ -444,16 +458,7 @@ export function createRecallServer({ dataDir, origin, tts, translator, ...rest }
     if (method === 'POST' && path === '/api/sync') return sync(req, res, user);
     if (method === 'GET' && path === '/api/tts') return speech(req, res, user);
     if (method === 'POST' && path === '/api/anki') {
-      if (importing) {
-        return res.writeHead(429, { 'Content-Type': 'text/plain', 'Retry-After': '10' })
-          .end('Another Anki import is being read. Try again in a moment.');
-      }
-      importing = true;
-      try {
-        return await fileRoute(res, () => anki(mediaDir, req, res));
-      } finally {
-        importing = false;
-      }
+      return fileRoute(res, () => anki(mediaDir, req, res, (bytes, options) => readOnePackage(res, bytes, options)));
     }
     if (method === 'POST' && path === '/api/media') {
       if (!limits.media.hit(user.id, Date.now())) {
