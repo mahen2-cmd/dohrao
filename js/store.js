@@ -434,6 +434,73 @@ export function setHidden(id, hidden) {
   save();
 }
 
+// ---- Folders --------------------------------------------------------------
+
+// Folders group decks on the person's own home page, one level deep. The list is kept in
+// their settings, in display order, so it follows them between devices. A deck's folder is
+// its personal pref `folder`, absent when the deck is loose.
+
+/** The person's folders, in display order. */
+export const folders = () => setting('folders') ?? [];
+
+function folderName(name) {
+  const trimmed = String(name ?? '').trim();
+  if (!trimmed) throw new Error('empty-name');
+  return trimmed;
+}
+
+/** Make a folder at the end of the list. Names may repeat; ids tell them apart. */
+export function createFolder(name) {
+  const folder = { id: uid(), name: folderName(name) };
+  setSetting('folders', [...folders(), folder]);
+  return folder;
+}
+
+export function renameFolder(id, name) {
+  const trimmed = folderName(name);
+  if (!folders().some((f) => f.id === id)) return;
+  setSetting('folders', folders().map((f) => (f.id === id ? { ...f, name: trimmed } : f)));
+}
+
+/** Remove a folder. Its decks go back to the loose list, never deleted or hidden. Returns how many moved. */
+export function deleteFolder(id) {
+  let moved = 0;
+  for (const d of state.decks) {
+    if (d.folder === id) {
+      delete d.folder;
+      moved++;
+    }
+  }
+  setSetting('folders', folders().filter((f) => f.id !== id));
+  return moved;
+}
+
+/** File a deck in a folder, or take it out with null. */
+export function setDeckFolder(deckId, folderId) {
+  const d = deck(deckId);
+  if (!d) return;
+  if (folderId) d.folder = folderId;
+  else delete d.folder;
+  save();
+}
+
+/** The deck's folder id, or null when it has none or its folder no longer exists. */
+export const folderOf = (d) => (d?.folder && folders().some((f) => f.id === d.folder) ? d.folder : null);
+
+/**
+ * The home page's grouping: folders in list order (empty ones too), then loose decks in the
+ * order given. A hidden deck goes only under hidden, whatever its folder.
+ */
+export function homeGroups(list) {
+  const hidden = list.filter(isHidden);
+  const shown = list.filter((d) => !isHidden(d));
+  return {
+    folders: folders().map((folder) => ({ folder, decks: shown.filter((d) => folderOf(d) === folder.id) })),
+    loose: shown.filter((d) => folderOf(d) === null),
+    hidden,
+  };
+}
+
 export function deleteDeck(id) {
   mustEdit(id);
   state.decks = state.decks.filter((d) => d.id !== id);

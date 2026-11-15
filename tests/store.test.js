@@ -806,3 +806,94 @@ test('Urdu fields of a given deck cannot be edited', () => {
   }));
   assert.throws(() => store.updateCard('g0', { urdu: 'x' }), { message: 'read-only deck' });
 });
+
+test('folders can be created, renamed and deleted, and deleting moves decks back', () => {
+  const a = setup();
+  const b = store.createDeck({ name: 'Other' });
+  const c = store.createDeck({ name: 'Third' });
+  assert.deepEqual(store.folders(), []);
+  const f = store.createFolder('  Textbooks  ');
+  assert.equal(f.name, 'Textbooks');
+  assert.deepEqual(store.folders(), [{ id: f.id, name: 'Textbooks' }]);
+  store.renameFolder(f.id, ' Books ');
+  assert.equal(store.folders()[0].name, 'Books');
+  store.renameFolder('no-such-folder', 'Ignored');
+  assert.equal(store.folders().length, 1);
+  store.setDeckFolder(a.id, f.id);
+  store.setDeckFolder(b.id, f.id);
+  assert.equal(store.folderOf(store.deck(a.id)), f.id);
+  assert.equal(store.folderOf(store.deck(c.id)), null);
+  assert.equal(store.deleteFolder(f.id), 2);
+  assert.equal(store.folderOf(store.deck(a.id)), null);
+  assert.equal(store.folderOf(store.deck(b.id)), null);
+  assert.equal('folder' in store.deck(a.id), false);
+  assert.deepEqual(store.folders(), []);
+  // Deleting a folder never deletes or hides a deck.
+  assert.equal(store.decks().length, 3);
+  assert.equal(store.decks().some(store.isHidden), false);
+});
+
+test('a folder name cannot be empty', () => {
+  setup();
+  assert.throws(() => store.createFolder('   '), { message: 'empty-name' });
+  assert.deepEqual(store.folders(), []);
+  const f = store.createFolder('Kept');
+  assert.throws(() => store.renameFolder(f.id, ''), { message: 'empty-name' });
+  assert.equal(store.folders()[0].name, 'Kept');
+});
+
+test('two folders may share a name', () => {
+  setup();
+  const one = store.createFolder('Same');
+  const two = store.createFolder('Same');
+  assert.notEqual(one.id, two.id);
+  assert.deepEqual(store.folders().map((f) => f.name), ['Same', 'Same']);
+});
+
+test('a deck whose folder is gone counts as loose', () => {
+  const deck = setup();
+  store.updateDeck(deck.id, { folder: 'deleted-elsewhere' });
+  assert.equal(store.folderOf(store.deck(deck.id)), null);
+  assert.equal(store.folderOf(undefined), null);
+  const groups = store.homeGroups(store.decks());
+  assert.deepEqual(groups.loose.map((d) => d.id), [deck.id]);
+  assert.deepEqual(groups.folders, []);
+});
+
+test('homeGroups puts hidden decks only under hidden, keeps folder order and empty folders', () => {
+  const a = setup();
+  const b = store.createDeck({ name: 'B' });
+  const c = store.createDeck({ name: 'C' });
+  const d = store.createDeck({ name: 'D' });
+  const first = store.createFolder('First');
+  const empty = store.createFolder('Empty');
+  const last = store.createFolder('Last');
+  store.setDeckFolder(b.id, last.id);
+  store.setDeckFolder(c.id, first.id);
+  store.setDeckFolder(d.id, first.id);
+  store.setHidden(d.id, true);
+  const groups = store.homeGroups(store.decks());
+  assert.deepEqual(groups.folders.map((g) => [g.folder.id, g.decks.map((x) => x.id)]), [
+    [first.id, [c.id]], [empty.id, []], [last.id, [b.id]],
+  ]);
+  assert.deepEqual(groups.loose.map((x) => x.id), [a.id]);
+  assert.deepEqual(groups.hidden.map((x) => x.id), [d.id]);
+  // Showing it again puts it back in its folder.
+  store.setHidden(d.id, false);
+  assert.deepEqual(store.homeGroups(store.decks()).folders[0].decks.map((x) => x.id), [c.id, d.id]);
+});
+
+test('folder is a personal deck field', () => {
+  assert.equal(DECK_SHARED.includes('folder'), false);
+  store.importData(JSON.stringify({
+    decks: [{ id: 'given', name: 'Words', assigned: true, from: 'Ana', newPerDay: 20 }],
+    cards: [],
+  }));
+  const f = store.createFolder('Given ones');
+  store.setDeckFolder('given', f.id);
+  assert.equal(store.deck('given').folder, f.id);
+  store.setDeckFolder('given', null);
+  assert.equal('folder' in store.deck('given'), false);
+  store.updateDeck('given', { folder: f.id });
+  assert.equal(store.folderOf(store.deck('given')), f.id);
+});
