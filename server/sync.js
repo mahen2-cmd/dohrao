@@ -15,6 +15,8 @@ const bytes = (value) => Buffer.byteLength(JSON.stringify(value));
 const MAX_PROGRESS = 4 * 1024;
 const MAX_PREFS = 8 * 1024;
 const URDU_SCRIPTS = ['arabic', 'roman'];
+// A deck's folder is the id of one of the person's folders.
+const MAX_FOLDER_ID = 100;
 // The most a card's sides, its content and a deck may take, and how many cards one person may
 // own. Real ones are far smaller: the longest side is under 1,000 characters, the largest card
 // about 1 KB, the largest deck 11 KB and the biggest account under 10,000 cards.
@@ -53,6 +55,7 @@ const validShared = (d) => (typeof d.name !== 'string' || d.name.length <= MAX_D
 function validPrefs(p) {
   if (has(p, 'frontShows') && !FRONTS.includes(p.frontShows)) return false;
   if (has(p, 'urduScript') && !URDU_SCRIPTS.includes(p.urduScript)) return false;
+  if (has(p, 'folder') && !(typeof p.folder === 'string' && p.folder.length <= MAX_FOLDER_ID)) return false;
   return bytes(p) <= MAX_PREFS;
 }
 const validId = (id) => typeof id === 'string' && id.length >= 1 && id.length <= 100;

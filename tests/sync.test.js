@@ -496,7 +496,7 @@ test('a progress record over 4 KB is rejected', async () => {
   assert.deepEqual(rejected, ['c1']);
 });
 
-test('deck prefs over 8 KB, or with a front or Urdu script the app does not have, are rejected', async () => {
+test('deck prefs over 8 KB, or with a front, Urdu script or folder the app does not have, are rejected', async () => {
   const { db, ana } = await seed();
   const decks = [
     deckOf({ id: 'p1', bulky: 'x'.repeat(8192) }),
@@ -504,9 +504,13 @@ test('deck prefs over 8 KB, or with a front or Urdu script the app does not have
     deckOf({ id: 'p3', urduScript: 'cursive' }),
     deckOf({ id: 'p4', frontShows: 'both', urduScript: 'roman' }),
     deckOf({ id: 'p5', fsrsParams: Array.from({ length: 21 }, (_, i) => i / 7), learnSteps: [1, 10], relearnSteps: [10] }),
+    deckOf({ id: 'p6', folder: 'f'.repeat(101) }),
+    deckOf({ id: 'p7', folder: 7 }),
+    deckOf({ id: 'p8', folder: 'f'.repeat(100) }),
   ];
-  assert.deepEqual(applyChanges(db, ana.id, { decks }, NOW).rejected, ['p1', 'p2', 'p3']);
-  assert.deepEqual(buildView(db, ana.id, NOW).decks.map((d) => d.id), ['d1', 'p4', 'p5']);
+  assert.deepEqual(applyChanges(db, ana.id, { decks }, NOW).rejected, ['p1', 'p2', 'p3', 'p6', 'p7']);
+  assert.deepEqual(buildView(db, ana.id, NOW).decks.map((d) => d.id), ['d1', 'p4', 'p5', 'p8']);
+  assert.equal(buildView(db, ana.id, NOW).decks[3].folder, 'f'.repeat(100));
   // The prefs of a deck already stored are not changed by a rejected sync of it.
   assert.deepEqual(applyChanges(db, ana.id, { decks: [deckOf({ frontShows: 'nope' })] }, NOW).rejected, ['d1']);
   assert.equal(buildView(db, ana.id, NOW).decks[0].frontShows, undefined);
