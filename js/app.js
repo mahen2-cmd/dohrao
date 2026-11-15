@@ -630,6 +630,26 @@ function openDeckDialog(deck) {
   );
   const saveAudio = h('input', { type: 'checkbox', checked: defaults.saveAudio });
   const hidden = h('input', { type: 'checkbox', checked: store.isHidden(deck) });
+  // The deck's folder on the person's home page; '' is no folder.
+  const NEW_FOLDER = '\u0000new';
+  const folderOptions = (selected) => [
+    h('option', { value: '', selected: !selected }, 'No folder'),
+    store.folders().map((f) => h('option', { value: f.id, selected: f.id === selected }, f.name)),
+    h('option', { value: NEW_FOLDER }, 'New folder…'),
+  ];
+  let folderChosen = (deck && store.folderOf(deck)) ?? '';
+  const folder = h('select', {
+    onchange: () => {
+      if (folder.value !== NEW_FOLDER) return (folderChosen = folder.value);
+      folder.value = folderChosen;
+      openFolderDialog({
+        onsave: (made) => {
+          folderChosen = made.id;
+          folder.replaceChildren(...folderOptions(made.id).flat());
+        },
+      });
+    },
+  }, folderOptions(folderChosen));
   const urdu = h('input', { type: 'checkbox', checked: Boolean(defaults.urdu) });
   const choiceSelect = (options, selected) =>
     h('select', null, options.map(([value, label]) => h('option', { value, selected: value === selected }, label)));
@@ -669,6 +689,7 @@ function openDeckDialog(deck) {
         if (deck) {
           store.updateDeck(deck.id, values);
           if (hidden.checked !== store.isHidden(deck)) store.setHidden(deck.id, hidden.checked);
+          if (folderChosen !== (store.folderOf(deck) ?? '')) store.setDeckFolder(deck.id, folderChosen || null);
         } else store.createDeck(values);
         dialog.close();
       },
@@ -720,6 +741,8 @@ function openDeckDialog(deck) {
     deck && [
       h('label', { class: 'check', style: 'margin-top: 16px' }, hidden, 'Hide deck from the list'),
       h('small', { class: 'field-note' }, 'A hidden deck waits, folded away, at the bottom of your decks and leaves today’s figures. Only you see it hidden.'),
+      h('label', { class: 'field', style: 'margin-top: 16px' }, h('span', null, 'Folder'), folder),
+      h('small', { class: 'field-note' }, 'Folders group decks on your home page. Only you see them.'),
     ],
     h(
       'div',
@@ -1773,49 +1796,211 @@ function hiddenSection(hidden, now) {
   return section;
 }
 
+// ---- Folders on the home page ----------------------------------------------
+// Folders are the person's own grouping of their decks (see store.folders). Which ones are
+// open is remembered on this device; they start closed.
+
+const OPEN_FOLDERS_KEY = 'recall.openFolders';
+
+function openFolders() {
+  try {
+    const ids = JSON.parse(localStorage.getItem(OPEN_FOLDERS_KEY) ?? '[]');
+    return new Set(Array.isArray(ids) ? ids : []);
+  } catch {
+    return new Set();
+  }
+}
+
+function keepFolderOpen(id, open) {
+  const ids = openFolders();
+  if (open) ids.add(id);
+  else ids.delete(id);
+  try {
+    localStorage.setItem(OPEN_FOLDERS_KEY, JSON.stringify([...ids]));
+  } catch {}
+}
+
+/** Ask for a folder's name. An empty name keeps the dialog open. Calls `onsave` with the folder. */
+function openFolderDialog({ folder, onsave, oncancel } = {}) {
+  const name = h('input', { type: 'text', required: true, maxLength: 80, value: folder?.name ?? '', placeholder: 'e.g. Textbooks' });
+  let saved = false;
+  const form = h(
+    'form',
+    {
+      onsubmit: (e) => {
+        e.preventDefault();
+        try {
+          let result = folder;
+          if (folder) store.renameFolder(folder.id, name.value);
+          else result = store.createFolder(name.value);
+          saved = true;
+          dialog.close();
+          onsave?.(result);
+        } catch (err) {
+          if (err.message !== 'empty-name') throw err;
+          name.value = '';
+          name.focus();
+        }
+      },
+    },
+    h('label', { class: 'field' }, h('span', null, 'Name'), name),
+    h(
+      'div',
+      { class: 'modal-foot' },
+      h('button', { class: 'btn', type: 'button', onclick: () => dialog.close() }, 'Cancel'),
+      h('button', { class: 'btn primary', type: 'submit' }, 'Save'),
+    ),
+  );
+  const dialog = modal(folder ? 'Rename folder' : 'New folder', form, { narrow: true, onclose: () => !saved && oncancel?.() });
+  name.focus();
+  name.select();
+}
+
+async function removeFolder(folder) {
+  const ok = await confirmDialog({
+    title: `Delete “${folder.name}”?`,
+    message: 'The folder goes. Its decks stay, back in your list.',
+    confirmLabel: 'Delete folder',
+  });
+  if (!ok) return;
+  store.deleteFolder(folder.id);
+  keepFolderOpen(folder.id, false);
+  toast(`Deleted “${folder.name}”. Its decks are back in your list.`);
+  render();
+}
+
+// The deck being dragged on the home page (desktop only), as the reserve column keeps its cards.
+let draggedDeck = null;
+
+/** Make `el` take a dragged deck and file it in `folderId` (null: take it out of its folder). */
+function deckDropTarget(el, folderId) {
+  const accepts = () => draggedDeck && store.folderOf(store.deck(draggedDeck)) !== folderId;
+  el.addEventListener('dragover', (e) => {
+    if (!accepts()) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    el.classList.add('drop-target');
+  });
+  el.addEventListener('dragleave', (e) => {
+    if (!el.contains(e.relatedTarget)) el.classList.remove('drop-target');
+  });
+  el.addEventListener('drop', (e) => {
+    el.classList.remove('drop-target');
+    if (!accepts()) return;
+    e.preventDefault();
+    store.setDeckFolder(draggedDeck, folderId);
+    draggedDeck = null;
+    document.body.classList.remove('dragging-deck');
+    render();
+  });
+  return el;
+}
+
+/** One deck's row on the home page, shared by the loose list and each folder. */
+function deckRow({ deck, c }) {
+  const drags = !isPhone();
+  return h(
+    'li',
+    {
+      class: 'deck',
+      ...(drags && {
+        draggable: 'true',
+        ondragstart: (e) => {
+          draggedDeck = deck.id;
+          e.dataTransfer.effectAllowed = 'move';
+          e.dataTransfer.setData('text/plain', deck.name);
+          document.body.classList.add('dragging-deck');
+        },
+        ondragend: () => {
+          draggedDeck = null;
+          document.body.classList.remove('dragging-deck');
+          for (const el of document.querySelectorAll('.drop-target')) el.classList.remove('drop-target');
+        },
+      }),
+    },
+    h(
+      'a',
+      { class: 'deck-main', href: `#/deck/${deck.id}`, draggable: drags ? 'false' : null },
+      h('span', { class: 'deck-name' }, deck.name),
+      deckFrom(deck),
+      h('span', { class: 'deck-meta wide-only' }, plural(c.cards, 'card') + (c.reserve ? ` · ${c.reserve.toLocaleString()} on reserve` : '') + (c.tomorrow.total ? ` · ${c.tomorrow.total.toLocaleString()} tomorrow` : '')),
+      // A phone keeps the row to one short line; the reserve shows on the deck's own page.
+      h('span', { class: 'deck-meta phone-only' }, plural(c.cards, 'card') + (c.tomorrow.total ? ` · ${c.tomorrow.total.toLocaleString()} tomorrow` : '')),
+    ),
+    // On a phone: today's total and a chevron, the whole row opening the deck.
+    h(
+      'a',
+      { class: 'deck-due phone-only', href: `#/deck/${deck.id}`, tabindex: '-1', 'aria-hidden': 'true' },
+      c.total ? [h('i', { class: 'dot' }), c.total.toLocaleString()] : c.cards ? h('span', { class: 'deck-done' }, 'Done') : '',
+      icon('next'),
+    ),
+    countPills(c),
+    h(
+      'div',
+      { class: 'deck-actions' },
+      iconButton('hide', 'Hide deck', () => setDeckHidden(deck, true)),
+      iconButton('edit', 'Deck settings', () => openDeckDialog(deck)),
+      store.editable(deck.id) && iconButton('trash', 'Delete deck', () => removeDeck(deck), 'danger'),
+      c.total
+        ? h('a', { class: 'btn', href: `#/study/${deck.id}`, draggable: drags ? 'false' : null }, `Study ${c.total}`)
+        : c.cards
+          ? h('span', { class: 'caught-up' }, icon('check'), 'Caught up')
+          : store.editable(deck.id)
+            ? h('button', { class: 'btn', type: 'button', onclick: () => openCardDialog({ deckId: deck.id }) }, icon('plus'), 'Add cards')
+            : h('span', { class: 'caught-up' }, 'No cards yet'),
+    ),
+  );
+}
+
+/** A folder on the home page: a heading that opens and closes, with its decks' rows inside. */
+function folderSection(folder, rows, open) {
+  const sum = (key) => rows.reduce((total, { c }) => total + c[key], 0);
+  const due = sum('total');
+  const label = `${folder.name} · ${rows.length ? plural(rows.length, 'deck') : 'empty'}`;
+  const summary = h(
+    'summary',
+    null,
+    icon('next'),
+    h('span', { class: 'folder-name' }, label),
+    // On a phone the pills give way to today's total, as on the deck rows.
+    rows.length > 0 && countPills({ new: sum('new'), learning: sum('learning'), review: sum('review') }),
+    due > 0 && h('span', { class: 'folder-due phone-only' }, h('i', { class: 'dot' }), due.toLocaleString()),
+    // A click inside the menu must not open or close the folder around it.
+    h('span', { class: 'folder-menu', onclick: (e) => !e.target.closest('.menu > summary') && e.preventDefault() }, menu(`Folder ${folder.name}`, [
+      h('button', { type: 'button', onclick: () => openFolderDialog({ folder, onsave: render }) }, icon('edit'), 'Rename folder'),
+      h('button', { type: 'button', class: 'danger', onclick: () => removeFolder(folder) }, icon('trash'), 'Delete folder'),
+    ])),
+  );
+  if (!isPhone()) deckDropTarget(summary, folder.id);
+  const section = h(
+    'details',
+    { class: 'deck-folder', open, ontoggle: () => keepFolderOpen(folder.id, section.open) },
+    summary,
+    rows.length
+      ? h('ul', { class: 'deck-list', 'aria-label': folder.name }, rows.map(deckRow))
+      : h('p', { class: 'folder-empty' }, isPhone() ? 'No decks yet. File one from its Deck settings.' : 'No decks yet. Drag one here, or file it from its Deck settings.'),
+  );
+  return section;
+}
+
 function renderHome() {
   const now = Date.now();
   const decks = store.decks();
-  const shown = decks.filter((d) => !store.isHidden(d));
-  const hidden = decks.filter((d) => store.isHidden(d));
-  const all = shown.map((deck) => ({ deck, c: store.counts(deck.id, now) }));
-
-  const row = ({ deck, c }) =>
-    h(
-      'li',
-      { class: 'deck' },
-      h(
-        'a',
-        { class: 'deck-main', href: `#/deck/${deck.id}` },
-        h('span', { class: 'deck-name' }, deck.name),
-        deckFrom(deck),
-        h('span', { class: 'deck-meta wide-only' }, plural(c.cards, 'card') + (c.reserve ? ` · ${c.reserve.toLocaleString()} on reserve` : '') + (c.tomorrow.total ? ` · ${c.tomorrow.total.toLocaleString()} tomorrow` : '')),
-        // A phone keeps the row to one short line; the reserve shows on the deck's own page.
-        h('span', { class: 'deck-meta phone-only' }, plural(c.cards, 'card') + (c.tomorrow.total ? ` · ${c.tomorrow.total.toLocaleString()} tomorrow` : '')),
-      ),
-      // On a phone: today's total and a chevron, the whole row opening the deck.
-      h(
-        'a',
-        { class: 'deck-due phone-only', href: `#/deck/${deck.id}`, tabindex: '-1', 'aria-hidden': 'true' },
-        c.total ? [h('i', { class: 'dot' }), c.total.toLocaleString()] : c.cards ? h('span', { class: 'deck-done' }, 'Done') : '',
-        icon('next'),
-      ),
-      countPills(c),
-      h(
-        'div',
-        { class: 'deck-actions' },
-        iconButton('hide', 'Hide deck', () => setDeckHidden(deck, true)),
-        iconButton('edit', 'Deck settings', () => openDeckDialog(deck)),
-        store.editable(deck.id) && iconButton('trash', 'Delete deck', () => removeDeck(deck), 'danger'),
-        c.total
-          ? h('a', { class: 'btn', href: `#/study/${deck.id}` }, `Study ${c.total}`)
-          : c.cards
-            ? h('span', { class: 'caught-up' }, icon('check'), 'Caught up')
-            : store.editable(deck.id)
-              ? h('button', { class: 'btn', type: 'button', onclick: () => openCardDialog({ deckId: deck.id }) }, icon('plus'), 'Add cards')
-              : h('span', { class: 'caught-up' }, 'No cards yet'),
-      ),
-    );
+  const groups = store.homeGroups(decks);
+  const withCounts = (list) => list.map((deck) => ({ deck, c: store.counts(deck.id, now) }));
+  // Today's figures take every shown deck, whatever its folder, in the list's order.
+  const all = withCounts(decks.filter((d) => !store.isHidden(d)));
+  const counted = new Map(all.map((row) => [row.deck.id, row]));
+  const rowsOf = (list) => list.map((d) => counted.get(d.id));
+  const open = openFolders();
+  const folderSections = groups.folders.map(({ folder, decks: inside }) => folderSection(folder, rowsOf(inside), open.has(folder.id)));
+  const loose = rowsOf(groups.loose);
+  const hidden = groups.hidden;
+  // With folders, the loose list is always drawn (if empty) so a deck can be dragged out to it.
+  const looseList =
+    (loose.length > 0 || (folderSections.length > 0 && !isPhone())) &&
+    h('ul', { class: `deck-list loose ${folderSections.length ? 'with-folders' : ''}`, 'aria-label': 'Decks' }, loose.map(deckRow));
+  if (looseList && folderSections.length && !isPhone()) deckDropTarget(looseList, null);
 
   const body = decks.length
     ? [
@@ -1840,7 +2025,8 @@ function renderHome() {
             ),
           ),
         ),
-        all.length > 0 && h('ul', { class: 'deck-list', 'aria-label': 'Decks' }, all.map(row)),
+        folderSections,
+        looseList,
         hiddenSection(hidden, now),
       ]
     : h(

@@ -632,6 +632,96 @@ kbd {
   text-decoration: underline;
   text-underline-offset: 3px;
 }
+/* Folders: a heading that opens and closes over its decks' rows, above the loose decks. */
+.deck-folder {
+  margin-bottom: 10px;
+}
+.deck-folder > summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 52px;
+  padding: 4px 10px 4px 14px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--surface);
+  cursor: pointer;
+  list-style: none;
+  transition: border-color 0.15s, background-color 0.15s;
+}
+.deck-folder > summary::-webkit-details-marker {
+  display: none;
+}
+.deck-folder > summary:hover {
+  border-color: var(--border-strong);
+}
+.deck-folder > summary > .icon svg {
+  width: 18px;
+  height: 18px;
+  color: var(--muted);
+  transition: transform 0.15s;
+}
+.deck-folder[open] > summary > .icon svg {
+  transform: rotate(90deg);
+}
+.folder-name {
+  flex: 1;
+  min-width: 0;
+  font-size: 16px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  overflow-wrap: anywhere;
+}
+.deck-folder > summary .counts {
+  margin-right: 4px;
+}
+.folder-due {
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+  font-feature-settings: 'tnum';
+}
+.folder-due .dot {
+  color: var(--review);
+}
+.deck-folder > .deck-list {
+  margin: 10px 0 4px 22px;
+}
+.folder-empty {
+  margin: 8px 0 4px 36px;
+  color: var(--muted);
+  font-size: 14px;
+}
+/* A folder heading, or the loose list, that will take the deck being dragged. */
+.deck-folder > summary.drop-target,
+.deck-list.loose.drop-target {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  outline: 2px dashed var(--accent);
+  outline-offset: 2px;
+}
+.deck-list.loose.with-folders {
+  margin-top: 18px;
+  border-radius: 14px;
+}
+/* While a deck is dragged, an empty loose list opens up to take it. */
+.deck-list.loose:empty {
+  display: none;
+}
+.dragging-deck .deck-list.loose:empty {
+  display: block;
+  min-height: 64px;
+  border: 1px dashed var(--border-strong);
+}
+.dragging-deck .deck-list.loose:empty::before {
+  content: 'Drop here to take it out of its folder';
+  display: block;
+  padding: 20px;
+  color: var(--muted);
+  font-size: 14px;
+  text-align: center;
+}
+
 /* Hidden decks, folded away under the deck list. */
 .hidden-decks {
   margin-top: 28px;
@@ -3503,6 +3593,40 @@ table.upcoming {
   }
   .deck-due .icon {
     color: var(--muted);
+  }
+  .deck-due .icon {
+    color: var(--muted);
+  }
+  /* A folder is a ruled heading row, its decks indented under it. */
+  .deck-folder {
+    margin-bottom: 0;
+  }
+  .deck-folder > summary {
+    min-height: 52px;
+    padding: 0 0 0 2px;
+    border: 0;
+    border-bottom: 1px solid var(--border);
+    border-radius: 0;
+    background: none;
+  }
+  .deck-folder:first-of-type > summary {
+    border-top: 1px solid var(--border);
+  }
+  .deck-folder > summary .counts {
+    display: none;
+  }
+  .deck-folder > .deck-list {
+    margin: 0 0 0 16px;
+    border-top: 0;
+  }
+  .folder-empty {
+    margin: 0;
+    padding: 12px 0 12px 28px;
+    border-bottom: 1px solid var(--border);
+  }
+  .deck-list.loose.with-folders {
+    margin-top: 0;
+    border-top: 0;
   }
 
   /* Deck page: name and counts, then tabs, then the cards straight away. */
