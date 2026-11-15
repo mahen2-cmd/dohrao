@@ -1,7 +1,7 @@
 // Each user's view of the store, and applying their changes under ownership rules.
 import { DECK_SHARED, CARD_CONTENT, split, mergeTopics, mergeDeckTopics } from './fields.js';
 import { newSchedule } from '../js/fsrs.js';
-import { URDU_FIELDS } from '../js/urdu.js';
+import { URDU_FIELDS, switchedFront } from '../js/urdu.js';
 import { cleanCounts, mergeCounts } from '../js/counts.js';
 
 // Keys the view adds to given decks; never stored.
@@ -16,7 +16,7 @@ function ownDecks(db, userId) {
 
 function givenDecks(db, userId) {
   return db.prepare(`
-    SELECT d.id, d.data, u.name AS owner, a.urdu, a.urdu_at FROM assignments a
+    SELECT d.id, d.data, u.name AS owner, a.urdu, a.urdu_at, a.front FROM assignments a
     JOIN decks d ON d.id = a.deck_id JOIN users u ON u.id = d.owner_id
     WHERE a.user_id = ? AND a.active = 1 AND d.owner_id <> ?
     ORDER BY a.assigned, d.rowid`).all(userId, userId);
@@ -49,7 +49,7 @@ export function buildView(db, userId, now) {
   }
   for (const d of givenDecks(db, userId)) {
     const given = { id: d.id, ...parse(d.data), ...prefsOf(d.id), assigned: true, from: d.owner };
-    if (d.urdu_at !== null) Object.assign(given, { urduSwitch: d.urdu === 1, urduSwitchAt: d.urdu_at });
+    if (d.urdu_at !== null) Object.assign(given, { urduSwitch: switchedFront(d), urduSwitchAt: d.urdu_at });
     decks.push(given);
     cards.push(...cardsFor(db, userId, d.id, true));
   }

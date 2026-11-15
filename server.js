@@ -24,6 +24,7 @@ import { loadSorter } from './server/sorter.js';
 import { ownedDeck, unsortedCards, sortDeck, proposeForDeck, approveProposal } from './server/topics.js';
 import { createTranslator } from './server/translate.js';
 import { createUrduQueue } from './server/urdu-queue.js';
+import { FRONTS } from './js/urdu.js';
 
 const ROOT = fileURLToPath(new URL('.', import.meta.url));
 // A big import arrives in one sync.
@@ -376,10 +377,11 @@ export function createRecallServer({ dataDir, origin, tts, translator, ...rest }
       return noContent(res);
     }
     if (method === 'POST' && (m = path.match(/^\/api\/admin\/decks\/([^/]+)\/urdu$/))) {
-      const { userId, on } = await readJson(req, MAX_FORM);
-      if (typeof userId !== 'string' || typeof on !== 'boolean') throw new HttpError(400, 'bad-request');
+      const { userId, on, front } = await readJson(req, MAX_FORM);
+      const valid = front === undefined ? typeof on === 'boolean' : FRONTS.includes(front);
+      if (typeof userId !== 'string' || !valid) throw new HttpError(400, 'bad-request');
       try {
-        setUrduSwitch(db, { ownerId: user.id, deckId: m[1], userId, on }, Date.now());
+        setUrduSwitch(db, { ownerId: user.id, deckId: m[1], userId, front, on }, Date.now());
       } catch (err) {
         if (err.message === 'not-owner') throw new HttpError(404, 'not-found');
         if (err.message === 'not-given') throw new HttpError(400, 'bad-request');

@@ -144,14 +144,16 @@ test('POST /api/admin/decks/:id/urdu needs the owner', async (t) => {
   assert.equal((await call(port, 'POST', url, { cookie: ben.cookie, body: { userId: 'x', on: true } })).status, 403);
   await call(port, 'POST', 'api/sync', { cookie: admin, body: { decks: [deck], cards: [card] } });
   const id = ben.json.user.id;
-  for (const body of [{}, { userId: id }, { userId: 5, on: true }, { userId: id, on: 'yes' }]) {
+  for (const body of [{}, { userId: id }, { userId: 5, on: true }, { userId: id, on: 'yes' }, { userId: id, front: 'fr' }]) {
     assert.equal((await call(port, 'POST', url, { cookie: admin, body })).status, 400);
   }
   assert.equal((await call(port, 'POST', url, { cookie: admin, body: { userId: id, on: true } })).status, 400, 'not given');
   assert.equal((await call(port, 'POST', 'api/admin/decks/nope/urdu', { cookie: admin, body: { userId: id, on: true } })).status, 404);
   await call(port, 'POST', 'api/admin/decks/d1/assign', { cookie: admin, body: { userIds: [id] } });
   assert.equal((await call(port, 'POST', url, { cookie: admin, body: { userId: id, on: true } })).status, 204);
-  assert.equal((await call(port, 'GET', 'api/state', { cookie: ben.cookie })).json.decks[0].urduSwitch, true);
+  assert.equal((await call(port, 'GET', 'api/state', { cookie: ben.cookie })).json.decks[0].urduSwitch, 'ur');
+  assert.equal((await call(port, 'POST', url, { cookie: admin, body: { userId: id, front: 'both' } })).status, 204);
+  assert.equal((await call(port, 'GET', 'api/state', { cookie: ben.cookie })).json.decks[0].urduSwitch, 'both');
 });
 
 test('admin gives a deck and the recipient sees it', async (t) => {

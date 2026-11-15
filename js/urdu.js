@@ -5,6 +5,12 @@ import { speechText } from './content.js';
 /** The card fields that hold Urdu. */
 export const URDU_FIELDS = ['urdu', 'urduRoman', 'urduOf', 'urduBy'];
 
+/** What a card's English side can show. */
+export const FRONTS = ['en', 'ur', 'both'];
+
+/** What an assignment row's switch sets the front to; a row from before `front` existed is Urdu when on. */
+export const switchedFront = (row) => row.front ?? (row.urdu === 1 ? 'ur' : 'en');
+
 const SIDES = ['front', 'back'];
 
 /** The side of a card that holds Portuguese. A reversed copy swaps the sides. */
@@ -30,7 +36,8 @@ export function needsUrdu(card, deck) {
 /** What the English side shows: 'en', 'ur' or 'both'. The newer of the person's choice and the admin's switch wins. */
 export function frontShows(deck) {
   const own = deck.frontShows;
-  const switched = deck.urduSwitch == null ? undefined : (deck.urduSwitch ? 'ur' : 'en');
+  // The switch is 'en', 'ur' or 'both'; true and false are its older form (Urdu, English).
+  const switched = deck.urduSwitch == null ? undefined : typeof deck.urduSwitch === 'string' ? deck.urduSwitch : (deck.urduSwitch ? 'ur' : 'en');
   if (!own) return switched ?? 'en';
   if (!switched) return own;
   return (deck.frontShowsAt ?? 0) >= (deck.urduSwitchAt ?? 0) ? own : switched;

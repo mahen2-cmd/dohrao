@@ -2670,9 +2670,18 @@ table.upcoming {
   flex: 1;
   min-width: 0;
 }
-.give-urdu:has(input:disabled) {
+.give-urdu {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13.5px;
   color: var(--muted);
-  cursor: default;
+}
+.give-urdu select {
+  width: auto;
+}
+.give-urdu:has(select:disabled) {
+  opacity: 0.6;
 }
 /* Correcting a card's Urdu in the editor. */
 .urdu-fields {

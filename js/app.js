@@ -3980,13 +3980,21 @@ function openGiveDialog(deck, users) {
   const had = new Set(deck.recipients.filter((r) => r.active).map((r) => r.userId));
   const boxes = people.map((u) => h('input', { type: 'checkbox', value: u.id, checked: had.has(u.id) }));
   const nameOf = (id) => people.find((u) => u.id === id).name;
-  // On an Urdu deck each person can be switched to the Urdu front. Only someone who has the deck can be.
-  const hadUrdu = new Set(deck.recipients.filter((r) => r.urdu).map((r) => r.userId));
-  const urduBoxes = deck.urdu
+  // On an Urdu deck the admin sets what each person's front shows. Only someone who has the deck
+  // can be set. '' means it was never set, so the person's own choice stands.
+  const FRONT_LABELS = { en: 'English', ur: 'Urdu', both: 'Both' };
+  const hadFront = new Map(deck.recipients.map((r) => [r.userId, r.front ?? '']));
+  const frontPicks = deck.urdu
     ? people.map((u, i) => {
-        const box = h('input', { type: 'checkbox', checked: hadUrdu.has(u.id), disabled: !boxes[i].checked, 'aria-label': `Urdu for ${u.name}` });
-        boxes[i].addEventListener('change', () => (box.disabled = !boxes[i].checked));
-        return box;
+        const was = hadFront.get(u.id) ?? '';
+        const options = [...(was === '' ? [['', 'Their choice']] : []), ...Object.entries(FRONT_LABELS)];
+        const pick = h(
+          'select',
+          { disabled: !boxes[i].checked, 'aria-label': `Front for ${u.name}` },
+          options.map(([value, label]) => h('option', { value, selected: value === was }, label)),
+        );
+        boxes[i].addEventListener('change', () => (pick.disabled = !boxes[i].checked));
+        return pick;
       })
     : [];
   const form = h(
@@ -3997,24 +4005,25 @@ function openGiveDialog(deck, users) {
         const now = new Set(boxes.filter((box) => box.checked).map((box) => box.value));
         const added = [...now].filter((id) => !had.has(id));
         const removed = [...had].filter((id) => !now.has(id));
-        // Only the people who have the deck after saving can have their Urdu switched.
-        const switched = urduBoxes.filter((box, i) => now.has(boxes[i].value) && box.checked !== hadUrdu.has(boxes[i].value));
-        const urduOn = switched.filter((box) => box.checked).map((box) => boxes[urduBoxes.indexOf(box)].value);
-        const urduOff = switched.filter((box) => !box.checked).map((box) => boxes[urduBoxes.indexOf(box)].value);
+        // Only the people who have the deck after saving can have their front set.
+        const switched = frontPicks
+          .map((pick, i) => ({ id: boxes[i].value, front: pick.value }))
+          .filter(({ id, front }) => now.has(id) && front !== '' && front !== (hadFront.get(id) ?? ''));
         dialog.close();
         if (!added.length && !removed.length && !switched.length) return;
         const said = [
           added.length && `Given to ${listFormat.format(added.map(nameOf))}`,
           removed.length && `taken back from ${listFormat.format(removed.map(nameOf))}`,
-          urduOn.length && `Urdu on for ${listFormat.format(urduOn.map(nameOf))}`,
-          urduOff.length && `Urdu off for ${listFormat.format(urduOff.map(nameOf))}`,
+          ...Object.entries(FRONT_LABELS).map(([front, label]) => {
+            const who = switched.filter((s) => s.front === front).map((s) => nameOf(s.id));
+            return who.length > 0 && `${label} on the front for ${listFormat.format(who)}`;
+          }),
         ].filter(Boolean);
         const toastText = said.join(', ');
         await adminChange(async () => {
           if (added.length) await api.admin.assign(deck.id, added);
           if (removed.length) await api.admin.unassign(deck.id, removed);
-          for (const id of urduOn) await api.admin.setUrdu(deck.id, id, true);
-          for (const id of urduOff) await api.admin.setUrdu(deck.id, id, false);
+          for (const { id, front } of switched) await api.admin.setFront(deck.id, id, front);
         }, toastText[0].toUpperCase() + toastText.slice(1));
       },
     },
@@ -4029,7 +4038,7 @@ function openGiveDialog(deck, users) {
                 'div',
                 { class: 'give-row' },
                 h('label', { class: 'check' }, boxes[i], h('span', null, u.name, ' ', h('span', { class: 'give-user' }, u.username))),
-                urduBoxes[i] && h('label', { class: 'check give-urdu' }, urduBoxes[i], 'Urdu'),
+                frontPicks[i] && h('label', { class: 'give-urdu' }, h('span', null, 'Front'), frontPicks[i]),
               ),
             ),
           ),

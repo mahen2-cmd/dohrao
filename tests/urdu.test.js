@@ -25,6 +25,9 @@ test('frontShows takes the newer of the choice and the switch', () => {
   assert.equal(frontShows({ frontShows: 'en', frontShowsAt: 5, urduSwitch: true, urduSwitchAt: 9 }), 'ur');
   assert.equal(frontShows({ frontShows: 'en', frontShowsAt: 10, urduSwitch: true, urduSwitchAt: 9 }), 'en');
   assert.equal(frontShows({ urduSwitch: false, urduSwitchAt: 9 }), 'en');
+  assert.equal(frontShows({ urduSwitch: 'both', urduSwitchAt: 9 }), 'both');
+  assert.equal(frontShows({ frontShows: 'en', frontShowsAt: 5, urduSwitch: 'both', urduSwitchAt: 9 }), 'both');
+  assert.equal(frontShows({ frontShows: 'ur', frontShowsAt: 10, urduSwitch: 'both', urduSwitchAt: 9 }), 'ur');
 });
 test('shownSide', () => {
   const c = { ...card, urdu: 'آپ کہاں رہتے ہیں؟', urduRoman: 'aap kahan rahte hen?' };

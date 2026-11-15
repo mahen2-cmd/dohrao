@@ -119,7 +119,7 @@ test('ownedDecks counts cards and lists recipients; listUsers is ordered by name
   assert.equal(d.name, 'Spanish');
   assert.equal(d.cards, 4);
   assert.equal(d.urdu, false);
-  assert.deepEqual(d.recipients, [{ userId: ben.id, name: 'Ben', active: true, urdu: false }, { userId: cal.id, name: 'Cal', active: false, urdu: false }]);
+  assert.deepEqual(d.recipients, [{ userId: ben.id, name: 'Ben', active: true, urdu: false, front: null }, { userId: cal.id, name: 'Cal', active: false, urdu: false, front: null }]);
   assert.deepEqual(listUsers(db).map((u) => u.name), ['Ana', 'Ben', 'Cal']);
   assert.deepEqual(Object.keys(listUsers(db)[0]).sort(), ['created', 'id', 'name', 'role', 'username']);
 });
@@ -195,10 +195,10 @@ test("switching Urdu on shows in the recipient's view and survives their sync", 
   assert.equal(buildView(db, ben.id, NOW).decks[0].urduSwitch, undefined);
   setUrduSwitch(db, { ownerId: ana.id, deckId: 'd1', userId: ben.id, on: true }, NOW + 10);
   const seen = buildView(db, ben.id, NOW).decks[0];
-  assert.equal(seen.urduSwitch, true);
+  assert.equal(seen.urduSwitch, 'ur');
   assert.equal(seen.urduSwitchAt, NOW + 10);
   applyChanges(db, ben.id, { decks: [{ ...seen, frontShows: 'en' }] }, NOW + 5);
-  assert.equal(buildView(db, ben.id, NOW).decks[0].urduSwitch, true);
+  assert.equal(buildView(db, ben.id, NOW).decks[0].urduSwitch, 'ur');
   const prefs = db.prepare('SELECT data FROM deck_prefs WHERE user_id = ? AND deck_id = ?').get(ben.id, 'd1');
   assert.ok(!('urduSwitch' in JSON.parse(prefs.data)) && !('urduSwitchAt' in JSON.parse(prefs.data)));
 });
@@ -207,7 +207,7 @@ test("ownedDecks lists each recipient's Urdu switch and the deck's own flag", as
   const { db, ana, ben, cal } = await seed();
   assignDeck(db, { ownerId: ana.id, deckId: 'd1', userIds: [ben.id, cal.id] }, NOW);
   setUrduSwitch(db, { ownerId: ana.id, deckId: 'd1', userId: cal.id, on: true }, NOW);
-  assert.deepEqual(ownedDecks(db, ana.id)[0].recipients.map((r) => [r.name, r.urdu]), [['Ben', false], ['Cal', true]]);
+  assert.deepEqual(ownedDecks(db, ana.id)[0].recipients.map((r) => [r.name, r.urdu, r.front]), [['Ben', false, null], ['Cal', true, 'ur']]);
   assert.equal(ownedDecks(db, ana.id)[0].urdu, false);
   applyChanges(db, ana.id, { decks: [{ ...deck, urdu: true }] }, NOW);
   assert.equal(ownedDecks(db, ana.id)[0].urdu, true);
@@ -218,4 +218,24 @@ test('setUrduSwitch refuses a deck not given to that person, or not yours', asyn
   assignDeck(db, { ownerId: ana.id, deckId: 'd1', userIds: [ben.id] }, NOW);
   assert.throws(() => setUrduSwitch(db, { ownerId: ana.id, deckId: 'd1', userId: cal.id, on: true }, NOW), { message: 'not-given' });
   assert.throws(() => setUrduSwitch(db, { ownerId: ben.id, deckId: 'd1', userId: ben.id, on: true }, NOW), { message: 'not-owner' });
+});
+
+test('the admin can set a person\'s front to English, Urdu or Both', async () => {
+  const { db, ana, ben } = await seed();
+  assignDeck(db, { ownerId: ana.id, deckId: 'd1', userIds: [ben.id] }, NOW);
+  setUrduSwitch(db, { ownerId: ana.id, deckId: 'd1', userId: ben.id, front: 'both' }, NOW + 10);
+  assert.equal(buildView(db, ben.id, NOW).decks[0].urduSwitch, 'both');
+  assert.deepEqual(ownedDecks(db, ana.id)[0].recipients.map((r) => [r.urdu, r.front]), [[true, 'both']]);
+  setUrduSwitch(db, { ownerId: ana.id, deckId: 'd1', userId: ben.id, front: 'en' }, NOW + 20);
+  assert.equal(buildView(db, ben.id, NOW).decks[0].urduSwitch, 'en');
+  assert.deepEqual(ownedDecks(db, ana.id)[0].recipients.map((r) => [r.urdu, r.front]), [[false, 'en']]);
+  assert.throws(() => setUrduSwitch(db, { ownerId: ana.id, deckId: 'd1', userId: ben.id, front: 'fr' }, NOW), { message: 'bad-front' });
+});
+
+test('a switch set before fronts could be chosen reads as Urdu', async () => {
+  const { db, ana, ben } = await seed();
+  assignDeck(db, { ownerId: ana.id, deckId: 'd1', userIds: [ben.id] }, NOW);
+  db.prepare('UPDATE assignments SET urdu = 1, urdu_at = ?, front = NULL WHERE user_id = ?').run(NOW, ben.id);
+  assert.equal(buildView(db, ben.id, NOW).decks[0].urduSwitch, 'ur');
+  assert.equal(ownedDecks(db, ana.id)[0].recipients[0].front, 'ur');
 });

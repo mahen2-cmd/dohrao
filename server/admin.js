@@ -2,6 +2,7 @@
 import { newSchedule } from '../js/fsrs.js';
 import { cardStatus, deckProgress } from '../js/progress.js';
 import { buildView } from './sync.js';
+import { FRONTS, switchedFront } from '../js/urdu.js';
 
 const parse = (text) => (text ? JSON.parse(text) : {});
 
@@ -12,7 +13,7 @@ export function listUsers(db) {
 /** The owner's decks with card counts and everyone the deck has been given to. */
 export function ownedDecks(db, ownerId) {
   const recipients = db.prepare(`
-    SELECT a.user_id, u.name, a.active, a.urdu FROM assignments a JOIN users u ON u.id = a.user_id
+    SELECT a.user_id, u.name, a.active, a.urdu, a.urdu_at, a.front FROM assignments a JOIN users u ON u.id = a.user_id
     WHERE a.deck_id = ? ORDER BY a.assigned, u.name`);
   const count = db.prepare('SELECT COUNT(*) AS n FROM cards WHERE deck_id = ?');
   return db.prepare('SELECT id, data FROM decks WHERE owner_id = ? ORDER BY rowid').all(ownerId).map((d) => ({
@@ -20,7 +21,10 @@ export function ownedDecks(db, ownerId) {
     name: parse(d.data).name,
     cards: count.get(d.id).n,
     urdu: Boolean(parse(d.data).urdu),
-    recipients: recipients.all(d.id).map((r) => ({ userId: r.user_id, name: r.name, active: r.active === 1, urdu: r.urdu === 1 })),
+    recipients: recipients.all(d.id).map((r) => ({
+      userId: r.user_id, name: r.name, active: r.active === 1, urdu: r.urdu === 1,
+      front: r.urdu_at === null ? null : switchedFront(r),
+    })),
   }));
 }
 
@@ -86,12 +90,17 @@ export function unassignDeck(db, { ownerId, deckId, userIds }) {
   }
 }
 
-/** Switch Urdu on or off for one person's copy of a deck; they must have been given it. */
-export function setUrduSwitch(db, { ownerId, deckId, userId, on }, now) {
+/**
+ * Set what one person's copy of a deck shows on the front: `front` is 'en', 'ur' or 'both'
+ * (`on` is the older form: true for Urdu, false for English). They must have been given it.
+ */
+export function setUrduSwitch(db, { ownerId, deckId, userId, front, on }, now) {
+  const value = front ?? (on ? 'ur' : 'en');
+  if (!FRONTS.includes(value)) throw new Error('bad-front');
   const own = db.prepare('SELECT 1 FROM decks WHERE id = ? AND owner_id = ?').get(deckId, ownerId);
   if (!own) throw new Error('not-owner');
-  const { changes } = db.prepare('UPDATE assignments SET urdu = ?, urdu_at = ? WHERE deck_id = ? AND user_id = ?')
-    .run(on ? 1 : 0, now, deckId, userId);
+  const { changes } = db.prepare('UPDATE assignments SET urdu = ?, front = ?, urdu_at = ? WHERE deck_id = ? AND user_id = ?')
+    .run(value === 'en' ? 0 : 1, value, now, deckId, userId);
   if (!changes) throw new Error('not-given');
 }
 

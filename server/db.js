@@ -70,6 +70,9 @@ function addAssignmentUrduColumns(db) {
   const have = db.prepare('PRAGMA table_info(assignments)').all().map((c) => c.name);
   if (!have.includes('urdu')) db.exec('ALTER TABLE assignments ADD COLUMN urdu INTEGER NOT NULL DEFAULT 0');
   if (!have.includes('urdu_at')) db.exec('ALTER TABLE assignments ADD COLUMN urdu_at INTEGER');
+  // What the admin set the person's front to: 'en', 'ur' or 'both'. NULL from before it could
+  // be chosen, when `urdu` alone said on (Urdu) or off (English).
+  if (!have.includes('front')) db.exec('ALTER TABLE assignments ADD COLUMN front TEXT');
 }
 
 /** Open (or create) the database at `file`; use ':memory:' in tests. */
