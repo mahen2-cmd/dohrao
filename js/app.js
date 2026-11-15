@@ -1892,13 +1892,33 @@ function deckDropTarget(el, folderId) {
     el.classList.remove('drop-target');
     if (!accepts()) return;
     e.preventDefault();
-    store.setDeckFolder(draggedDeck, folderId);
-    draggedDeck = null;
-    document.body.classList.remove('dragging-deck');
-    render();
+    dropDeck(folderId);
   });
   return el;
 }
+
+/**
+ * Put the dragged deck in `folderId`'s group (null: the loose list), filing it there if it was
+ * elsewhere: just before or after `at.id`, or last when `at` is not given.
+ */
+function dropDeck(folderId, at) {
+  const id = draggedDeck;
+  draggedDeck = null;
+  document.body.classList.remove('dragging-deck');
+  if (store.folderOf(store.deck(id)) !== folderId) store.setDeckFolder(id, folderId);
+  const groups = store.homeGroups(store.decks());
+  const group = folderId ? groups.folders.find((g) => g.folder.id === folderId)?.decks ?? [] : groups.loose;
+  const ids = group.map((d) => d.id).filter((other) => other !== id);
+  ids.splice(at ? ids.indexOf(at.id) + (at.after ? 1 : 0) : ids.length, 0, id);
+  store.reorderDecks(ids);
+  render();
+}
+
+/** Whether a drag event's pointer is in the lower half of the element it is over. */
+const lowerHalf = (e) => {
+  const box = e.currentTarget.getBoundingClientRect();
+  return e.clientY > box.top + box.height / 2;
+};
 
 /** One deck's row on the home page, shared by the loose list and each folder. */
 function deckRow({ deck, c }) {
@@ -1919,6 +1939,35 @@ function deckRow({ deck, c }) {
           draggedDeck = null;
           document.body.classList.remove('dragging-deck');
           for (const el of document.querySelectorAll('.drop-target')) el.classList.remove('drop-target');
+          for (const el of document.querySelectorAll('.deck.drop-before, .deck.drop-after')) el.classList.remove('drop-before', 'drop-after');
+        },
+        // Another deck dropped on this row goes just above or below it, in this row's group.
+        // The row takes the drop itself, so the loose list around it does not also file the deck.
+        ondragover: (e) => {
+          if (!draggedDeck || draggedDeck === deck.id) return;
+          e.preventDefault();
+          e.stopPropagation();
+          e.dataTransfer.dropEffect = 'move';
+          const after = lowerHalf(e);
+          // The line replaces the loose list's own outline, which a gap may have lit.
+          e.currentTarget.parentElement.classList.remove('drop-target');
+          e.currentTarget.classList.toggle('drop-before', !after);
+          e.currentTarget.classList.toggle('drop-after', after);
+        },
+        ondragleave: (e) => {
+          if (!e.currentTarget.contains(e.relatedTarget)) e.currentTarget.classList.remove('drop-before', 'drop-after');
+        },
+        ondrop: (e) => {
+          e.currentTarget.classList.remove('drop-before', 'drop-after');
+          if (!draggedDeck) return;
+          e.preventDefault();
+          e.stopPropagation();
+          if (draggedDeck === deck.id) {
+            draggedDeck = null;
+            document.body.classList.remove('dragging-deck');
+            return;
+          }
+          dropDeck(store.folderOf(deck), { id: deck.id, after: lowerHalf(e) });
         },
       }),
     },
