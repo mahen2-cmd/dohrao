@@ -523,6 +523,8 @@ const isZstd = (bytes) => ZSTD.every((byte, i) => bytes[i] === byte);
 // file must not be able to fill the server's memory.
 const MAX_COLLECTION = 64 * 1024 * 1024;
 const MAX_MEDIA_FILE = 25 * 1024 * 1024;
+// The most image bytes one import saves. A real deck's images come to a few MB.
+const MAX_IMAGE_BYTES = 200 * 1024 * 1024;
 const TOO_LARGE = 'This Anki file is too large to open.';
 // The most cards, and characters of card text, one collection may give. A real one has a few
 // hundred cards and tens of thousands of characters.
@@ -615,7 +617,7 @@ async function mediaFiles(files) {
  * `saveImage(bytes)` keeps an image and returns its stored name, or throws for a file that is
  * not an image Recall can show.
  */
-export async function readAnkiPackage(bytes, { now = Date.now(), saveImage } = {}) {
+export async function readAnkiPackage(bytes, { now = Date.now(), saveImage, maxImageBytes = MAX_IMAGE_BYTES } = {}) {
   const files = readZip(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength), 'Anki');
   // Newest layout first; packages made for older versions of Anki carry the other two.
   const name = ['collection.anki21b', 'collection.anki21', 'collection.anki2'].find((n) => files.has(n));
@@ -625,6 +627,8 @@ export async function readAnkiPackage(bytes, { now = Date.now(), saveImage } = {
     const stored = new Map();
     // A card may name the same file in a second way, such as with its spaces written as %20.
     const byFile = new Map();
+    // Past its share of image bytes, the import goes on without the rest of its images.
+    let room = maxImageBytes;
     for (const image of names) {
       const file = media.get(image) ?? media.get(decodeName(image));
       if (!file || !files.has(file) || !saveImage) continue;
@@ -634,7 +638,15 @@ export async function readAnkiPackage(bytes, { now = Date.now(), saveImage } = {
           const data = await files.get(file)(MAX_MEDIA_FILE);
           return isZstd(data) ? unzstd(data, MAX_MEDIA_FILE) : data;
         };
-        byFile.set(file, await unpack().then(saveImage).catch(() => null));
+        const save = async (data) => {
+          if (data.length > room) {
+            room = 0;
+            return null;
+          }
+          room -= data.length;
+          return saveImage(data);
+        };
+        byFile.set(file, await unpack().then(save).catch(() => null));
       }
       if (byFile.get(file)) stored.set(image, byFile.get(file));
     }

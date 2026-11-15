@@ -502,3 +502,19 @@ test('a note shared by many cards is refused when the cards would hold too much 
   });
   assert.equal((await readAnkiCollection(fine, NOW)).decks[0].cards.length, 100_000);
 });
+
+test('one import saves at most its share of image bytes; the rest of its images are left out', async () => {
+  const pic = (n) => Buffer.concat([PNG, Buffer.alloc(n)]);
+  const sizes = [];
+  const store = async (bytes) => (sizes.push(bytes.length), `stored${sizes.length}.png`);
+  const file = packageWithImages(JSON.stringify({ 0: 'arm one.png', 1: 'gone.png' }), { 0: pic(600), 1: pic(600) });
+  // Room for one image of the two, then nothing more is saved.
+  const result = await readAnkiPackage(file, { now: NOW, saveImage: store, maxImageBytes: 1000 });
+  assert.equal(sizes.length, 1);
+  assert.equal(result.decks[0].cards.length, 2, 'the cards still come in');
+  assert.equal(result.missingImages, 1);
+  // The default leaves room for 200 MB.
+  sizes.length = 0;
+  assert.equal((await readAnkiPackage(file, { now: NOW, saveImage: store })).missingImages, 0);
+  assert.equal(sizes.length, 2);
+});

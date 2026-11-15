@@ -578,3 +578,20 @@ test('an owner can hold 50,000 cards; a new card past that is rejected, edits ar
   // Another owner has their own allowance.
   assert.deepEqual(applyChanges(db, ben.id, { decks: [deckOf({ id: 'b1' })], cards: [cardOf('x1', { deckId: 'b1' })] }, NOW).rejected, []);
 });
+
+test('an owner can hold 1,000 decks; a new deck past that is rejected, edits are not', async () => {
+  const { db, ana, ben } = await seed();
+  db.exec('BEGIN');
+  const insert = db.prepare('INSERT INTO decks (id, owner_id, data) VALUES (?, ?, ?)');
+  for (let i = 0; i < 998; i++) insert.run(`x${i}`, ana.id, '{"name":"x"}');
+  db.exec('COMMIT');
+  // 999 decks now; one more fits, the next does not.
+  const { rejected } = applyChanges(db, ana.id, { decks: [deckOf({ id: 'k1' }), deckOf({ id: 'k2' }), deckOf({ name: 'Renamed' })] }, NOW);
+  assert.deepEqual(rejected, ['k2']);
+  assert.equal(buildView(db, ana.id, NOW).decks[0].name, 'Renamed');
+  // A card for the refused deck has nowhere to go.
+  assert.deepEqual(applyChanges(db, ana.id, { cards: [cardOf('n1', { deckId: 'k2' })] }, NOW).rejected, ['n1']);
+  // Deleting a deck in the same sync makes room.
+  assert.deepEqual(applyChanges(db, ana.id, { deletedDecks: ['x0'], decks: [deckOf({ id: 'k2' })] }, NOW).rejected, []);
+  assert.deepEqual(applyChanges(db, ben.id, { decks: [deckOf({ id: 'b1' })] }, NOW).rejected, []);
+});

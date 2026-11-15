@@ -23,6 +23,7 @@ const MAX_CARD = 64 * 1024;
 const MAX_DECK = 512 * 1024;
 const MAX_DECK_NAME = 300;
 export const MAX_CARDS = 50_000;
+export const MAX_DECKS = 1_000;
 // Progress fields the app reads, which must be finite numbers. Others (from a newer version
 // of the app) are kept as they come.
 const PROGRESS_NUMBERS = ['stability', 'difficulty', 'due', 'scheduledDays', 'ease', 'left', 'reps', 'lapses', 'introduced', 'order', 'pulled'];
@@ -136,7 +137,8 @@ function saveProgress(db, userId, cardId, progress) {
     ON CONFLICT (user_id, card_id) DO UPDATE SET data = excluded.data`).run(userId, cardId, JSON.stringify(progress));
 }
 
-function applyDeck(db, userId, deck, now) {
+/** `room.decks` is how many more decks the user may own, counted once per sync like cards. */
+function applyDeck(db, userId, deck, now, room) {
   const clean = { ...deck };
   for (const key of VIEW_ONLY) delete clean[key];
   const [shared, prefs] = split(clean, DECK_SHARED);
@@ -148,6 +150,9 @@ function applyDeck(db, userId, deck, now) {
   // not bring it back as the recipient's own.
   if (kind === null && deck.assigned) return false;
   if (kind === null) {
+    room.decks ??= MAX_DECKS - db.prepare('SELECT count(*) AS n FROM decks WHERE owner_id = ?').get(userId).n;
+    if (room.decks <= 0) return false;
+    room.decks--;
     db.prepare('INSERT INTO decks (id, owner_id, data) VALUES (?, ?, ?)').run(deck.id, userId, JSON.stringify(shared));
   } else if (kind === 'own') {
     const stored = parse(db.prepare('SELECT data FROM decks WHERE id = ?').get(deck.id).data);
@@ -251,9 +256,9 @@ export function applyChanges(db, userId, changes, now) {
       db.prepare('DELETE FROM decks WHERE id = ?').run(id);
       return true;
     });
-    each(changes.decks, (deck) => applyDeck(db, userId, deck, now));
-    // Counted after the deletions above, so cards removed in this sync make room.
+    // Counted after the deletions above, so decks and cards removed in this sync make room.
     const room = {};
+    each(changes.decks, (deck) => applyDeck(db, userId, deck, now, room));
     each(changes.cards, (card) => applyCard(db, userId, card, now, room));
     if (['daily', 'log', 'settings', 'savedAt'].some((k) => changes[k] !== undefined)) applyState(db, userId, changes, now);
     db.exec('COMMIT');
