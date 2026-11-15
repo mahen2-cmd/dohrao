@@ -897,3 +897,31 @@ test('folder is a personal deck field', () => {
   store.updateDeck('given', { folder: f.id });
   assert.equal(store.folderOf(store.deck('given')), f.id);
 });
+
+test('a malformed folder list counts as no folders, and the home page still groups', () => {
+  const deck = setup();
+  store.setSetting('folders', 'x');
+  assert.deepEqual(store.folders(), []);
+  store.updateDeck(deck.id, { folder: 'f1' });
+  assert.deepEqual(store.homeGroups(store.decks()).loose.map((d) => d.id), [deck.id]);
+  store.setSetting('folders', [null, { id: 1 }, { id: 'f1', name: 'Kept' }, { id: 'f2' }]);
+  assert.deepEqual(store.folders(), [{ id: 'f1', name: 'Kept' }]);
+  const groups = store.homeGroups(store.decks());
+  assert.deepEqual(groups.folders.map((g) => [g.folder.id, g.decks.map((d) => d.id)]), [['f1', [deck.id]]]);
+  store.setSetting('folders', [null, { id: 1 }]);
+  assert.deepEqual(store.homeGroups(store.decks()).folders, []);
+  // A new folder can still be made over a bad list.
+  assert.equal(store.createFolder('Fresh').name, 'Fresh');
+});
+
+test('at most 50 folders, with names cut to 80 characters', () => {
+  setup();
+  for (let i = 0; i < 50; i++) store.createFolder(`F${i}`);
+  assert.throws(() => store.createFolder('One too many'), { message: 'too-many-folders' });
+  assert.equal(store.folders().length, 50);
+  store.reset();
+  const f = store.createFolder(`  ${'n'.repeat(120)}  `);
+  assert.equal(f.name, 'n'.repeat(80));
+  store.renameFolder(f.id, 'r'.repeat(81));
+  assert.equal(store.folders()[0].name, 'r'.repeat(80));
+});

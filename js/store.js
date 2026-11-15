@@ -440,17 +440,25 @@ export function setHidden(id, hidden) {
 // their settings, in display order, so it follows them between devices. A deck's folder is
 // its personal pref `folder`, absent when the deck is loose.
 
-/** The person's folders, in display order. */
-export const folders = () => setting('folders') ?? [];
+// At most this many folders, and this long a name (the name field's maxLength).
+export const MAX_FOLDERS = 50;
+const MAX_FOLDER_NAME = 80;
+
+/** The person's folders, in display order. A malformed list, or entry, counts as none. */
+export function folders() {
+  const list = setting('folders');
+  return Array.isArray(list) ? list.filter((f) => f && typeof f.id === 'string' && typeof f.name === 'string') : [];
+}
 
 function folderName(name) {
-  const trimmed = String(name ?? '').trim();
+  const trimmed = String(name ?? '').trim().slice(0, MAX_FOLDER_NAME).trim();
   if (!trimmed) throw new Error('empty-name');
   return trimmed;
 }
 
 /** Make a folder at the end of the list. Names may repeat; ids tell them apart. */
 export function createFolder(name) {
+  if (folders().length >= MAX_FOLDERS) throw new Error('too-many-folders');
   const folder = { id: uid(), name: folderName(name) };
   setSetting('folders', [...folders(), folder]);
   return folder;

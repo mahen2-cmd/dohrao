@@ -633,15 +633,25 @@ kbd {
   text-underline-offset: 3px;
 }
 /* Folders: a heading that opens and closes over its decks' rows, above the loose decks. */
-.deck-folder {
+/* The folder's menu is laid over the end of its heading, beside the <details>, not in it. */
+.deck-folder-wrap {
+  position: relative;
   margin-bottom: 10px;
+}
+.folder-menu {
+  position: absolute;
+  top: 0;
+  right: 10px;
+  display: flex;
+  align-items: center;
+  height: 52px;
 }
 .deck-folder > summary {
   display: flex;
   align-items: center;
   gap: 10px;
   min-height: 52px;
-  padding: 4px 10px 4px 14px;
+  padding: 4px 56px 4px 14px;
   border: 1px solid var(--border);
   border-radius: 14px;
   background: var(--surface);
@@ -3598,18 +3608,21 @@ table.upcoming {
     color: var(--muted);
   }
   /* A folder is a ruled heading row, its decks indented under it. */
-  .deck-folder {
+  .deck-folder-wrap {
     margin-bottom: 0;
+  }
+  .folder-menu {
+    right: 0;
   }
   .deck-folder > summary {
     min-height: 52px;
-    padding: 0 0 0 2px;
+    padding: 0 44px 0 2px;
     border: 0;
     border-bottom: 1px solid var(--border);
     border-radius: 0;
     background: none;
   }
-  .deck-folder:first-of-type > summary {
+  .section-head + .deck-folder-wrap > .deck-folder > summary {
     border-top: 1px solid var(--border);
   }
   .deck-folder > summary .counts {

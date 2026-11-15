@@ -1822,6 +1822,10 @@ function keepFolderOpen(id, open) {
 
 /** Ask for a folder's name. An empty name keeps the dialog open. Calls `onsave` with the folder. */
 function openFolderDialog({ folder, onsave, oncancel } = {}) {
+  if (!folder && store.folders().length >= store.MAX_FOLDERS) {
+    toast(`You have ${store.MAX_FOLDERS} folders, the most there can be. Delete one to make another.`);
+    return oncancel?.();
+  }
   const name = h('input', { type: 'text', required: true, maxLength: 80, value: folder?.name ?? '', placeholder: 'e.g. Textbooks' });
   let saved = false;
   const form = h(
@@ -1965,11 +1969,6 @@ function folderSection(folder, rows, open) {
     // On a phone the pills give way to today's total, as on the deck rows.
     rows.length > 0 && countPills({ new: sum('new'), learning: sum('learning'), review: sum('review') }),
     due > 0 && h('span', { class: 'folder-due phone-only' }, h('i', { class: 'dot' }), due.toLocaleString()),
-    // A click inside the menu must not open or close the folder around it.
-    h('span', { class: 'folder-menu', onclick: (e) => !e.target.closest('.menu > summary') && e.preventDefault() }, menu(`Folder ${folder.name}`, [
-      h('button', { type: 'button', onclick: () => openFolderDialog({ folder, onsave: render }) }, icon('edit'), 'Rename folder'),
-      h('button', { type: 'button', class: 'danger', onclick: () => removeFolder(folder) }, icon('trash'), 'Delete folder'),
-    ])),
   );
   if (!isPhone()) deckDropTarget(summary, folder.id);
   const section = h(
@@ -1980,7 +1979,21 @@ function folderSection(folder, rows, open) {
       ? h('ul', { class: 'deck-list', 'aria-label': folder.name }, rows.map(deckRow))
       : h('p', { class: 'folder-empty' }, isPhone() ? 'No decks yet. File one from its Deck settings.' : 'No decks yet. Drag one here, or file it from its Deck settings.'),
   );
-  return section;
+  // The menu sits beside the folder, laid over the end of its heading, not inside the
+  // <summary>: a button in a summary is nested interactive content.
+  return h(
+    'div',
+    { class: 'deck-folder-wrap' },
+    section,
+    h(
+      'span',
+      { class: 'folder-menu' },
+      menu(`Folder ${folder.name}`, [
+        h('button', { type: 'button', onclick: () => openFolderDialog({ folder, onsave: render }) }, icon('edit'), 'Rename folder'),
+        h('button', { type: 'button', class: 'danger', onclick: () => removeFolder(folder) }, icon('trash'), 'Delete folder'),
+      ]),
+    ),
+  );
 }
 
 function renderHome() {
