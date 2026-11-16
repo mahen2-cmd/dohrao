@@ -1085,14 +1085,19 @@ export function previewCard(id, now = Date.now()) {
   return preview(c, now, schedulingOptions(c));
 }
 
+// What answering changes on a card, and so what undoing puts back. Its text, deck and the rest
+// are left alone, so an edit made between the answer and the undo is kept.
+const SCHEDULE_KEYS = [...Object.keys(newSchedule()), 'introduced'];
+
 /**
- * Answer a card, and hand back a copy of it from before the answer, for `restoreCard`.
+ * Answer a card, and hand back its scheduling from before the answer, for `restoreCard`.
  * With `count: false` the answer is not added to the day's counts: a card answered again
  * after an undo was already counted, and counts are never lowered.
  */
 export function answerCard(id, rating, now = Date.now(), { count = true } = {}) {
   const c = card(id);
-  const before = structuredClone(c);
+  const before = { id: c.id };
+  for (const key of SCHEDULE_KEYS) if (key in c) before[key] = structuredClone(c[key]);
   const next = schedule(c, rating, now, schedulingOptions(c));
   if (c.state === State.New) c.introduced = now;
   const kind = c.state !== State.Review ? 0 : c.scheduledDays < MATURE_DAYS ? 1 : 2;
@@ -1107,11 +1112,14 @@ export function answerCard(id, rating, now = Date.now(), { count = true } = {}) 
   return before;
 }
 
-/** Put back a card as `answerCard` copied it, undoing the answer. False when the card is gone. */
+/** Put back a card's scheduling as `answerCard` handed it back, undoing the answer. False when the card is gone. */
 export function restoreCard(copy) {
-  const at = state.cards.findIndex((c) => c.id === copy.id);
-  if (at < 0) return false;
-  state.cards[at] = structuredClone(copy);
+  const c = card(copy.id);
+  if (!c) return false;
+  for (const key of SCHEDULE_KEYS) {
+    if (key in copy) c[key] = structuredClone(copy[key]);
+    else delete c[key];
+  }
   save();
   return true;
 }

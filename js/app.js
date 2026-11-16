@@ -2,6 +2,7 @@ import * as api from './api.js';
 import { hasRichContent, imageToken, mathSpans, mathToken, parseContent, speechText, splitMore } from './content.js';
 import { DAY, MINUTE, Rating, State, dayStart } from './fsrs.js';
 import { parseSpreadsheet } from './importer.js';
+import { createUndo } from './undo.js';
 import { TABBED_DECK_QUERY, clampAmount, ownTicks, pruneTicks, pullAllLabel, pullPreview } from './deckpage.js';
 import { HEAT_WEEKS, PHONE_QUERY, canSwipeFrom, classifySwipe, inTab, isRevealTap, swipeLeaning, tabFilters } from './phone.js';
 import { recentStudy, rightShare } from './progress.js';
@@ -22,10 +23,8 @@ const isTabbedDeck = () => tabbedQuery.matches;
 tabbedQuery.addEventListener('change', () => render());
 const toasts = document.getElementById('toasts');
 
-// The card currently on screen in study mode. `history` holds a copy of each card answered in
-// this session from before its answer, newest last, for undo; `recount` the ids of cards brought
-// back by undo, whose next answer is not counted again.
-const session = { deckId: null, cardId: null, revealed: false, done: 0, spoken: null, history: [], recount: new Set() };
+// The card currently on screen in study mode, and the session's answers for undo.
+const session = { deckId: null, cardId: null, revealed: false, done: 0, spoken: null, undo: createUndo() };
 // Who is signed in ({ id, username, name, role }), or null.
 let account = null;
 // Set when the server could not be reached as the app started.
@@ -3366,8 +3365,8 @@ function reveal() {
 
 function rate(rating) {
   if (!session.cardId || !session.revealed) return;
-  const count = !session.recount.has(session.cardId);
-  session.history.push(store.answerCard(session.cardId, rating, Date.now(), { count }));
+  const count = session.undo.countAnswer(session.cardId);
+  session.undo.record(store.answerCard(session.cardId, rating, Date.now(), { count }));
   session.cardId = null;
   session.done++;
   render();
@@ -3375,16 +3374,13 @@ function rate(rating) {
 
 /** Take back the last answer of this session and show that card again, its answer revealed. */
 function undoAnswer() {
-  while (session.history.length > 0) {
-    const copy = session.history.pop();
-    // A card deleted since it was answered cannot come back; go further back instead.
-    if (!store.restoreCard(copy)) continue;
-    session.recount.add(copy.id);
+  // A card deleted since it was answered cannot come back; undo goes further back instead.
+  const copy = session.undo.undo(store.restoreCard);
+  if (copy) {
     Object.assign(session, { cardId: copy.id, revealed: true, done: Math.max(0, session.done - 1) });
     stopSpeaking();
-    render();
-    return;
   }
+  render();
 }
 
 /**
@@ -3468,7 +3464,7 @@ function cardOptions(card, deck) {
 
 function renderStudy(deck) {
   const now = Date.now();
-  if (session.deckId !== deck.id) Object.assign(session, { deckId: deck.id, cardId: null, revealed: false, done: 0, spoken: null, history: [], recount: new Set() });
+  if (session.deckId !== deck.id) Object.assign(session, { deckId: deck.id, cardId: null, revealed: false, done: 0, spoken: null, undo: createUndo() });
   const card = currentStudyCard(deck.id, now);
   const c = store.counts(deck.id, now, deck.studyFilter);
   const filtered = resolveFilter(deck, deck.studyFilter) !== null;
@@ -3489,7 +3485,7 @@ function renderStudy(deck) {
       h('div', { class: 'study-title' }, filtered ? `${deck.name} · ${label}` : deck.name),
       card && statusMark(cardStatus(card, now), card.state === State.Review ? 'Review' : cardStatus(card, now).label, 'state'),
       countPills(c),
-      session.history.length > 0 && iconButton('undo', 'Undo last answer (Ctrl+Z)', undoAnswer, 'undo'),
+      session.undo.size > 0 && iconButton('undo', 'Undo last answer (Ctrl+Z)', undoAnswer, 'undo'),
       card && store.editable(deck.id) && h('div', { class: 'tools' }, iconButton('edit', 'Edit card (E)', () => openCardDialog({ card })), iconButton('trash', 'Delete card', () => removeCard(card), 'danger')),
       // On a phone: where you are in the session, and the card's tools in a sheet.
       card && h('span', { class: 'study-count phone-only' }, `${(session.done + 1).toLocaleString()} of ${total.toLocaleString()}`),

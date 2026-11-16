@@ -1015,13 +1015,12 @@ test('an answer can be undone, and the card comes back exactly as it was', () =>
   const card = store.addCard(deck.id, 'front', 'back', T0);
   const before = structuredClone(store.card(card.id));
   const copy = store.answerCard(card.id, Rating.Good, T0);
-  assert.deepEqual(copy, before);
   assert.notEqual(store.card(card.id).state, State.New);
   assert.equal(store.restoreCard(copy), true);
   assert.deepEqual(store.card(card.id), before);
   // The copy handed back is not the stored card.
-  copy.front = 'x';
-  assert.equal(store.card(card.id).front, 'front');
+  copy.reps = 99;
+  assert.equal(store.card(card.id).reps, 0);
 });
 
 test('an answer given again after undo is not counted twice', () => {
@@ -1042,4 +1041,19 @@ test('restoring a card that was deleted does nothing', () => {
   store.deleteCard(card.id);
   assert.equal(store.restoreCard(copy), false);
   assert.equal(store.cardsIn(deck.id).length, 0);
+});
+
+test('undoing an answer keeps edits made to the card since', () => {
+  const deck = setup();
+  const other = store.createDeck({ name: 'Other' });
+  const card = store.addCard(deck.id, 'front', 'back', T0);
+  const copy = store.answerCard(card.id, Rating.Good, T0);
+  store.updateCard(card.id, { front: 'fixed', deckId: other.id });
+  store.restoreCard(copy);
+  const restored = store.card(card.id);
+  assert.equal(restored.front, 'fixed');
+  assert.equal(restored.deckId, other.id);
+  assert.equal(restored.state, State.New);
+  assert.equal(restored.reps, 0);
+  assert.equal('introduced' in restored, false);
 });
