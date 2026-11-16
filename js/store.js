@@ -1085,17 +1085,35 @@ export function previewCard(id, now = Date.now()) {
   return preview(c, now, schedulingOptions(c));
 }
 
-export function answerCard(id, rating, now = Date.now()) {
+/**
+ * Answer a card, and hand back a copy of it from before the answer, for `restoreCard`.
+ * With `count: false` the answer is not added to the day's counts: a card answered again
+ * after an undo was already counted, and counts are never lowered.
+ */
+export function answerCard(id, rating, now = Date.now(), { count = true } = {}) {
   const c = card(id);
+  const before = structuredClone(c);
   const next = schedule(c, rating, now, schedulingOptions(c));
   if (c.state === State.New) c.introduced = now;
   const kind = c.state !== State.Review ? 0 : c.scheduledDays < MATURE_DAYS ? 1 : 2;
   Object.assign(c, next);
-  const key = dayKey(now);
-  state.daily[key] = (state.daily[key] ?? 0) + 1;
-  const answers = ((state.log[key] ??= {})[c.deckId] ??= Array(12).fill(0));
-  answers[kind * 4 + rating - 1]++;
+  if (count) {
+    const key = dayKey(now);
+    state.daily[key] = (state.daily[key] ?? 0) + 1;
+    const answers = ((state.log[key] ??= {})[c.deckId] ??= Array(12).fill(0));
+    answers[kind * 4 + rating - 1]++;
+  }
   save();
+  return before;
+}
+
+/** Put back a card as `answerCard` copied it, undoing the answer. False when the card is gone. */
+export function restoreCard(copy) {
+  const at = state.cards.findIndex((c) => c.id === copy.id);
+  if (at < 0) return false;
+  state.cards[at] = structuredClone(copy);
+  save();
+  return true;
 }
 
 // ---- Stats and backup -----------------------------------------------------

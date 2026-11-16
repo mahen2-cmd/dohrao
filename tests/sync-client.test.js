@@ -382,3 +382,16 @@ test('admin calls use the server routes', async () => {
     ],
   );
 });
+
+test('an undone answer sends the restored card', async () => {
+  const calls = serve((url) => (url === 'api/state' ? json(200, view()) : json(200, { rejected: [] })));
+  await store.load();
+  const copy = store.answerCard('c1', Rating.Good, T0);
+  await settle();
+  store.restoreCard(copy);
+  await settle();
+  const last = syncs(calls).at(-1);
+  assert.deepEqual(last.body.cards.map((c) => c.id), ['c1']);
+  assert.equal(last.body.cards[0].state, copy.state);
+  assert.equal(last.body.cards[0].due, copy.due);
+});

@@ -1009,3 +1009,37 @@ test('deleting a folder puts its decks at the end of the loose list', () => {
   assert.equal(store.deck(c.id).homeOrder, undefined);
   assert.deepEqual(store.homeGroups(store.decks()).loose.map((x) => x.id), [a.id, b.id, c.id]);
 });
+
+test('an answer can be undone, and the card comes back exactly as it was', () => {
+  const deck = setup();
+  const card = store.addCard(deck.id, 'front', 'back', T0);
+  const before = structuredClone(store.card(card.id));
+  const copy = store.answerCard(card.id, Rating.Good, T0);
+  assert.deepEqual(copy, before);
+  assert.notEqual(store.card(card.id).state, State.New);
+  assert.equal(store.restoreCard(copy), true);
+  assert.deepEqual(store.card(card.id), before);
+  // The copy handed back is not the stored card.
+  copy.front = 'x';
+  assert.equal(store.card(card.id).front, 'front');
+});
+
+test('an answer given again after undo is not counted twice', () => {
+  const deck = setup();
+  const card = store.addCard(deck.id, 'front', 'back', T0);
+  const copy = store.answerCard(card.id, Rating.Good, T0);
+  store.restoreCard(copy);
+  store.answerCard(card.id, Rating.Again, T0, { count: false });
+  assert.equal(store.stats(T0).reviewedToday, 1);
+  const { answers } = store.statistics(deck.id, 30, T0);
+  assert.equal(answers.flat().reduce((a, b) => a + b, 0), 1);
+});
+
+test('restoring a card that was deleted does nothing', () => {
+  const deck = setup();
+  const card = store.addCard(deck.id, 'front', 'back', T0);
+  const copy = store.answerCard(card.id, Rating.Good, T0);
+  store.deleteCard(card.id);
+  assert.equal(store.restoreCard(copy), false);
+  assert.equal(store.cardsIn(deck.id).length, 0);
+});
