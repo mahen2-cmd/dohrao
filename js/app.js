@@ -22,8 +22,10 @@ const isTabbedDeck = () => tabbedQuery.matches;
 tabbedQuery.addEventListener('change', () => render());
 const toasts = document.getElementById('toasts');
 
-// The card currently on screen in study mode.
-const session = { deckId: null, cardId: null, revealed: false, done: 0, spoken: null };
+// The card currently on screen in study mode. `history` holds a copy of each card answered in
+// this session from before its answer, newest last, for undo; `recount` the ids of cards brought
+// back by undo, whose next answer is not counted again.
+const session = { deckId: null, cardId: null, revealed: false, done: 0, spoken: null, history: [], recount: new Set() };
 // Who is signed in ({ id, username, name, role }), or null.
 let account = null;
 // Set when the server could not be reached as the app started.
@@ -80,6 +82,7 @@ const ICONS = {
   edit: '<path d="M4 20h4L19 9l-4-4L4 16v4z"/><path d="M13.5 6.5l4 4"/>',
   trash: '<path d="M4 7h16M10 11v6M14 11v6M6 7l1 12a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1l1-12M9 7V4h6v3"/>',
   back: '<path d="M19 12H5M11 6l-6 6 6 6"/>',
+  undo: '<path d="M9 14L4 9l5-5"/><path d="M4 9h11a5 5 0 0 1 0 10h-3"/>',
   close: '<path d="M6 6l12 12M18 6L6 18"/>',
   sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>',
   moon: '<path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z"/>',
@@ -3363,10 +3366,25 @@ function reveal() {
 
 function rate(rating) {
   if (!session.cardId || !session.revealed) return;
-  store.answerCard(session.cardId, rating);
+  const count = !session.recount.has(session.cardId);
+  session.history.push(store.answerCard(session.cardId, rating, Date.now(), { count }));
   session.cardId = null;
   session.done++;
   render();
+}
+
+/** Take back the last answer of this session and show that card again, its answer revealed. */
+function undoAnswer() {
+  while (session.history.length > 0) {
+    const copy = session.history.pop();
+    // A card deleted since it was answered cannot come back; go further back instead.
+    if (!store.restoreCard(copy)) continue;
+    session.recount.add(copy.id);
+    Object.assign(session, { cardId: copy.id, revealed: true, done: Math.max(0, session.done - 1) });
+    stopSpeaking();
+    render();
+    return;
+  }
 }
 
 /**
@@ -3450,7 +3468,7 @@ function cardOptions(card, deck) {
 
 function renderStudy(deck) {
   const now = Date.now();
-  if (session.deckId !== deck.id) Object.assign(session, { deckId: deck.id, cardId: null, revealed: false, done: 0, spoken: null });
+  if (session.deckId !== deck.id) Object.assign(session, { deckId: deck.id, cardId: null, revealed: false, done: 0, spoken: null, history: [], recount: new Set() });
   const card = currentStudyCard(deck.id, now);
   const c = store.counts(deck.id, now, deck.studyFilter);
   const filtered = resolveFilter(deck, deck.studyFilter) !== null;
@@ -3471,6 +3489,7 @@ function renderStudy(deck) {
       h('div', { class: 'study-title' }, filtered ? `${deck.name} · ${label}` : deck.name),
       card && statusMark(cardStatus(card, now), card.state === State.Review ? 'Review' : cardStatus(card, now).label, 'state'),
       countPills(c),
+      session.history.length > 0 && iconButton('undo', 'Undo last answer (Ctrl+Z)', undoAnswer, 'undo'),
       card && store.editable(deck.id) && h('div', { class: 'tools' }, iconButton('edit', 'Edit card (E)', () => openCardDialog({ card })), iconButton('trash', 'Delete card', () => removeCard(card), 'danger')),
       // On a phone: where you are in the session, and the card's tools in a sheet.
       card && h('span', { class: 'study-count phone-only' }, `${(session.done + 1).toLocaleString()} of ${total.toLocaleString()}`),
@@ -4677,10 +4696,16 @@ function render() {
 }
 
 document.addEventListener('keydown', (e) => {
-  if (e.ctrlKey || e.metaKey || e.altKey) return;
-  if (document.querySelector('dialog[open]')) return;
-  if (e.target.closest?.('input, textarea, select, button, a, summary')) return;
-  if (route().view !== 'study' || !session.cardId) return;
+  if (document.querySelector('dialog[open]') || route().view !== 'study') return;
+  // Ctrl+Z in a text box is the browser's own undo of the typing.
+  if (e.target.closest?.('input, textarea, select, [contenteditable]')) return;
+  if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === 'z') {
+    e.preventDefault();
+    undoAnswer();
+    return;
+  }
+  if (e.target.closest?.('button, a, summary')) return;
+  if (e.ctrlKey || e.metaKey || e.altKey || !session.cardId) return;
 
   if (e.key === ' ' || e.key === 'Enter') {
     e.preventDefault();
