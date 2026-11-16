@@ -3543,7 +3543,7 @@ function renderStudy(deck) {
                     { class: `rate ${kind}`, type: 'button', title: rating === Rating.Good ? 'Good (3, Space or Enter)' : `${label} (${rating})`, onclick: () => rate(rating) },
                     h('span', { class: 'label' }, label),
                     h('span', { class: 'ivl' }, (options[rating].state === State.Review ? '' : '<') + formatInterval(options[rating].due - now)),
-                    h('kbd', null, rating === Rating.Good ? 'Space' : String(rating)),
+                    h('kbd', null, rating === Rating.Good ? '3 · Space' : String(rating)),
                   ),
                 ),
               ),
