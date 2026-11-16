@@ -1,5 +1,5 @@
 import * as api from './api.js';
-import { hasRichContent, imageToken, mathSpans, mathToken, parseContent, speechText } from './content.js';
+import { hasRichContent, imageToken, mathSpans, mathToken, parseContent, speechText, splitMore } from './content.js';
 import { DAY, MINUTE, Rating, State, dayStart } from './fsrs.js';
 import { parseSpreadsheet } from './importer.js';
 import { TABBED_DECK_QUERY, clampAmount, ownTicks, pruneTicks, pullAllLabel, pullPreview } from './deckpage.js';
@@ -239,17 +239,28 @@ function urduShown(card, deck, side) {
   return shown.urdu == null ? null : shown;
 }
 
+/** A back side's nodes, with what follows a "Show more" line folded away until it is opened. */
+const foldable = (text) => {
+  const { shown, more } = splitMore(text);
+  if (more == null) return rich(shown);
+  return [
+    ...rich(shown),
+    h('details', { class: 'more' }, h('summary', null, h('span', { class: 'when-closed' }, 'Show more'), h('span', { class: 'when-open' }, 'Show less')), h('div', null, rich(more))),
+  ];
+};
+
 /** The nodes that show one side of a card: its text, and the Urdu under or in place of its English. */
 function sideFace(card, deck, side) {
   const shown = urduShown(card, deck, side);
-  if (!shown) return rich(card[side]);
+  const show = side === 'back' ? foldable : rich;
+  if (!shown) return show(card[side]);
   const roman = shown.urduLang === 'ur-Latn';
   const urdu = h('div', roman ? { class: 'urdu roman', lang: 'ur-Latn' } : { class: 'urdu', lang: 'ur', dir: 'rtl' });
   urdu.textContent = shown.urdu;
   if (shown.english == null) return [urdu];
   // CSS cannot see text before an element, so the gap under the English is marked here.
   urdu.classList.add('after-english');
-  return [...rich(shown.english), urdu];
+  return [...show(shown.english), urdu];
 }
 
 // ---- Equation editor ------------------------------------------------------
@@ -4668,7 +4679,7 @@ function render() {
 document.addEventListener('keydown', (e) => {
   if (e.ctrlKey || e.metaKey || e.altKey) return;
   if (document.querySelector('dialog[open]')) return;
-  if (e.target.closest?.('input, textarea, select, button, a')) return;
+  if (e.target.closest?.('input, textarea, select, button, a, summary')) return;
   if (route().view !== 'study' || !session.cardId) return;
 
   if (e.key === ' ' || e.key === 'Enter') {

@@ -1464,6 +1464,41 @@ kbd {
   text-wrap: pretty;
   animation: reveal 0.35s var(--ease);
 }
+/* The part of a back side after its "Show more" line, folded until it is opened. */
+details.more {
+  margin-top: 0.6em;
+}
+details.more > summary {
+  display: inline-block;
+  list-style: none;
+  cursor: pointer;
+  font: 500 15px/1 var(--font);
+  color: var(--link);
+  padding: 8px 14px;
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  user-select: none;
+}
+details.more > summary::-webkit-details-marker {
+  display: none;
+}
+details.more > summary:hover {
+  background: var(--accent-soft);
+}
+details.more[open] .when-closed,
+details.more:not([open]) .when-open {
+  display: none;
+}
+details.more > div {
+  margin-top: 0.6em;
+}
+/* In the card list the fold stays shut and small. */
+.card-row details.more > summary {
+  padding: 0;
+  border: 0;
+  font-size: 13px;
+}
+
 /* A word or short phrase is set as large as the screen allows. */
 .face.question.short {
   font-size: clamp(44px, 7vw, 80px);

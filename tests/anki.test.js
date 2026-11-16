@@ -261,6 +261,7 @@ test('rejects files that are not Anki collections', async () => {
 test('turns card HTML into plain text', () => {
   assert.equal(htmlToText('<div>Sou <strong>casado</strong> &mdash; male</div><div>Sou&nbsp;casada</div>'), 'Sou casado — male\nSou casada');
   assert.equal(htmlToText('<table><tbody><tr><td>a</td><td>b</td></tr><tr><td>c</td></tr></tbody></table>'), 'a b\nc');
+  assert.equal(htmlToText('Answer<details><summary>Show more</summary>Long part</details>'), 'Answer\nShow more\nLong part');
   assert.equal(htmlToText('<style>.x { color: red }</style>caf&eacute; &#233; [sound:a.mp3]'), 'caf&eacute; é');
 });
 

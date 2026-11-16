@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { hasRichContent, imageNames, imageType, mathSpans, mathToken, parseContent, speechText } from '../js/content.js';
+import { hasRichContent, imageNames, imageType, mathSpans, mathToken, parseContent, speechText, splitMore } from '../js/content.js';
 import { mathSpeech } from '../js/mathspeech.js';
 import { PNG } from './zip.js';
 
@@ -71,4 +71,16 @@ test('recognises image files by their first bytes', () => {
   assert.equal(imageType(Buffer.from('RIFF\0\0\0\0WEBPVP8 ')), 'webp');
   assert.equal(imageType(Buffer.from('<?xml version="1.0"?>\n<svg xmlns="http://www.w3.org/2000/svg"></svg>')), 'svg');
   assert.equal(imageType(Buffer.from('%PDF-1.7')), null);
+});
+
+test('splits a side at a "Show more" line into what shows and what waits', () => {
+  assert.deepEqual(splitMore('Answer\nShow more\nThe long part\nand more'), { shown: 'Answer', more: 'The long part\nand more' });
+  assert.deepEqual(splitMore('Answer\n  show MORE ▼ \nRest'), { shown: 'Answer', more: 'Rest' });
+  // Anki's <summary> ran into the text after it.
+  assert.deepEqual(splitMore('Answer\nShow moreThe long part'), { shown: 'Answer', more: 'The long part' });
+  assert.deepEqual(splitMore('Answer\nShow more: The long part'), { shown: 'Answer', more: 'The long part' });
+  assert.deepEqual(splitMore('Show more\nAll of it'), { shown: '', more: 'All of it' });
+  assert.deepEqual(splitMore('Just an answer'), { shown: 'Just an answer', more: null });
+  assert.deepEqual(splitMore('We show more care here'), { shown: 'We show more care here', more: null });
+  assert.deepEqual(splitMore('Answer\nShow more\n  '), { shown: 'Answer', more: null });
 });

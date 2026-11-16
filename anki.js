@@ -245,7 +245,7 @@ export function htmlToText(html) {
     .replace(/\[sound:[^\]]*\]/g, '')
     .replace(IMAGE, (_, a, b, c) => imageToken(encodeURIComponent(decodeEntities(a ?? b ?? c))))
     .replace(/\r?\n/g, ' ')
-    .replace(/<br\b[^>]*>|<hr\b[^>]*>|<\/(div|p|li|tr|h[1-6]|blockquote)>/gi, '\n')
+    .replace(/<br\b[^>]*>|<hr\b[^>]*>|<summary\b[^>]*>|<\/(div|p|li|tr|h[1-6]|blockquote|summary)>/gi, '\n')
     .replace(/<\/(td|th)>/gi, ' ')
     .replace(/<[^>]*>/g, '');
   return decodeEntities(text)

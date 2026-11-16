@@ -47,6 +47,19 @@ export function speechText(text) {
     .trim();
 }
 
+// A line starting "Show more" folds away the rest of a side. Decks from Anki carry it as the
+// <summary> of a <details> block, which turns into plain text on import.
+const MORE = /^[ \t]*show more[ \t:.…▾▼⌄↓>»-]*/im;
+
+/** A side split at its "Show more" line: `shown` before it, `more` after it (null when nothing is folded). */
+export function splitMore(raw) {
+  const text = String(raw ?? '');
+  const m = MORE.exec(text);
+  if (!m) return { shown: text, more: null };
+  const more = text.slice(m.index + m[0].length).trim();
+  return { shown: text.slice(0, m.index).trimEnd(), more: more || null };
+}
+
 /** The names of the images a side shows. */
 export const imageNames = (text) => parseContent(text).filter((part) => part.image).map((part) => part.image);
 
