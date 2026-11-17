@@ -3483,7 +3483,7 @@ function renderStudy(deck) {
       'div',
       { class: 'study-top' },
       h('a', { class: 'icon-btn', href: `#/deck/${deck.id}`, title: 'Stop studying', 'aria-label': 'Stop studying' }, icon('close')),
-      h('a', { class: 'icon-btn', href: '#/', title: 'Home', 'aria-label': 'Home' }, icon('home')),
+      h('a', { class: 'icon-btn', href: '#/', title: 'Home (H)', 'aria-label': 'Home' }, icon('home')),
       h('div', { class: 'study-title' }, filtered ? `${deck.name} · ${label}` : deck.name),
       card && statusMark(cardStatus(card, now), card.state === State.Review ? 'Review' : cardStatus(card, now).label, 'state'),
       countPills(c),
@@ -4703,7 +4703,13 @@ document.addEventListener('keydown', (e) => {
     return;
   }
   if (e.target.closest?.('button, a, summary')) return;
-  if (e.ctrlKey || e.metaKey || e.altKey || !session.cardId) return;
+  if (e.ctrlKey || e.metaKey || e.altKey) return;
+  // Home works on the "All caught up" screen too, where there is no card.
+  if (e.key.toLowerCase() === 'h') {
+    location.hash = '#/';
+    return;
+  }
+  if (!session.cardId) return;
 
   if (e.key === ' ' || e.key === 'Enter') {
     e.preventDefault();
