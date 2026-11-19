@@ -1155,3 +1155,40 @@ test('the backup download leaves the review log out', () => {
   assert.equal('reviews' in backup, false);
   assert.equal('reviewsUndone' in backup, false);
 });
+
+const ANKI_IMPORT = [
+  {
+    ankiId: 77, name: 'From Anki', settings: {},
+    cards: [{
+      ankiId: 5, front: 'f', back: 'b', created: T0, ...{ state: State.Review, scheduledDays: 3, due: T0 + 3 * DAY },
+      history: [
+        { at: T0 - 2 * DAY, rating: 3, state: 0, elapsed: null, duration: 5000, intervalBefore: 0, intervalAfter: 1 },
+        { at: T0 - DAY, rating: 3, state: 2, elapsed: DAY, duration: 7000, intervalBefore: 1, intervalAfter: 3 },
+      ],
+    }],
+  },
+];
+
+test('importing Anki cards logs their history', () => {
+  store.reset();
+  store.importAnkiDecks(structuredClone(ANKI_IMPORT), T0);
+  const [card] = store.cardsIn(store.decks()[0].id);
+  const log = store.reviewLog();
+  assert.equal(log.length, 2);
+  for (const r of log) {
+    assert.equal(r.cardId, card.id);
+    assert.equal(r.deckId, card.deckId);
+    assert.equal(r.scheduler, null);
+    assert.equal(r.retention, null);
+  }
+  assert.deepEqual(log.map((r) => r.at), [T0 - 2 * DAY, T0 - DAY]);
+  assert.equal(new Set(log.map((r) => r.id)).size, 2);
+  assert.equal(store.card(card.id).history, undefined);
+});
+
+test('re-importing an Anki file does not log its history again', () => {
+  store.reset();
+  store.importAnkiDecks(structuredClone(ANKI_IMPORT), T0);
+  store.importAnkiDecks(structuredClone(ANKI_IMPORT), T0);
+  assert.equal(store.reviewLog().length, 2);
+});

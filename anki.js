@@ -334,6 +334,26 @@ const parseJson = (text) => {
   }
 };
 
+// Anki's revlog kinds (0 learn, 1 review, 2 relearn) as the state a card was in when answered.
+const STATE_OF_KIND = { 0: State.Learning, 1: State.Review, 2: State.Relearning };
+const MAX_DURATION = 60_000;
+
+/**
+ * A card's Anki answers as review log entries, oldest first. Intervals are in days; Anki gives
+ * a learning step's as negative seconds, which count as 0.
+ */
+function reviewHistory(rows) {
+  return rows.map((r, i) => ({
+    at: r.id,
+    rating: r.ease,
+    state: i === 0 ? State.New : STATE_OF_KIND[r.type],
+    elapsed: i === 0 ? null : r.id - rows[i - 1].id,
+    duration: Math.min(Math.max(r.time ?? 0, 0), MAX_DURATION),
+    intervalBefore: r.lastIvl > 0 ? r.lastIvl : 0,
+    intervalAfter: r.ivl > 0 ? r.ivl : 0,
+  }));
+}
+
 /** FSRS stability and difficulty worked out from a card's past answers, as Anki does. */
 function memoryFromHistory(history, w) {
   let memory = null;
@@ -420,7 +440,10 @@ function convert(all, now) {
   const longTemplate = (t) => [t.front, t.back].some((side) => Buffer.byteLength(String(side ?? '')) > MAX_TEMPLATE);
   if (source.notetypes.some((n) => n.templates.some(longTemplate))) throw new Error(TOO_LARGE);
   const notetypes = new Map(source.notetypes.map((n) => [n.id, n]));
-  const history = groupBy(all('select id, cid, ease from revlog where ease between 1 and 4 and type < 3 order by id'), 'cid');
+  const history = groupBy(
+    all('select id, cid, ease, ivl, lastIvl, time, type from revlog where ease between 1 and 4 and type < 3 order by id'),
+    'cid',
+  );
   // Each card is read with its note's text, so one long note shared by many cards would be held
   // many times over: the total is checked before anything is read.
   const [size] = all('select count(*) as cards, sum(length(n.flds)) as chars from cards c join notes n on n.id = c.nid');
@@ -462,6 +485,7 @@ function convert(all, now) {
         updated: row.mod * 1000,
         position: row.due,
         ...cardSchedule(row, history.get(row.id) ?? [], { fsrs, w: settings.fsrsParams, dayAt }),
+        history: reviewHistory(history.get(row.id) ?? []),
       });
     }
     if (!cards.length) continue;

@@ -32,7 +32,8 @@ function database(fill) {
       create table cards (id integer primary key, nid integer, did integer, ord integer, mod integer,
         type integer, queue integer, due integer, ivl integer, factor integer, reps integer,
         lapses integer, left integer, odue integer, odid integer, data text);
-      create table revlog (id integer primary key, cid integer, ease integer, type integer);
+      create table revlog (id integer primary key, cid integer, usn integer, ease integer, ivl integer,
+        lastIvl integer, factor integer, time integer, type integer);
     `);
     fill(db);
     db.close();
@@ -66,15 +67,17 @@ const CARDS = [
   { id: 1790000000009, flds: 'Borrowed\x1fEmprestado', did: FILTERED, odid: DECK, type: 2, queue: 2, due: -99, odue: TODAY + 5, ivl: 7, factor: 2500 },
 ];
 
+// Anki's revlog rows: when (ms), card, button, interval after and before (days, or negative
+// seconds in a learning step), the answer's time in ms, and the kind (0 learn, 1 review, 2 relearn).
 const REVLOG = [
-  [NOW - 20 * DAY, 1790000000001, 3, 0],
-  [NOW - 19 * DAY, 1790000000001, 3, 2],
-  [NOW - 3000, 1790000000003, 1, 0],
+  { id: NOW - 20 * DAY, cid: 1790000000001, ease: 3, ivl: -600, lastIvl: 0, time: 5000, type: 0 },
+  { id: NOW - 19 * DAY, cid: 1790000000001, ease: 3, ivl: 3, lastIvl: -600, time: 90000, type: 2 },
+  { id: NOW - 3000, cid: 1790000000003, ease: 1, ivl: -60, lastIvl: 0, time: 2000, type: 0 },
 ];
 
 function addHistory(db) {
-  const row = db.prepare('insert into revlog values (?, ?, ?, ?)');
-  for (const entry of REVLOG) row.run(...entry);
+  const row = db.prepare('insert into revlog values (?, ?, 0, ?, ?, ?, 2500, ?, ?)');
+  for (const r of REVLOG) row.run(r.id, r.cid, r.ease, r.ivl, r.lastIvl, r.time, r.type);
 }
 
 const BASIC_BACK = '{{FrontSide}}\n\n<hr id=answer>\n\n{{Back}}\n{{tts pt_PT:Back}}';
@@ -552,4 +555,16 @@ test('a template that repeats a field to build a huge side is refused before the
   // A template that repeats a field a few times is still read.
   const fine = hostileCollection({ qfmt: '{{F}} / {{F}}', notes: note });
   assert.equal((await readAnkiCollection(fine, NOW)).decks[0].cards[0].front, `${'x'.repeat(300)} / ${'x'.repeat(300)}`);
+});
+
+test('imported cards carry their Anki review history', async () => {
+  const { decks } = await readAnkiCollection(legacy(), NOW);
+  const cards = decks.flatMap((d) => d.cards);
+  const hello = cards.find((c) => c.ankiId === 1790000000001);
+  assert.deepEqual(hello.history, [
+    { at: NOW - 20 * DAY, rating: 3, state: 0, elapsed: null, duration: 5000, intervalBefore: 0, intervalAfter: 0 },
+    { at: NOW - 19 * DAY, rating: 3, state: 3, elapsed: DAY, duration: 60000, intervalBefore: 0, intervalAfter: 3 },
+  ]);
+  const fresh = cards.find((c) => c.ankiId === 1790000000006);
+  assert.deepEqual(fresh.history, []);
 });

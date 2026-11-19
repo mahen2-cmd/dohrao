@@ -611,8 +611,13 @@ export function importAnkiDecks(imported, now = Date.now(), { reserved = false, 
       d = { ...DECK_DEFAULTS, ...settings, id: uid(), name, ankiId, created: now };
       state.decks.push(d);
     }
-    for (const c of fresh) {
-      state.cards.push({ ...newSchedule(now), ...c, id: uid(), deckId: d.id, ...reserveFlag(reserved && c.state === State.New) });
+    for (const { history = [], ...c } of fresh) {
+      const card = { ...newSchedule(now), ...c, id: uid(), deckId: d.id, ...reserveFlag(reserved && c.state === State.New) };
+      state.cards.push(card);
+      // Anki's answers to the card join the review log.
+      for (const h of history) {
+        state.reviews.push({ id: uid(), cardId: card.id, deckId: d.id, scheduler: null, retention: null, ...h });
+      }
     }
     added += fresh.length;
     touched?.add(d.id);
