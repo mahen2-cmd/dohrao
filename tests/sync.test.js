@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 
 import { openDb } from '../server/db.js';
 import { createUser } from '../server/auth.js';
-import { buildView, applyChanges } from '../server/sync.js';
+import { buildView, applyChanges, reviewsOf } from '../server/sync.js';
 import { newSchedule } from '../js/fsrs.js';
 import { setUrduSwitch } from '../server/admin.js';
 import { frontShows } from '../js/urdu.js';
@@ -614,4 +614,83 @@ test('an owner can hold 1,000 decks; a new deck past that is rejected, edits are
   // Deleting a deck in the same sync makes room.
   assert.deepEqual(applyChanges(db, ana.id, { deletedDecks: ['x0'], decks: [deckOf({ id: 'k2' })] }, NOW).rejected, []);
   assert.deepEqual(applyChanges(db, ben.id, { decks: [deckOf({ id: 'b1' })] }, NOW).rejected, []);
+});
+
+// ---- Review log ---------------------------------------------------------------
+
+const entry = (id, over = {}) => ({
+  id, cardId: 'c1', deckId: 'd1', at: NOW, rating: 3, state: 0, elapsed: null, duration: 4000,
+  scheduler: 'fsrs', retention: 0.9, intervalBefore: 0, intervalAfter: 0, ...over,
+});
+
+test('reviews are stored and read back oldest first', async () => {
+  const { db, ana } = await seed();
+  assert.deepEqual(applyChanges(db, ana.id, { reviews: [entry('r2', { at: NOW + 5 }), entry('r1', { at: NOW + 1 })] }, NOW), { rejected: [] });
+  assert.deepEqual(reviewsOf(db, ana.id).map((e) => e.id), ['r1', 'r2']);
+  assert.deepEqual(reviewsOf(db, ana.id)[0], entry('r1', { at: NOW + 1 }));
+  assert.equal(buildView(db, ana.id, NOW).reviews, undefined);
+});
+
+test('a review sent twice is stored once', async () => {
+  const { db, ana } = await seed();
+  applyChanges(db, ana.id, { reviews: [entry('r1')] }, NOW);
+  assert.deepEqual(applyChanges(db, ana.id, { reviews: [entry('r1')] }, NOW), { rejected: [] });
+  assert.equal(reviewsOf(db, ana.id).length, 1);
+});
+
+test('reviews for other people\'s cards are rejected', async () => {
+  const { db, ana, ben } = await seed();
+  assert.deepEqual(applyChanges(db, ben.id, { reviews: [entry('rb')] }, NOW), { rejected: ['rb'] });
+  assert.deepEqual(
+    applyChanges(db, ana.id, { reviews: [entry('rx', { cardId: 'nope' }), entry('ra')] }, NOW),
+    { rejected: ['rx'] },
+  );
+  assert.deepEqual(reviewsOf(db, ana.id).map((e) => e.id), ['ra']);
+  assert.equal(reviewsOf(db, ben.id).length, 0);
+});
+
+test('a given deck\'s reviews are kept per person', async () => {
+  const { db, ana, ben } = await seed();
+  give(db, 'd1', ben.id);
+  applyChanges(db, ana.id, { reviews: [entry('ra')] }, NOW);
+  assert.deepEqual(applyChanges(db, ben.id, { reviews: [entry('rb')] }, NOW), { rejected: [] });
+  assert.deepEqual(reviewsOf(db, ana.id).map((e) => e.id), ['ra']);
+  assert.deepEqual(reviewsOf(db, ben.id).map((e) => e.id), ['rb']);
+});
+
+test('deckId is taken from the card, not the client', async () => {
+  const { db, ana } = await seed();
+  applyChanges(db, ana.id, { reviews: [entry('r1', { deckId: 'wrong' })] }, NOW);
+  assert.equal(reviewsOf(db, ana.id)[0].deckId, 'd1');
+});
+
+test('invalid reviews are rejected', async () => {
+  const { db, ana } = await seed();
+  const bad = [
+    entry('b1', { rating: 5 }),
+    entry('b2', { state: 4 }),
+    entry('b3', { duration: 61_000 }),
+    entry('b4', { scheduler: 'x' }),
+    entry('b5', { at: 'now' }),
+    entry('b6', { elapsed: '1' }),
+    entry('b7', { note: 'x'.repeat(2000) }),
+  ];
+  assert.deepEqual(applyChanges(db, ana.id, { reviews: bad }, NOW), { rejected: bad.map((e) => e.id) });
+  assert.equal(reviewsOf(db, ana.id).length, 0);
+});
+
+test('deletedReviews removes only your own entries', async () => {
+  const { db, ana, ben } = await seed();
+  applyChanges(db, ana.id, { reviews: [entry('r1')] }, NOW);
+  assert.deepEqual(applyChanges(db, ben.id, { deletedReviews: ['r1'] }, NOW), { rejected: [] });
+  assert.equal(reviewsOf(db, ana.id).length, 1);
+  assert.deepEqual(applyChanges(db, ana.id, { deletedReviews: ['r1', 'unknown'] }, NOW), { rejected: [] });
+  assert.equal(reviewsOf(db, ana.id).length, 0);
+});
+
+test('deleting a card deletes its reviews', async () => {
+  const { db, ana } = await seed();
+  applyChanges(db, ana.id, { reviews: [entry('r1')] }, NOW);
+  applyChanges(db, ana.id, { deletedCards: ['c1'] }, NOW);
+  assert.equal(reviewsOf(db, ana.id).length, 0);
 });

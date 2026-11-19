@@ -61,7 +61,16 @@ CREATE TABLE IF NOT EXISTS topic_proposals (
   deck_id TEXT PRIMARY KEY REFERENCES decks(id) ON DELETE CASCADE,
   data TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS reviews (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  card_id TEXT NOT NULL REFERENCES cards(id) ON DELETE CASCADE,
+  at INTEGER NOT NULL,
+  data TEXT NOT NULL
+);
 CREATE INDEX IF NOT EXISTS cards_deck ON cards(deck_id);
+CREATE INDEX IF NOT EXISTS reviews_user_at ON reviews(user_id, at);
+CREATE INDEX IF NOT EXISTS reviews_card ON reviews(card_id);
 CREATE INDEX IF NOT EXISTS progress_card ON progress(card_id);
 `;
 

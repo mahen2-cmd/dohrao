@@ -61,6 +61,45 @@ function validPrefs(p) {
 }
 const validId = (id) => typeof id === 'string' && id.length >= 1 && id.length <= 100;
 
+// The review log: one entry per answer, never sent back to the app.
+const MAX_REVIEW = 1024;
+const MAX_REVIEWS_PER_SYNC = 200_000;
+const MAX_DURATION = 60_000;
+const SCHEDULERS = ['sm2', 'fsrs', 'fsrs7'];
+const intIn = (x, lo, hi) => Number.isInteger(x) && x >= lo && x <= hi;
+const finiteOrNull = (x) => x === null || Number.isFinite(x);
+
+/** Whether a review log entry has the fields and types the log keeps, at a sensible size. */
+function validReview(r) {
+  return (
+    validId(r.cardId) &&
+    validId(r.deckId) &&
+    Number.isFinite(r.at) &&
+    intIn(r.rating, 1, 4) &&
+    intIn(r.state, 0, 3) &&
+    ['elapsed', 'retention', 'intervalBefore', 'intervalAfter'].every((k) => finiteOrNull(r[k])) &&
+    (r.duration === null || (Number.isFinite(r.duration) && r.duration >= 0 && r.duration <= MAX_DURATION)) &&
+    (r.scheduler === null || SCHEDULERS.includes(r.scheduler)) &&
+    bytes(r) <= MAX_REVIEW
+  );
+}
+
+/** Keep one answer in `userId`'s log, once, for a card they can study. */
+function applyReview(db, userId, r, room) {
+  if (!validReview(r) || room.reviews-- <= 0) return false;
+  const deckId = deckOfCard(db, r.cardId);
+  const kind = deckId && access(db, userId, deckId);
+  if (kind !== 'own' && kind !== 'given') return false;
+  db.prepare('INSERT OR IGNORE INTO reviews (id, user_id, card_id, at, data) VALUES (?, ?, ?, ?, ?)')
+    .run(r.id, userId, r.cardId, r.at, JSON.stringify({ ...r, deckId }));
+  return true;
+}
+
+/** Everything in `userId`'s review log, oldest first. */
+export function reviewsOf(db, userId) {
+  return db.prepare('SELECT data FROM reviews WHERE user_id = ? ORDER BY at, rowid').all(userId).map((row) => JSON.parse(row.data));
+}
+
 function ownDecks(db, userId) {
   return db.prepare('SELECT id, data FROM decks WHERE owner_id = ? ORDER BY rowid').all(userId);
 }
@@ -264,6 +303,13 @@ export function applyChanges(db, userId, changes, now) {
     const room = {};
     each(changes.decks, (deck) => applyDeck(db, userId, deck, now, room));
     each(changes.cards, (card) => applyCard(db, userId, card, now, room));
+    // After the cards, so an answer to a card made in this same sync finds it.
+    room.reviews = MAX_REVIEWS_PER_SYNC;
+    each(changes.reviews, (review) => applyReview(db, userId, review, room));
+    each(changes.deletedReviews, (_, id) => {
+      db.prepare('DELETE FROM reviews WHERE id = ? AND user_id = ?').run(id, userId);
+      return true;
+    });
     if (['daily', 'log', 'settings', 'savedAt'].some((k) => changes[k] !== undefined)) applyState(db, userId, changes, now);
     db.exec('COMMIT');
   } catch (err) {
