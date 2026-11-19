@@ -645,3 +645,85 @@ test('each person may ask for 120 pieces of speech a minute', async (t) => {
   assert.deepEqual(over.json, { error: 'rate-limited' });
   assert.equal((await call(port, 'GET', 'api/tts?text=hi&lang=pt-PT', { cookie: other })).status, 200);
 });
+
+// ---- Fitting FSRS ---------------------------------------------------------------
+
+/** ana with deck d1 holding `count` cards, each answered `each` times from new, logged. */
+async function fitSetup(t, count, each) {
+  const s = await start(t);
+  const ana = await createUser(s.db, { username: 'ana', name: 'Ana', password: 'ana-password' }, NOW);
+  const cards = Array.from({ length: count }, (_, i) => ({ ...card, id: `c${i}` }));
+  applyChanges(s.db, ana.id, { decks: [deck], cards }, NOW);
+  let seed = 11;
+  const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+  const reviews = [];
+  for (const c of cards) {
+    let at = NOW - 400 * 86_400_000;
+    let days = 1;
+    for (let k = 0; k < each; k++) {
+      const rating = rnd() < 0.15 ? 1 : 3;
+      reviews.push({ id: `${c.id}-${k}`, cardId: c.id, deckId: 'd1', at, rating, state: k ? 2 : 0, elapsed: null,
+        duration: 3000, scheduler: 'fsrs', retention: 0.9, intervalBefore: 0, intervalAfter: 0 });
+      days = rating === 1 ? 1 : days * 2.5;
+      at += Math.round(days * 86_400_000);
+    }
+  }
+  assert.deepEqual(applyChanges(s.db, ana.id, { reviews }, NOW), { rejected: [] });
+  const cookie = (await logIn(s.port, 'ana', 'ana-password')).cookie;
+  return { ...s, ana, cookie };
+}
+
+test('fit status counts usable answers', async (t) => {
+  const { port, cookie } = await fitSetup(t, 3, 4);
+  const res = await call(port, 'GET', 'api/decks/d1/fit', { cookie });
+  assert.equal(res.status, 200);
+  assert.deepEqual(res.json, { usable: 12, needed: 1000 });
+});
+
+test('fitting below the threshold is refused', async (t) => {
+  const { port, cookie } = await fitSetup(t, 3, 4);
+  const res = await call(port, 'POST', 'api/decks/d1/fit', { cookie, body: { timezone: 'Europe/Lisbon' } });
+  assert.equal(res.status, 400);
+  assert.equal(res.json.error, 'not-enough-answers');
+});
+
+test('fitting a deck you cannot study is refused', async (t) => {
+  const { port, invite } = await fitSetup(t, 3, 4);
+  const ben = (await signUp(port, invite)).cookie;
+  assert.equal((await call(port, 'GET', 'api/decks/d1/fit', { cookie: ben })).status, 404);
+  assert.equal((await call(port, 'POST', 'api/decks/d1/fit', { cookie: ben, body: { timezone: 'UTC' } })).status, 404);
+  assert.equal((await call(port, 'GET', 'api/decks/nope/fit', { cookie: ben })).status, 404);
+});
+
+test('a fit request with bad input is refused', async (t) => {
+  const { port, cookie } = await fitSetup(t, 3, 4);
+  for (const body of [{}, { timezone: 7 }, { timezone: 'x'.repeat(65) }, { timezone: 'UTC', current6: [1, 2] }, { timezone: 'UTC', current7: Array(34).fill('x') }]) {
+    const res = await call(port, 'POST', 'api/decks/d1/fit', { cookie, body });
+    assert.equal(res.status, 400, JSON.stringify(body));
+    assert.equal(res.json.error, 'bad-request');
+  }
+});
+
+test('a fit returns weights for both models', async (t) => {
+  const { port, cookie, db } = await fitSetup(t, 250, 6);
+  const before = db.prepare('SELECT data FROM decks WHERE id = ?').get('d1').data;
+  const res = await call(port, 'POST', 'api/decks/d1/fit', { cookie, body: { timezone: 'Europe/Lisbon' } });
+  assert.equal(res.status, 200, res.text);
+  assert.equal(res.json.usable, 1500);
+  for (const [model, length] of [['fsrs6', 21], ['fsrs7', 34]]) {
+    assert.equal(typeof res.json[model].kept, 'boolean');
+    if (res.json[model].kept) assert.equal(res.json[model].params.length, length);
+  }
+  assert.equal(db.prepare('SELECT data FROM decks WHERE id = ?').get('d1').data, before);
+});
+
+test('the server answers other requests while a fit runs', async (t) => {
+  const { port, cookie } = await fitSetup(t, 250, 6);
+  const order = [];
+  const fit = call(port, 'POST', 'api/decks/d1/fit', { cookie, body: { timezone: 'Europe/Lisbon' } }).then((r) => order.push('fit') && r);
+  const me = call(port, 'GET', 'api/me', { cookie }).then((r) => order.push('me') && r);
+  const [fitRes, meRes] = await Promise.all([fit, me]);
+  assert.equal(fitRes.status, 200);
+  assert.equal(meRes.status, 200);
+  assert.deepEqual(order, ['me', 'fit']);
+});

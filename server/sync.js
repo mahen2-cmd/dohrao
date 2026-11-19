@@ -167,7 +167,7 @@ export function buildView(db, userId, now) {
 }
 
 /** 'own', 'given' (actively assigned to the user), 'other', or null when no such deck. */
-function access(db, userId, deckId) {
+export function access(db, userId, deckId) {
   const d = db.prepare('SELECT owner_id FROM decks WHERE id = ?').get(deckId);
   if (!d) return null;
   if (d.owner_id === userId) return 'own';

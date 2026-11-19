@@ -38,6 +38,11 @@ export const logIn = (username, password) => call('POST', 'api/login', { usernam
 export const signUp = ({ code, username, name, password }) => call('POST', 'api/signup', { code, username, name, password });
 export const logOut = () => call('POST', 'api/logout');
 
+/** How many of your answers on a deck a fit can use: `{ usable, needed }`. */
+export const fitStatus = (deckId) => call('GET', `api/decks/${part(deckId)}/fit`);
+/** Fit FSRS-6 and FSRS-7 to your answers on a deck: `{ fsrs6, fsrs7, usable }`. */
+export const fit = (deckId, body) => call('POST', `api/decks/${part(deckId)}/fit`, body);
+
 export const admin = {
   users: () => call('GET', 'api/admin/users'),
   invites: () => call('GET', 'api/admin/invites'),

@@ -8,6 +8,7 @@ import {
   convertCsvToFsrsItems,
   evaluateWithTimeSeriesSplits,
 } from '@open-spaced-repetition/binding';
+import { Worker } from 'node:worker_threads';
 import { DEFAULT_W, DEFAULT_W7 } from '../js/fsrs.js';
 
 /** Fewer answers than this and a fit mostly echoes the defaults, so it is not offered. */
@@ -78,4 +79,26 @@ export async function fitWeights({ reviews, timezone, current6, current7 }) {
     fsrs6: await fitModel(csv, timezone, 'FSRS-6', current6 ?? DEFAULT_W),
     fsrs7: await fitModel(csv, timezone, 'FSRS-7', current7 ?? DEFAULT_W7),
   };
+}
+
+// A fit of a few thousand answers takes well under a second; this only catches a stuck one.
+const FIT_TIMEOUT = 120_000;
+
+/** `fitWeights` in a worker thread, so the server keeps answering while it runs. */
+export function runFit(input) {
+  return new Promise((resolve, reject) => {
+    const worker = new Worker(new URL('./fit-worker.js', import.meta.url), { workerData: input });
+    const timer = setTimeout(() => {
+      worker.terminate();
+      reject(new Error('fit-failed'));
+    }, FIT_TIMEOUT);
+    const done = (fn, value) => {
+      clearTimeout(timer);
+      worker.terminate();
+      fn(value);
+    };
+    worker.once('message', ({ result, error }) => (error ? done(reject, new Error(error)) : done(resolve, result)));
+    worker.once('error', (error) => done(reject, error));
+    worker.once('exit', () => done(reject, new Error('fit-failed')));
+  });
 }

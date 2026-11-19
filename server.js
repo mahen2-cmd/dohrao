@@ -17,7 +17,8 @@ import {
   AuthError, signUp, logIn, createSession, userForSession, endSession, setPassword,
   createInvite, listInvites, revokeInvite, createLimiter,
 } from './server/auth.js';
-import { buildView, applyChanges } from './server/sync.js';
+import { buildView, applyChanges, access as deckAccess } from './server/sync.js';
+import { FIT_MIN_ANSWERS, runFit, usableReviews } from './server/fit.js';
 import { listUsers, ownedDecks, assignDeck, unassignDeck, setUrduSwitch, peopleProgress, personProgress } from './server/admin.js';
 import { backupDb } from './server/backup.js';
 import { loadSorter } from './server/sorter.js';
@@ -279,6 +280,8 @@ export function createRecallServer({ dataDir, origin, tts, translator, ankiReade
     media: createLimiter({ max: IMAGES_PER_DAY, windowMs: DAY }),
     // Studying with auto-play asks for a few a card, far fewer than this.
     tts: createLimiter({ max: 120, windowMs: 60 * 1000 }),
+    // Fitting FSRS is asked for now and then, a deck at a time.
+    fit: createLimiter({ max: 20, windowMs: DAY }),
   };
 
   const backup = () => {
@@ -432,6 +435,35 @@ export function createRecallServer({ dataDir, origin, tts, translator, ankiReade
     throw new HttpError(404, 'not-found');
   }
 
+  /**
+   * GET: how many of this person's answers on the deck a fit can use. POST: fit FSRS-6 and
+   * FSRS-7 to them and hand back the weights; the app saves those it keeps, as for any setting.
+   */
+  async function fit(req, res, user, deckId) {
+    const kind = deckAccess(db, user.id, deckId);
+    if (kind !== 'own' && kind !== 'given') throw new HttpError(404, 'not-found');
+    if (req.method === 'GET') {
+      return sendJson(res, 200, { usable: usableReviews(db, user.id, deckId).length, needed: FIT_MIN_ANSWERS });
+    }
+    if (req.method !== 'POST') throw new HttpError(404, 'not-found');
+    const { timezone, current6, current7 } = await readJson(req, MAX_FORM);
+    const weights = (w, length) => w === undefined || (Array.isArray(w) && w.length === length && w.every(Number.isFinite));
+    if (typeof timezone !== 'string' || timezone.length < 1 || timezone.length > 64 || !weights(current6, 21) || !weights(current7, 34)) {
+      throw new HttpError(400, 'bad-request');
+    }
+    const reviews = usableReviews(db, user.id, deckId);
+    if (reviews.length < FIT_MIN_ANSWERS) throw new HttpError(400, 'not-enough-answers');
+    if (!limits.fit.hit(user.id, Date.now())) throw new HttpError(429, 'rate-limited');
+    let result;
+    try {
+      result = await runFit({ reviews, timezone, current6, current7 });
+    } catch (error) {
+      console.error('fit failed:', error.message);
+      throw new HttpError(500, 'fit-failed');
+    }
+    return sendJson(res, 200, { ...result, usable: reviews.length });
+  }
+
   async function api(req, res, path) {
     const method = req.method;
     if (method === 'POST' && path === '/api/signup') {
@@ -468,6 +500,8 @@ export function createRecallServer({ dataDir, origin, tts, translator, ankiReade
       return fileRoute(res, () => upload(mediaDir, req, res));
     }
     if (method === 'GET' && path.startsWith('/api/media/')) return image(mediaDir, path.slice('/api/media/'.length), res);
+    const fitPath = /^\/api\/decks\/([^/]+)\/fit$/.exec(path);
+    if (fitPath) return fit(req, res, user, fitPath[1]);
     if (path.startsWith('/api/admin/')) {
       if (user.role !== 'admin') throw new HttpError(403, 'forbidden');
       return admin(req, res, user, path);
