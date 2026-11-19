@@ -1,8 +1,10 @@
 // Anki's scheduler, ported from Anki's source (anki/rslib/src/scheduler/states).
-// It has two modes, like Anki:
+// It has three modes:
 //   - 'sm2'  Anki's default: each interval is the last one times the card's ease
 //   - 'fsrs' Anki with FSRS switched on: intervals come from the FSRS-6 memory model
 //            (fsrs-rs, src/model_v6.rs)
+//   - 'fsrs7' the same, with intervals from the FSRS-7 memory model (fsrs-rs v7.0.0,
+//            src/model_v7.rs), which counts time in fractional days
 // Learning steps, relearning and fuzz are the same in both.
 // Pure functions only: no DOM, no storage. Times are epoch milliseconds.
 
@@ -139,6 +141,137 @@ export function nextMemory(memory, g, elapsed, w = DEFAULT_W) {
       g === Rating.Again ? stabilityAfterFailure(s, r, d, w) : stabilityAfterSuccess(s, r, d, g, w);
   }
   return { stability: clamp(stability, S_MIN, S_MAX), difficulty: nextDifficulty(d, g, w) };
+}
+
+// ---- FSRS-7 memory model (fsrs-rs v7.0.0, src/model_v7.rs) ------------------
+// A card has two stabilities, a slow one and a fast one that covers minutes and hours,
+// plus a difficulty. Time is in fractional days, so same-day reviews count.
+// A memory is `{ stability, stabilityFast, difficulty }`.
+
+// Default FSRS-7 parameters (w0..w33). w31..w33 are stored shifted; the formulas undo it.
+export const DEFAULT_W7 = [
+  0.1104, 2.2395, 3.9221, 11.7841, 6.1686, 0.6457, 3.6807, 1.9795, 0.0, 1.3826, 0.7024, 0.5999,
+  0.8146, 0.6398, 1.0, 1.3207, 0.6707, 3.8668, 0.4416, 0.0934, 1.8631, 0.6162, 1.0869, 0.1567,
+  0.0801, 0.2421, 0.9464, 0.1433, 0.7145, 0.0, 0.5667, 0.3734, 0.5333, 0.3048,
+];
+
+const BISECTION_ITERS = 50;
+
+function fastRecall7(t, sFast, w) {
+  const decay = -clamp(w[23] * Math.pow(sFast, w[33] - 0.3), 0.01, 0.95);
+  const factor = Math.exp(Math.min(Math.log(w[25]) / decay, 60)) - 1;
+  return Math.pow(1 + factor * (t / sFast), decay);
+}
+
+/** Probability of recall `t` days after the last review, for an FSRS-7 memory. */
+export function retrievability7(t, memory, w = DEFAULT_W7) {
+  t = Math.max(t, 0);
+  const s = Math.max(memory.stability, S_MIN);
+  const sFast = Math.max(memory.stabilityFast, S_MIN);
+  const d = clamp(memory.difficulty, D_MIN, D_MAX);
+  const r1 = fastRecall7(t, clamp(sFast, S_MIN, S_MAX), w);
+  const decay2 = -clamp(w[24], 0.01, 0.95);
+  const factor2 = Math.pow(w[26], 1 / decay2) - 1;
+  const timescale = Math.exp((d - 5) * (w[32] - 0.3));
+  const r2 = Math.pow(1 + factor2 * timescale * (t / s), decay2);
+  const weight1 = w[27] * Math.pow(sFast, -w[29]);
+  const weight2 = w[28] * Math.pow(s, w[30]) * Math.exp((d - 5) * (w[31] - 0.5));
+  const r = (weight1 * r1 + weight2 * r2) / (weight1 + weight2);
+  return r * (1 - 2e-5) + 1e-5;
+}
+
+const initDifficulty7 = (g, w) => w[4] - Math.exp(w[5] * (g - 1)) + 1;
+
+function nextDifficulty7(d, g, r, w) {
+  let delta = -w[6] * (g - 3);
+  if (g === Rating.Again) delta *= r + 0.1;
+  const damped = d + ((10 - d) * delta) / 9;
+  return clamp(initDifficulty7(Rating.Easy, w) * 0.01 + damped * 0.99, D_MIN, D_MAX);
+}
+
+// One stability trace's update; `start` picks its weights (7 slow, 15 fast).
+function nextStability7(w, s, d, r, g, start) {
+  const hardPenalty = g === Rating.Hard ? w[start + 6] : 1;
+  const easyBonus = g === Rating.Easy ? w[start + 7] : 1;
+  const failed = w[start + 3] * (Math.pow(s + 1, w[start + 4]) - 1) * Math.exp((1 - r) * w[start + 5]);
+  const postLapse = Math.min(s, failed);
+  const sinc =
+    Math.exp(w[start] - 1.5) *
+      (11 - d) *
+      Math.pow(s, -w[start + 1]) *
+      (Math.exp((1 - r) * w[start + 2]) - 1) *
+      hardPenalty *
+      easyBonus +
+    1;
+  return clamp(g > Rating.Again ? Math.max(postLapse, s * sinc) : postLapse, S_MIN, S_MAX);
+}
+
+/** FSRS-7 memory after answering `g`, `elapsed` (fractional) days after the last review. */
+export function nextMemory7(memory, g, elapsed, w = DEFAULT_W7) {
+  if (!memory || !memory.stability) {
+    const stability = clamp(w[g - 1], S_MIN, S_MAX);
+    return {
+      stability,
+      stabilityFast: clamp(stability * 0.8, S_MIN, S_MAX),
+      difficulty: clamp(initDifficulty7(g, w), D_MIN, D_MAX),
+    };
+  }
+  const last = {
+    stability: clamp(memory.stability, S_MIN, S_MAX),
+    stabilityFast: clamp(memory.stabilityFast, S_MIN, S_MAX),
+    difficulty: clamp(memory.difficulty, D_MIN, D_MAX),
+  };
+  const t = Math.max(elapsed, 0);
+  const r = retrievability7(t, last, w);
+  const slow = nextStability7(w, last.stability, last.difficulty, r, g, 7);
+  let fast = nextStability7(w, last.stabilityFast, last.difficulty, fastRecall7(t, last.stabilityFast, w), g, 15);
+  if (g === Rating.Again) fast = Math.min(fast, slow * 0.8);
+  return {
+    stability: slow,
+    stabilityFast: clamp(fast, S_MIN, S_MAX),
+    difficulty: nextDifficulty7(last.difficulty, g, r, w),
+  };
+}
+
+/** Days (fractional) until FSRS-7 recall drops to `retention`. */
+export function nextInterval7(memory, retention = 0.9, w = DEFAULT_W7) {
+  const dr = clamp(retention, 0.0001, 0.9999);
+  if (dr >= 0.9999) return 0;
+  let low = 0;
+  let high = Math.max(memory.stability, memory.stabilityFast, 1);
+  while (retrievability7(high, memory, w) > dr && high < S_MAX) high = Math.min(high * 2, S_MAX);
+  for (let i = 0; i < BISECTION_ITERS; i++) {
+    const mid = (low + high) / 2;
+    if (retrievability7(mid, memory, w) > dr) low = mid;
+    else high = mid;
+  }
+  return clamp((low + high) / 2, 0, S_MAX);
+}
+
+/**
+ * A starting FSRS-7 memory for a card that only has FSRS-6 memory: same difficulty, both
+ * stabilities scaled so recall is 90% at the FSRS-6 stability, as FSRS-6 stability is the
+ * time to 90%. Mirrors fsrs-rs scale_memory_state_to_interval.
+ */
+export function seedMemory7(stability6, difficulty6, w = DEFAULT_W7) {
+  const difficulty = clamp(difficulty6, D_MIN, D_MAX);
+  const interval = clamp(stability6, S_MIN, S_MAX);
+  const at = (logS) => {
+    const stability = clamp(Math.exp(logS), S_MIN, S_MAX);
+    return { stability, stabilityFast: clamp(stability * 0.8, S_MIN, S_MAX), difficulty };
+  };
+  let low = Math.log(S_MIN);
+  let high = Math.log(S_MAX);
+  if (0.9 <= retrievability7(interval, at(low), w)) return at(low);
+  if (0.9 >= retrievability7(interval, at(high), w)) return at(high);
+  for (let i = 0; i < BISECTION_ITERS; i++) {
+    const mid = (low + high) / 2;
+    const r = retrievability7(interval, at(mid), w);
+    if (Math.abs(r - 0.9) <= 1e-6) return at(mid);
+    if (r < 0.9) low = mid;
+    else high = mid;
+  }
+  return at((low + high) / 2);
 }
 
 // ---- Learning steps (anki: states/steps.rs) ---------------------------------
