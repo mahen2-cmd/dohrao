@@ -1,7 +1,19 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { DEFAULT_W7, nextInterval7, nextMemory7, retrievability7, seedMemory7 } from '../js/fsrs.js';
+import {
+  DAY,
+  DEFAULT_W7,
+  MINUTE,
+  State,
+  newSchedule,
+  nextInterval7,
+  nextMemory7,
+  preview,
+  retrievability7,
+  schedule,
+  seedMemory7,
+} from '../js/fsrs.js';
 
 // fsrs-rs works in f32, so compare its numbers with a relative tolerance.
 const close = (a, b, eps = 1e-4) =>
@@ -77,4 +89,115 @@ test('fsrs7: seeding hits 90% at the old stability', () => {
     close(m.stabilityFast / m.stability, 0.8);
     close(retrievability7(s6, m), 0.9, 1e-3);
   }
+});
+
+// ---- Scheduling with FSRS-7 --------------------------------------------------
+
+const T0 = new Date(2026, 0, 1, 9, 0, 0).getTime();
+const FIELDS7 = ['stability7', 'stabilityFast7', 'difficulty7'];
+
+/** Review a fresh card with the given ratings, each exactly when it is due. */
+function run(ratings, options, { drop7 = false } = {}) {
+  let card = newSchedule(T0);
+  let now = T0;
+  for (const r of ratings) {
+    if (drop7) for (const k of FIELDS7) delete card[k];
+    card = schedule(card, r, now, options);
+    now = card.due;
+  }
+  return card;
+}
+
+test('newSchedule includes the FSRS-7 fields', () => {
+  const card = newSchedule(T0);
+  for (const k of FIELDS7) assert.equal(card[k], 0, k);
+});
+
+test('fsrs7: learning steps are unchanged', () => {
+  const offsets = (scheduler) => {
+    const p = preview(newSchedule(T0), T0, { scheduler });
+    return [1, 2, 3].map((g) => [p[g].state, p[g].due - T0, p[g].left]);
+  };
+  assert.deepEqual(offsets('fsrs7'), offsets('fsrs'));
+  assert.deepEqual(offsets('fsrs7').map(([, ms]) => ms / MINUTE), [1, 5.5, 10]);
+});
+
+test('fsrs7: graduating and review intervals are whole days, ordered hard < good < easy', () => {
+  const card = run([3, 3, 3], { scheduler: 'fsrs7' });
+  assert.equal(card.state, State.Review);
+  const p = preview(card, card.due, { scheduler: 'fsrs7' });
+  const days = [2, 3, 4].map((g) => p[g].scheduledDays);
+  for (const d of days) assert.ok(Number.isInteger(d) && d >= 1, `${d}`);
+  assert.ok(days[0] < days[1] && days[1] < days[2], `${days}`);
+});
+
+test('fsrs7: same-day answers update FSRS-7 memory', () => {
+  const first = schedule(newSchedule(T0), 3, T0, { scheduler: 'fsrs7' });
+  const second = schedule(first, 3, first.due, { scheduler: 'fsrs7' });
+  assert.ok(second.stability7 > 0);
+  assert.notEqual(second.stability7, first.stability7);
+  // An answer a minute later and one ten minutes later are told apart.
+  const sooner = schedule(first, 3, T0 + MINUTE, { scheduler: 'fsrs7' });
+  assert.notEqual(sooner.stability7, second.stability7);
+});
+
+test('fsrs7: higher retention gives shorter intervals', () => {
+  const card = run([3, 3, 3, 3, 3], { scheduler: 'fsrs7' });
+  assert.ok(card.scheduledDays >= 10, `${card.scheduledDays}`);
+  const good = (retention) => preview(card, card.due, { scheduler: 'fsrs7', retention })[3].scheduledDays;
+  assert.ok(good(0.95) < good(0.85));
+});
+
+const oldReview = (over) => ({
+  ...newSchedule(T0),
+  state: State.Review,
+  stability: 30,
+  difficulty: 6,
+  scheduledDays: 30,
+  lastReview: T0,
+  reps: 5,
+  due: T0 + 30 * DAY,
+  ...over,
+});
+
+test('fsrs7: an old card is seeded from its FSRS-6 memory', () => {
+  const card = oldReview();
+  for (const k of FIELDS7) delete card[k];
+  const good = preview(card, T0 + 30 * DAY, { scheduler: 'fsrs7' })[3];
+  assert.ok(Number.isFinite(good.stability7) && good.stability7 > 0);
+  assert.ok(good.scheduledDays > 30, `${good.scheduledDays}`);
+});
+
+test('fsrs7: a card with no FSRS-6 memory starts fresh', () => {
+  const card = oldReview({ stability: 0, difficulty: 0 });
+  for (const k of FIELDS7) delete card[k];
+  const p = preview(card, T0 + 30 * DAY, { scheduler: 'fsrs7' });
+  for (const g of [1, 2, 3, 4]) {
+    assert.ok(Number.isFinite(p[g].stability7) && p[g].stability7 > 0, `${g}: ${p[g].stability7}`);
+    assert.ok(Number.isFinite(p[g].scheduledDays), `${g}: ${p[g].scheduledDays}`);
+  }
+});
+
+test('all three memories are kept in every mode', () => {
+  for (const scheduler of ['sm2', 'fsrs', 'fsrs7']) {
+    const card = run([3, 3, 3], { scheduler });
+    assert.ok(card.stability > 0, scheduler);
+    assert.ok(card.stability7 > 0, scheduler);
+    assert.ok(card.difficulty7 >= 1 && card.difficulty7 <= 10, scheduler);
+    assert.ok(card.ease > 0, scheduler);
+  }
+});
+
+test('fsrs and sm2 schedules are unchanged by FSRS-7', () => {
+  const pick = (c) => [c.due, c.scheduledDays, c.stability, c.difficulty, c.ease];
+  for (const scheduler of ['fsrs', 'sm2']) {
+    const ratings = [3, 3, 3, 2, 1, 3];
+    assert.deepEqual(pick(run(ratings, { scheduler })), pick(run(ratings, { scheduler }, { drop7: true })), scheduler);
+  }
+});
+
+test('fsrs7: intervals come from FSRS-7, not FSRS-6', () => {
+  // FSRS-7's Easy on a new card is 53.87 days (fsrs-rs); FSRS-6's is 8.
+  assert.equal(preview(newSchedule(T0), T0, { scheduler: 'fsrs7' })[4].scheduledDays, 54);
+  assert.equal(preview(newSchedule(T0), T0, { scheduler: 'fsrs' })[4].scheduledDays, 8);
 });

@@ -5,7 +5,7 @@
 //            (fsrs-rs, src/model_v6.rs)
 //   - 'fsrs7' the same, with intervals from the FSRS-7 memory model (fsrs-rs v7.0.0,
 //            src/model_v7.rs), which counts time in fractional days
-// Learning steps, relearning and fuzz are the same in both.
+// Learning steps, relearning and fuzz are the same in all three.
 // Pure functions only: no DOM, no storage. Times are epoch milliseconds.
 
 export const Rating = { Again: 1, Hard: 2, Good: 3, Easy: 4 };
@@ -352,6 +352,9 @@ export function newSchedule(now = Date.now()) {
     reps: 0,
     lapses: 0,
     lastReview: null,
+    stability7: 0,
+    stabilityFast7: 0,
+    difficulty7: 0,
   };
 }
 
@@ -360,15 +363,16 @@ export function newSchedule(now = Date.now()) {
  * Returns `{ 1: schedule, 2: schedule, 3: schedule, 4: schedule }`.
  *
  * Options:
- *   scheduler     'fsrs' (default) or 'sm2'
- *   retention     desired retention, 0..1; FSRS only
+ *   scheduler     'fsrs' (FSRS-6, the default), 'fsrs7' or 'sm2'
+ *   retention     desired retention, 0..1; FSRS-6 and FSRS-7 only
+ *   w             FSRS-6 parameters; FSRS-7 always uses DEFAULT_W7
  *   fuzz          number in [0, 1) used to spread review intervals; omit for none
  *   easyInterval  fixed interval in days for Easy on a card still being learned for
  *                 the first time; 0 means Anki's own choice (4 days in SM-2, and
  *                 whatever FSRS computes in FSRS mode)
  *
- * The FSRS memory state and the SM-2 ease are both kept up to date in either mode, so a
- * deck can switch between them at any time.
+ * The FSRS-6 and FSRS-7 memory states and the SM-2 ease are all kept up to date in every
+ * mode, so a deck can switch between them at any time.
  */
 export function preview(card, now = Date.now(), options = {}) {
   const {
@@ -384,11 +388,23 @@ export function preview(card, now = Date.now(), options = {}) {
   const ease = card.ease ?? INITIAL_EASE;
   const elapsed = card.lastReview == null ? 0 : daysElapsed(card.lastReview, now);
 
+  // FSRS-7 memory: the card's own, or one seeded from its FSRS-6 memory if it has none yet.
+  // FSRS-7 counts the exact time since the last answer, so same-day answers count.
+  const memory7In =
+    card.stability7 > 0
+      ? { stability: card.stability7, stabilityFast: card.stabilityFast7, difficulty: card.difficulty7 }
+      : card.lastReview != null && card.stability > 0
+        ? seedMemory7(card.stability, card.difficulty)
+        : null;
+  const elapsed7 = card.lastReview == null ? 0 : Math.max(0, (now - card.lastReview) / DAY);
+
   const memory = {};
   const interval = {};
   for (const g of [1, 2, 3, 4]) {
-    memory[g] = nextMemory(card, g, elapsed, w);
-    interval[g] = nextInterval(memory[g].stability, retention, w);
+    const m6 = nextMemory(card, g, elapsed, w);
+    const m7 = nextMemory7(memory7In, g, elapsed7);
+    memory[g] = { ...m6, stability7: m7.stability, stabilityFast7: m7.stabilityFast, difficulty7: m7.difficulty };
+    interval[g] = scheduler === 'fsrs7' ? nextInterval7(m7, retention) : nextInterval(m6.stability, retention, w);
   }
 
   const fuzzed = (days, minimum) => withReviewFuzz(fuzz, days, clamp(minimum, 1, maximum), maximum);
