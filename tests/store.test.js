@@ -1226,3 +1226,18 @@ test('bad fitted weights fall back to the defaults', () => {
     }
   }
 });
+
+test('fitted weights are saved and reset per deck', () => {
+  const a = setup({ scheduler: 'fsrs7' });
+  const b = store.createDeck({ name: 'Other' });
+  const before = store.snapshotOf(store.currentState());
+  store.setFittedWeights(a.id, { fsrs7Params: W7 });
+  assert.deepEqual(store.deck(a.id).fsrs7Params, W7);
+  assert.equal('fsrs7Params' in store.deck(b.id), false);
+  assert.deepEqual(store.diffState(before, store.currentState()).decks.map((d) => d.id), [a.id]);
+  store.setFittedWeights(a.id, { fsrsParams: Array(21).fill(1) });
+  assert.deepEqual(store.deck(a.id).fsrs7Params, W7, 'a model not passed is left alone');
+  store.setFittedWeights(a.id, { fsrsParams: null, fsrs7Params: null });
+  assert.equal('fsrsParams' in store.deck(a.id), false);
+  assert.equal('fsrs7Params' in store.deck(a.id), false);
+});

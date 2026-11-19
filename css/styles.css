@@ -1984,6 +1984,27 @@ math-field.math-input:focus-within {
   color: var(--muted);
   font-size: 12.5px;
 }
+.fit-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  margin-top: 12px;
+}
+.fit-row[hidden] {
+  display: none;
+}
+.fit-count {
+  flex: 1 1 100%;
+  color: var(--muted);
+  font-size: 13px;
+}
+.fit-result:empty {
+  display: none;
+}
+.fit-result {
+  margin-top: 8px;
+}
 .field-row {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -4050,4 +4071,7 @@ table.upcoming {
     transform: translateY(24px);
     opacity: 0;
   }
+}
+.fit-row > [hidden] {
+  display: none;
 }

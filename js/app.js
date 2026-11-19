@@ -722,6 +722,7 @@ function openDeckDialog(deck) {
       h('label', { class: 'field' }, h('span', null, 'FSRS retention (%)'), retention),
     ),
     h('small', { class: 'field-note' }, 'SM-2 grows each interval by the card\u2019s ease, as Anki does out of the box. FSRS-6 matches Anki with FSRS switched on. FSRS-7 is the newest model, and also learns from answers given minutes apart. You can switch at any time.'),
+    deck && fitSection(deck),
     canSpeak() && [
       h(
         'div',
@@ -767,6 +768,83 @@ function openDeckDialog(deck) {
   );
   const dialog = modal(deck ? 'Deck settings' : 'New deck', form, { narrow: true, onclose: render });
   (own ? name : newPerDay).focus();
+}
+
+const FIT_ERRORS = { 'not-enough-answers': 'Not enough answers to fit yet.' };
+const count = (n) => n.toLocaleString('en-US');
+const ownWeights = (list, length) => (Array.isArray(list) && list.length === length ? list : undefined);
+
+/**
+ * Fitting FSRS to this deck in its settings: how many of the person's answers a fit can use, a
+ * button that fits once there are enough, and a way back to the default weights. The weights a
+ * fit keeps are saved on the deck like its other settings, at once, not when the dialog is saved.
+ */
+function fitSection(deck) {
+  const hasWeights = () => {
+    const d = store.deck(deck.id);
+    return Boolean(d?.fsrsParams || d?.fsrs7Params);
+  };
+  const counter = h('span', { class: 'fit-count' });
+  const result = h('small', { class: 'field-note fit-result', role: 'status' });
+  let status = null;
+  const ready = () => status && status.usable >= status.needed;
+  const reset = h(
+    'button',
+    {
+      class: 'btn',
+      type: 'button',
+      hidden: !hasWeights(),
+      onclick: () => {
+        store.setFittedWeights(deck.id, { fsrsParams: null, fsrs7Params: null });
+        reset.hidden = true;
+        result.textContent = '';
+      },
+    },
+    'Reset to defaults',
+  );
+  const button = h('button', { class: 'btn', type: 'button', disabled: true, onclick: () => run() }, 'Fit to my answers');
+  const row = h('div', { class: 'fit-row', hidden: true }, counter, button, reset);
+
+  api
+    .fitStatus(deck.id)
+    .then((s) => {
+      status = s;
+      counter.textContent = `Answers ready for fitting: ${count(s.usable)} of ${count(s.needed)}`;
+      button.disabled = !ready();
+      row.hidden = false;
+    })
+    .catch(() => {});
+
+  async function run() {
+    button.disabled = true;
+    button.textContent = 'Fitting\u2026';
+    result.textContent = '';
+    const d = store.deck(deck.id);
+    try {
+      const { fsrs6, fsrs7 } = await api.fit(deck.id, {
+        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC',
+        current6: ownWeights(d.fsrsParams, 21),
+        current7: ownWeights(d.fsrs7Params, 34),
+      });
+      const kept = {};
+      if (fsrs6.kept) kept.fsrsParams = fsrs6.params;
+      if (fsrs7.kept) kept.fsrs7Params = fsrs7.params;
+      if (Object.keys(kept).length) {
+        store.setFittedWeights(deck.id, kept);
+        const best = Math.max(...[fsrs6, fsrs7].filter((r) => r.kept).map((r) => r.improvement));
+        result.textContent = `Fitted. Predictions are ${best}% more accurate on your answers.`;
+      } else {
+        result.textContent = 'Kept the current weights; the fit wasn\u2019t better.';
+      }
+      reset.hidden = !hasWeights();
+    } catch (error) {
+      result.textContent = FIT_ERRORS[error.message] ?? 'Fitting failed. Try again later.';
+    } finally {
+      button.textContent = 'Fit to my answers';
+      button.disabled = !ready();
+    }
+  }
+  return [row, result];
 }
 
 /**

@@ -471,6 +471,20 @@ export function updateDeck(id, patch) {
   save();
 }
 
+/**
+ * Save FSRS weights fitted to the person's answers on a deck: `fsrsParams` (FSRS-6) and
+ * `fsrs7Params` (FSRS-7). A model left out is left alone; null takes its weights away.
+ */
+export function setFittedWeights(id, weights) {
+  const d = deck(id);
+  for (const key of ['fsrsParams', 'fsrs7Params']) {
+    if (!(key in weights)) continue;
+    if (weights[key] === null) delete d[key];
+    else d[key] = weights[key];
+  }
+  save();
+}
+
 // Hiding a deck takes it off the home page's list and today's figures. It is the user's own
 // choice, kept per user like the deck's other personal settings.
 export const isHidden = (d) => d?.hidden === true;
