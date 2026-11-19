@@ -3337,6 +3337,7 @@ function currentStudyCard(deckId, now) {
     card = store.nextCard(deckId, now, deck.studyFilter);
     session.cardId = card?.id ?? null;
     session.revealed = false;
+    session.shownAt = Date.now(); // the answer's time, for the review log, counts from here
   }
   return card;
 }
@@ -3367,7 +3368,9 @@ function reveal() {
 function rate(rating) {
   if (!session.cardId || !session.revealed) return;
   const count = session.undo.countAnswer(session.cardId);
-  session.undo.record(store.answerCard(session.cardId, rating, Date.now(), { count }));
+  const now = Date.now();
+  const duration = session.shownAt ? now - session.shownAt : null;
+  session.undo.record(store.answerCard(session.cardId, rating, now, { count, duration }));
   session.cardId = null;
   session.done++;
   render();
@@ -3378,7 +3381,7 @@ function undoAnswer() {
   // A card deleted since it was answered cannot come back; undo goes further back instead.
   const copy = session.undo.undo(store.restoreCard);
   if (copy) {
-    Object.assign(session, { cardId: copy.id, revealed: true, done: Math.max(0, session.done - 1) });
+    Object.assign(session, { cardId: copy.id, revealed: true, done: Math.max(0, session.done - 1), shownAt: Date.now() });
     stopSpeaking();
   }
   render();

@@ -1057,3 +1057,101 @@ test('undoing an answer keeps edits made to the card since', () => {
   assert.equal(restored.reps, 0);
   assert.equal('introduced' in restored, false);
 });
+
+// ---- Review log ---------------------------------------------------------------
+
+const withLog = () => store.currentState();
+
+test('answering logs one review with the card\'s state before the answer', () => {
+  const deck = setup();
+  const card = store.addCard(deck.id, 'front', 'back', T0);
+  store.answerCard(card.id, Rating.Good, T0, { duration: 4200 });
+  const [first] = store.reviewLog();
+  assert.equal(store.reviewLog().length, 1);
+  assert.ok(typeof first.id === 'string' && first.id.length > 0);
+  assert.deepEqual(
+    { ...first, id: undefined },
+    {
+      id: undefined, cardId: card.id, deckId: deck.id, at: T0, rating: 3, state: State.New, elapsed: null,
+      duration: 4200, scheduler: 'fsrs', retention: 0.9, intervalBefore: 0,
+      intervalAfter: store.card(card.id).scheduledDays,
+    },
+  );
+  store.answerCard(card.id, Rating.Good, T0 + 10 * MINUTE);
+  const second = store.reviewLog()[1];
+  assert.equal(second.state, State.Learning);
+  assert.equal(second.elapsed, 10 * MINUTE);
+  assert.equal(second.duration, null);
+});
+
+test('duration is capped at 60 seconds', () => {
+  const deck = setup();
+  const card = store.addCard(deck.id, 'front', 'back', T0);
+  store.answerCard(card.id, Rating.Good, T0, { duration: 500_000 });
+  assert.equal(store.reviewLog()[0].duration, store.MAX_DURATION);
+  assert.equal(store.MAX_DURATION, 60_000);
+});
+
+test('undo removes the review whether or not it was sent', () => {
+  const deck = setup();
+  const card = store.addCard(deck.id, 'front', 'back', T0);
+  const copy = store.answerCard(card.id, Rating.Good, T0);
+  const sent = store.snapshotOf(withLog());
+  store.restoreCard(copy);
+  assert.equal(store.reviewLog().length, 0);
+  const changes = store.diffState(sent, withLog());
+  assert.deepEqual(changes.deletedReviews, [copy.reviewId]);
+  assert.equal(changes.reviews, undefined);
+  // Undone before it was ever sent: it never goes up.
+  const before = store.snapshotOf(withLog());
+  const again = store.answerCard(card.id, Rating.Good, T0);
+  store.restoreCard(again);
+  const unsent = store.diffState(before, withLog());
+  assert.equal(unsent.reviews, undefined);
+  assert.deepEqual(unsent.deletedReviews, [again.reviewId]);
+});
+
+test('undo removes the review even when the card was deleted meanwhile', () => {
+  const deck = setup();
+  const card = store.addCard(deck.id, 'front', 'back', T0);
+  const copy = store.answerCard(card.id, Rating.Good, T0);
+  store.deleteCard(card.id);
+  assert.equal(store.restoreCard(copy), false);
+  assert.equal(store.reviewLog().length, 0);
+});
+
+test('sync sends new reviews once', () => {
+  const deck = setup();
+  const a = store.addCard(deck.id, 'a', 'a', T0);
+  const b = store.addCard(deck.id, 'b', 'b', T0 + 1);
+  store.answerCard(a.id, Rating.Good, T0);
+  const s1 = store.snapshotOf(withLog());
+  store.answerCard(b.id, Rating.Again, T0 + 1000);
+  const { reviews } = store.diffState(s1, withLog());
+  assert.equal(reviews.length, 1);
+  assert.equal(reviews[0].cardId, b.id);
+  assert.equal(store.diffState(store.snapshotOf(withLog()), withLog()), null);
+});
+
+test('pending changes carry reviews and undone ids', () => {
+  const deck = setup();
+  const card = store.addCard(deck.id, 'front', 'back', T0);
+  const empty = store.snapshotOf(withLog());
+  const copy = store.answerCard(card.id, Rating.Good, T0);
+  const other = store.answerCard(card.id, Rating.Good, T0 + MINUTE);
+  store.restoreCard(other);
+  const pending = JSON.parse(JSON.stringify(store.diffState(empty, withLog())));
+  store.reset();
+  store.applyPending(pending);
+  assert.deepEqual(store.reviewLog().map((r) => r.id), [copy.reviewId]);
+  assert.deepEqual(store.currentState().reviewsUndone, [other.reviewId]);
+});
+
+test('the backup download leaves the review log out', () => {
+  const deck = setup();
+  const card = store.addCard(deck.id, 'front', 'back', T0);
+  store.answerCard(card.id, Rating.Good, T0);
+  const backup = JSON.parse(store.exportData());
+  assert.equal('reviews' in backup, false);
+  assert.equal('reviewsUndone' in backup, false);
+});

@@ -34,7 +34,12 @@ export const DECK_DEFAULTS = {
 
 // `daily` counts the answers given on each day. `log` breaks the same answers down:
 // log[day][deckId] holds twelve counts, Again to Easy for each kind in ANSWER_KINDS.
-const emptyState = () => ({ version: 1, decks: [], cards: [], daily: {}, log: {}, settings: {} });
+// `reviews` holds the answers logged here since the state was loaded, one entry each, and
+// `reviewsUndone` the ids of those taken back by undo; the server keeps the full log.
+const emptyState = () => ({ version: 1, decks: [], cards: [], daily: {}, log: {}, settings: {}, reviews: [], reviewsUndone: [] });
+
+// The most an answer's time is counted as, as in Anki.
+export const MAX_DURATION = 60_000;
 
 let state = emptyState();
 
@@ -79,6 +84,8 @@ export function snapshotOf(s) {
     daily: JSON.stringify(s.daily),
     log: JSON.stringify(s.log),
     settings: JSON.stringify(s.settings),
+    reviews: new Map((s.reviews ?? []).map((r) => [r.id, JSON.stringify(r)])),
+    reviewsUndone: new Set(s.reviewsUndone ?? []),
   };
 }
 
@@ -94,6 +101,11 @@ function changesBetween(before, after, savedAt) {
   for (const key of ['daily', 'log', 'settings']) {
     if (before[key] !== after[key]) changes[key] = JSON.parse(after[key]);
   }
+  // The review log only grows, so only entries not sent before go, and ids undone since.
+  const reviews = [...after.reviews].filter(([id]) => !before.reviews.has(id)).map(([, json]) => JSON.parse(json));
+  const undone = [...after.reviewsUndone].filter((id) => !before.reviewsUndone.has(id));
+  if (reviews.length) changes.reviews = reviews;
+  if (undone.length) changes.deletedReviews = undone;
   if (!Object.keys(changes).length) return null;
   return { ...changes, savedAt: savedAt ?? Date.now() };
 }
@@ -114,6 +126,8 @@ const idsOf = (changes) => [
   ...(changes.cards ?? []).map((c) => c.id),
   ...(changes.deletedDecks ?? []),
   ...(changes.deletedCards ?? []),
+  ...(changes.reviews ?? []).map((r) => r.id),
+  ...(changes.deletedReviews ?? []),
 ];
 
 // ---- Changes not yet sent, kept in the browser
@@ -166,7 +180,13 @@ function applyLocal(changes, skip = new Set()) {
   if (changes.daily) state.daily = mergeCounts(state.daily, changes.daily);
   if (changes.log) state.log = mergeCounts(state.log, changes.log);
   if (changes.settings) state.settings = changes.settings;
+  const logged = new Set(state.reviews.map((r) => r.id));
+  for (const r of changes.reviews ?? []) if (!logged.has(r.id) && !skip.has(r.id)) state.reviews.push(r);
+  for (const id of changes.deletedReviews ?? []) if (!state.reviewsUndone.includes(id)) state.reviewsUndone.push(id);
 }
+
+/** Lay changes kept in the browser over the state, as loading does. */
+export const applyPending = (changes) => applyLocal(changes);
 
 // ---- Talking to the server
 
@@ -376,6 +396,9 @@ function normalize(data) {
     settings: data.settings ?? {},
     decks,
     cards,
+    // The review log lives on the server; a loaded state starts with none of its own.
+    reviews: [],
+    reviewsUndone: [],
   };
 }
 
@@ -1095,11 +1118,28 @@ const SCHEDULE_KEYS = [...Object.keys(newSchedule()), 'introduced'];
  * With `count: false` the answer is not added to the day's counts: a card answered again
  * after an undo was already counted, and counts are never lowered.
  */
-export function answerCard(id, rating, now = Date.now(), { count = true } = {}) {
+export function answerCard(id, rating, now = Date.now(), { count = true, duration = null } = {}) {
   const c = card(id);
   const before = { id: c.id };
   for (const key of SCHEDULE_KEYS) if (key in c) before[key] = structuredClone(c[key]);
-  const next = schedule(c, rating, now, schedulingOptions(c));
+  const options = schedulingOptions(c);
+  const next = schedule(c, rating, now, options);
+  const review = {
+    id: uid(),
+    cardId: c.id,
+    deckId: c.deckId,
+    at: now,
+    rating,
+    state: c.state,
+    elapsed: c.lastReview == null ? null : now - c.lastReview,
+    duration: duration == null ? null : Math.min(Math.max(0, Math.round(duration)), MAX_DURATION),
+    scheduler: options.scheduler ?? null,
+    retention: options.retention ?? null,
+    intervalBefore: c.scheduledDays ?? null,
+    intervalAfter: next.scheduledDays ?? null,
+  };
+  state.reviews.push(review);
+  before.reviewId = review.id;
   if (c.state === State.New) c.introduced = now;
   const kind = c.state !== State.Review ? 0 : c.scheduledDays < MATURE_DAYS ? 1 : 2;
   Object.assign(c, next);
@@ -1115,8 +1155,16 @@ export function answerCard(id, rating, now = Date.now(), { count = true } = {}) 
 
 /** Put back a card's scheduling as `answerCard` handed it back, undoing the answer. False when the card is gone. */
 export function restoreCard(copy) {
+  // The answer leaves the review log even when its card has gone since.
+  if (copy.reviewId) {
+    state.reviews = state.reviews.filter((r) => r.id !== copy.reviewId);
+    state.reviewsUndone.push(copy.reviewId);
+  }
   const c = card(copy.id);
-  if (!c) return false;
+  if (!c) {
+    if (copy.reviewId) save();
+    return false;
+  }
   for (const key of SCHEDULE_KEYS) {
     if (key in copy) c[key] = structuredClone(copy[key]);
     else delete c[key];
@@ -1198,7 +1246,16 @@ export function statistics(deckId, days = 30, now = Date.now()) {
   };
 }
 
-export const exportData = () => JSON.stringify(state, null, 2);
+export const exportData = () => {
+  const { reviews, reviewsUndone, ...rest } = state;
+  return JSON.stringify(rest, null, 2);
+};
+
+/** A copy of the whole state, review log included. */
+export const currentState = () => structuredClone(state);
+
+/** The answers logged here since the state was loaded, oldest first. */
+export const reviewLog = () => state.reviews;
 
 export function importData(json) {
   state = normalize(JSON.parse(json));
