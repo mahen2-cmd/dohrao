@@ -201,3 +201,12 @@ test('fsrs7: intervals come from FSRS-7, not FSRS-6', () => {
   assert.equal(preview(newSchedule(T0), T0, { scheduler: 'fsrs7' })[4].scheduledDays, 54);
   assert.equal(preview(newSchedule(T0), T0, { scheduler: 'fsrs' })[4].scheduledDays, 8);
 });
+
+test('fsrs7: a fixed Easy interval is never shorter than Good', () => {
+  // New decks fix Easy at 4 days, but FSRS-7's first Good is about 5 days.
+  const p = preview(newSchedule(T0), T0, { scheduler: 'fsrs7', easyInterval: 4 });
+  const first = schedule(newSchedule(T0), 3, T0, { scheduler: 'fsrs7', easyInterval: 4 });
+  const q = preview(first, first.due, { scheduler: 'fsrs7', easyInterval: 4 });
+  assert.ok(q[4].scheduledDays > q[3].scheduledDays, `easy ${q[4].scheduledDays} good ${q[3].scheduledDays}`);
+  assert.equal(p[4].scheduledDays >= 4, true);
+});

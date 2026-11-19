@@ -28,7 +28,7 @@ export const MAX_CARDS = 50_000;
 export const MAX_DECKS = 1_000;
 // Progress fields the app reads, which must be finite numbers. Others (from a newer version
 // of the app) are kept as they come.
-const PROGRESS_NUMBERS = ['stability', 'difficulty', 'due', 'scheduledDays', 'ease', 'left', 'reps', 'lapses', 'introduced', 'order', 'pulled'];
+const PROGRESS_NUMBERS = ['stability', 'difficulty', 'stability7', 'stabilityFast7', 'difficulty7', 'due', 'scheduledDays', 'ease', 'left', 'reps', 'lapses', 'introduced', 'order', 'pulled'];
 
 /** Whether a card's progress has the types the app relies on, and a sensible size. */
 // A key set to undefined is left out, as it is when sent as JSON.

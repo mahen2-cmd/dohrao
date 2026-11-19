@@ -8,7 +8,8 @@ import { URDU_FIELDS } from './urdu.js';
 import { DAY, State, dayStart, newSchedule, nextDayAt, preview, schedule } from './fsrs.js';
 
 // Per-deck settings.
-//   scheduler     'fsrs' (Anki with FSRS switched on, the default) or 'sm2' (Anki's older algorithm)
+//   scheduler     'fsrs' (FSRS-6, Anki with FSRS switched on, the default), 'fsrs7' (FSRS-7, the
+//                 newest) or 'sm2' (Anki's older algorithm)
 //   retention     desired retention, used by FSRS
 //   easyInterval  days until the next review when Easy is pressed on a card still being
 //                 learned for the first time, like Anki's "Easy interval"

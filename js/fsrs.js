@@ -476,7 +476,12 @@ export function preview(card, now = Date.now(), options = {}) {
     return fuzzed(whole(interval[3]), 1);
   };
   const graduateEasy = () => {
-    if (!relearning && easyInterval > 0) return Math.min(Math.round(easyInterval), maximum);
+    if (!relearning && easyInterval > 0) {
+      const fixed = Math.round(easyInterval);
+      // FSRS-7's Good can pass a short fixed Easy interval; keep Easy the longer of the two.
+      const floor = scheduler === 'fsrs7' ? graduateGood() + 1 : 0;
+      return Math.min(Math.max(fixed, floor), maximum);
+    }
     if (sm2) return Math.min(relearning ? restart + 1 : GRADUATING_EASY, maximum);
     const good = fuzzed(interval[3], 1);
     return fuzzed(whole(interval[4]), good + 1);

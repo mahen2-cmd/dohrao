@@ -472,6 +472,9 @@ test('card progress with a value of the wrong type is rejected, and nothing of i
     ['n4', { reserved: 'yes' }],
     ['n5', { order: [] }],
     ['n6', { pulled: {} }],
+    ['n7', { stability7: 'x' }],
+    ['n8', { stabilityFast7: null }],
+    ['n9', { difficulty7: {} }],
   ];
   const { rejected } = applyChanges(db, ana.id, { cards: bad.map(([id, over]) => cardOf(id, { ...over, front: 'changed' })) }, NOW);
   assert.deepEqual(rejected, bad.map(([id]) => id));
@@ -482,12 +485,13 @@ test('card progress with a value of the wrong type is rejected, and nothing of i
 
 test('valid card progress still saves, with null lastReview, a reserve flag and keys from newer versions', async () => {
   const { db, ana } = await seed();
-  const card = cardOf('c1', { state: 2, due: NOW + 5, lastReview: NOW - 1, reserved: true, order: 3, pulled: NOW, introduced: NOW, someFutureField: { any: 'thing' } });
+  const card = cardOf('c1', { state: 2, due: NOW + 5, lastReview: NOW - 1, reserved: true, order: 3, pulled: NOW, introduced: NOW, stability7: 3.9, stabilityFast7: 3.1, difficulty7: 3.5, someFutureField: { any: 'thing' } });
   const fresh = cardOf('c9', { lastReview: null });
   assert.deepEqual(applyChanges(db, ana.id, { cards: [card, fresh] }, NOW), { rejected: [] });
   const saved = buildView(db, ana.id, NOW).cards.find((c) => c.id === 'c1');
   assert.equal(saved.due, NOW + 5);
   assert.deepEqual(saved.someFutureField, { any: 'thing' });
+  assert.equal(saved.stability7, 3.9);
 });
 
 test('a progress record over 4 KB is rejected', async () => {

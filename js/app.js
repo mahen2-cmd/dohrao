@@ -619,7 +619,7 @@ function openDeckDialog(deck) {
   const scheduler = h(
     'select',
     null,
-    [['fsrs', 'FSRS'], ['sm2', 'SM-2 (older Anki default)']].map(([value, label]) =>
+    [['fsrs', 'FSRS-6'], ['fsrs7', 'FSRS-7 (newest)'], ['sm2', 'SM-2 (older Anki default)']].map(([value, label]) =>
       h('option', { value, selected: value === defaults.scheduler }, label),
     ),
   );
@@ -721,7 +721,7 @@ function openDeckDialog(deck) {
       h('label', { class: 'field' }, h('span', null, 'Scheduling'), scheduler),
       h('label', { class: 'field' }, h('span', null, 'FSRS retention (%)'), retention),
     ),
-    h('small', { class: 'field-note' }, 'Anki default grows each interval by the card\u2019s ease, as Anki does out of the box. FSRS matches Anki with FSRS switched on. You can switch at any time.'),
+    h('small', { class: 'field-note' }, 'SM-2 grows each interval by the card\u2019s ease, as Anki does out of the box. FSRS-6 matches Anki with FSRS switched on. FSRS-7 is the newest model, and also learns from answers given minutes apart. You can switch at any time.'),
     canSpeak() && [
       h(
         'div',
