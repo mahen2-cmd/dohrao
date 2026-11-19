@@ -439,6 +439,8 @@ export function createRecallServer({ dataDir, origin, tts, translator, ankiReade
    * GET: how many of this person's answers on the deck a fit can use. POST: fit FSRS-6 and
    * FSRS-7 to them and hand back the weights; the app saves those it keeps, as for any setting.
    */
+  // Who has a fit running now; each person runs one at a time.
+  const fitting = new Set();
   async function fit(req, res, user, deckId) {
     const kind = deckAccess(db, user.id, deckId);
     if (kind !== 'own' && kind !== 'given') throw new HttpError(404, 'not-found');
@@ -453,13 +455,18 @@ export function createRecallServer({ dataDir, origin, tts, translator, ankiReade
     }
     const reviews = usableReviews(db, user.id, deckId);
     if (reviews.length < FIT_MIN_ANSWERS) throw new HttpError(400, 'not-enough-answers');
+    if (fitting.has(user.id)) throw new HttpError(429, 'fit-running');
     if (!limits.fit.hit(user.id, Date.now())) throw new HttpError(429, 'rate-limited');
+    fitting.add(user.id);
     let result;
     try {
       result = await runFit({ reviews, timezone, current6, current7 });
     } catch (error) {
+      if (error.message === 'busy') throw new HttpError(429, 'busy');
       console.error('fit failed:', error.message);
       throw new HttpError(500, 'fit-failed');
+    } finally {
+      fitting.delete(user.id);
     }
     return sendJson(res, 200, { ...result, usable: reviews.length });
   }

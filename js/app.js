@@ -770,7 +770,11 @@ function openDeckDialog(deck) {
   (own ? name : newPerDay).focus();
 }
 
-const FIT_ERRORS = { 'not-enough-answers': 'Not enough answers to fit yet.' };
+const FIT_ERRORS = {
+  'not-enough-answers': 'Not enough answers to fit yet.',
+  'fit-running': 'A fit is already running. Try again in a minute.',
+  busy: 'Other fits are running. Try again in a minute.',
+};
 const count = (n) => n.toLocaleString('en-US');
 const ownWeights = (list, length) => (Array.isArray(list) && list.length === length ? list : undefined);
 

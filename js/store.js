@@ -5,7 +5,7 @@ import { mergeCounts } from './counts.js';
 import { dayKey, streakOf } from './progress.js';
 import { readableTopicName, prefixGroup, resolveFilter, inFilter, effectiveTopic } from './topics.js';
 import { URDU_FIELDS } from './urdu.js';
-import { DAY, State, dayStart, newSchedule, nextDayAt, preview, schedule } from './fsrs.js';
+import { DAY, State, dayStart, newSchedule, nextDayAt, preview } from './fsrs.js';
 
 // Per-deck settings.
 //   scheduler     'fsrs' (FSRS-6, Anki with FSRS switched on, the default), 'fsrs7' (FSRS-7, the
@@ -1158,9 +1158,22 @@ function schedulingOptions(c) {
   };
 }
 
+// What answering can change on a card; each must come out a real number.
+const OUTCOME_KEYS = ['due', 'scheduledDays', 'stability', 'difficulty', 'stability7', 'stabilityFast7', 'difficulty7'];
+
+/**
+ * Every rating's outcome for `c`, as `preview` gives it. Weights that are the right size but
+ * nonsense (hand-edited, say) can still break the formulas; then the defaults are used instead.
+ */
+function outcomes(c, now, options = schedulingOptions(c)) {
+  const p = preview(c, now, options);
+  const sound = [1, 2, 3, 4].every((g) => OUTCOME_KEYS.every((key) => Number.isFinite(p[g][key])));
+  if (sound || (!options.w && !options.w7)) return p;
+  return preview(c, now, { ...options, w: undefined, w7: undefined });
+}
+
 export function previewCard(id, now = Date.now()) {
-  const c = card(id);
-  return preview(c, now, schedulingOptions(c));
+  return outcomes(card(id), now);
 }
 
 // What answering changes on a card, and so what undoing puts back. Its text, deck and the rest
@@ -1177,7 +1190,7 @@ export function answerCard(id, rating, now = Date.now(), { count = true, duratio
   const before = { id: c.id };
   for (const key of SCHEDULE_KEYS) if (key in c) before[key] = structuredClone(c[key]);
   const options = schedulingOptions(c);
-  const next = schedule(c, rating, now, options);
+  const next = outcomes(c, now, options)[rating];
   const review = {
     id: uid(),
     cardId: c.id,

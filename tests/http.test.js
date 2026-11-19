@@ -9,6 +9,7 @@ import { createRecallServer } from '../server.js';
 import { openDb } from '../server/db.js';
 import { createUser, createInvite } from '../server/auth.js';
 import { applyChanges } from '../server/sync.js';
+import { fitLoad } from '../server/fit.js';
 
 const NOW = Date.now();
 const fakeTts = { speak: async () => ({ body: Buffer.from('x'), type: 'audio/mpeg' }), engine: async () => 'Fake' };
@@ -726,4 +727,28 @@ test('the server answers other requests while a fit runs', async (t) => {
   assert.equal(fitRes.status, 200);
   assert.equal(meRes.status, 200);
   assert.deepEqual(order, ['me', 'fit']);
+});
+
+test('one person runs one fit at a time', async (t) => {
+  const { port, cookie } = await fitSetup(t, 250, 6);
+  const body = { timezone: 'Europe/Lisbon' };
+  const results = await Promise.all([1, 2].map(() => call(port, 'POST', 'api/decks/d1/fit', { cookie, body })));
+  assert.deepEqual(results.map((r) => r.status).sort(), [200, 429]);
+  assert.equal(results.find((r) => r.status === 429).json.error, 'fit-running');
+});
+
+test('fits from different people run one after another', async (t) => {
+  const s = await fitSetup(t, 250, 6);
+  const cookies = [s.cookie];
+  for (const name of ['bea', 'cid']) {
+    const user = await createUser(s.db, { username: name, name, password: `${name}-password` }, NOW);
+    s.db.prepare('INSERT INTO assignments (deck_id, user_id, active, assigned) VALUES (?, ?, 1, ?)').run('d1', user.id, NOW);
+    const reviews = s.db.prepare('SELECT data FROM reviews').all().map((r) => JSON.parse(r.data)).map((r) => ({ ...r, id: `${name}-${r.id}` }));
+    assert.deepEqual(applyChanges(s.db, user.id, { reviews }, NOW), { rejected: [] });
+    cookies.push((await logIn(s.port, name, `${name}-password`)).cookie);
+  }
+  fitLoad().most = 0;
+  const results = await Promise.all(cookies.map((cookie) => call(s.port, 'POST', 'api/decks/d1/fit', { cookie, body: { timezone: 'Europe/Lisbon' } })));
+  assert.deepEqual(results.map((r) => r.status), [200, 200, 200]);
+  assert.equal(fitLoad().most, 1);
 });

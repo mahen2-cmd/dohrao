@@ -1,21 +1,11 @@
-// Fitting FSRS-6 and FSRS-7 weights to one person's answers on one deck, from the review log.
-// Uses the official optimizer (fsrs-rs, through @open-spaced-repetition/binding). It runs on
-// whatever thread calls it and blocks that thread, so the server calls it from a worker.
+// Fitting FSRS-6 and FSRS-7 weights to one person's answers on one deck, from the review log:
+// which answers a fit can use, and running a fit in a worker thread. The optimizer itself is in
+// fit-model.js, which only the worker loads, so the server starts even if it cannot.
 
-import {
-  FSRSBinding,
-  computeParameters,
-  convertCsvToFsrsItems,
-  evaluateWithTimeSeriesSplits,
-} from '@open-spaced-repetition/binding';
 import { Worker } from 'node:worker_threads';
-import { DEFAULT_W, DEFAULT_W7 } from '../js/fsrs.js';
 
 /** Fewer answers than this and a fit mostly echoes the defaults, so it is not offered. */
 export const FIT_MIN_ANSWERS = 1000;
-
-// A new day starts at 4am, as in the scheduler.
-const ROLLOVER_HOUR = 4;
 
 /**
  * `userId`'s logged answers to the cards now in `deckId`, by card then time, keeping only cards
@@ -53,39 +43,35 @@ export function reviewCsv(reviews) {
   return new TextEncoder().encode(lines.join('\n'));
 }
 
-/**
- * Fit one model and score it against `current` on the same answers. The fit is scored out of
- * sample (trained on earlier answers, tested on later ones), so fitting the answers it is tested
- * on does not flatter it; the current weights were not fitted to them, so they are scored on all.
- */
-async function fitModel(csv, timezone, modelVersion, current) {
-  const items = convertCsvToFsrsItems(csv, ROLLOVER_HOUR, timezone, modelVersion);
-  const options = { modelVersion, enableShortTerm: true, numRelearningSteps: 1 };
-  const params = await computeParameters(items, options);
-  const fittedLoss = (await evaluateWithTimeSeriesSplits(items, options)).logLoss;
-  const currentLoss = new FSRSBinding(current).evaluate(items).logLoss;
-  if (!(fittedLoss < currentLoss) || !params.every(Number.isFinite)) return { kept: false };
-  return { kept: true, params, improvement: Math.round((100 * (currentLoss - fittedLoss)) / currentLoss) };
-}
-
-/**
- * Fit FSRS-6 and FSRS-7 to `reviews` (from `usableReviews`). `current6` and `current7` are the
- * deck's weights now, the defaults when omitted. Each result is kept only when it predicts better.
- */
-export async function fitWeights({ reviews, timezone, current6, current7 }) {
-  if (reviews.length < FIT_MIN_ANSWERS) throw new Error('not-enough-answers');
-  const csv = reviewCsv(reviews);
-  return {
-    fsrs6: await fitModel(csv, timezone, 'FSRS-6', current6 ?? DEFAULT_W),
-    fsrs7: await fitModel(csv, timezone, 'FSRS-7', current7 ?? DEFAULT_W7),
-  };
-}
-
 // A fit of a few thousand answers takes well under a second; this only catches a stuck one.
 const FIT_TIMEOUT = 120_000;
 
-/** `fitWeights` in a worker thread, so the server keeps answering while it runs. */
+// Each fit's worker takes 100 to 300 MB, so fits run one at a time, a few waiting at most.
+const MAX_WAITING = 4;
+const load = { running: 0, waiting: 0, most: 0 };
+let queue = Promise.resolve();
+
+/** How many fits run and wait now, and the most that have run at once. */
+export const fitLoad = () => load;
+
+/**
+ * `fitWeights` in a worker thread, so the server keeps answering while it runs. Fits take turns;
+ * with too many already waiting this rejects with Error('busy').
+ */
 export function runFit(input) {
+  if (load.waiting >= MAX_WAITING) return Promise.reject(new Error('busy'));
+  load.waiting++;
+  const turn = queue.then(() => {
+    load.waiting--;
+    load.running++;
+    load.most = Math.max(load.most, load.running);
+    return fitInWorker(input).finally(() => load.running--);
+  });
+  queue = turn.catch(() => {});
+  return turn;
+}
+
+function fitInWorker(input) {
   return new Promise((resolve, reject) => {
     const worker = new Worker(new URL('./fit-worker.js', import.meta.url), { workerData: input });
     const timer = setTimeout(() => {

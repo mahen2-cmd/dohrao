@@ -5,7 +5,8 @@ import { openDb } from '../server/db.js';
 import { createUser } from '../server/auth.js';
 import { applyChanges } from '../server/sync.js';
 import { newSchedule, DAY } from '../js/fsrs.js';
-import { FIT_MIN_ANSWERS, fitWeights, reviewCsv, usableReviews } from '../server/fit.js';
+import { FIT_MIN_ANSWERS, reviewCsv, usableReviews } from '../server/fit.js';
+import { fitWeights, heldOutSplit } from '../server/fit-model.js';
 
 const NOW = Date.UTC(2026, 0, 1, 9);
 
@@ -125,4 +126,66 @@ test('a fit is not kept when the current weights are already better', async () =
     if (result.kept) assert.ok(result.improvement > 0);
   }
   assert.ok([again.fsrs6, again.fsrs7].some((r) => !r.kept || r.improvement <= 1));
+});
+
+test('the server can load without loading the optimizer', async () => {
+  const { spawnSync } = await import('node:child_process');
+  // The optimizer is WASI, which Node announces when it loads; only fit workers should load it.
+  const run = spawnSync(process.execPath, ['--input-type=module', '-e', "await import('./server.js'); await import('./server/fit.js');"], {
+    cwd: new URL('..', import.meta.url),
+    encoding: 'utf8',
+  });
+  assert.equal(run.status, 0, run.stderr);
+  assert.doesNotMatch(run.stderr, /WASI/);
+});
+
+/**
+ * Answers whose forgetting changes halfway: a tenth forgotten at first, then nearly half. Weights
+ * fitted to the first half are wrong for the second, as a person's would be after a change.
+ */
+function changingAnswers(cards, each) {
+  const reviews = [];
+  for (let c = 0; c < cards; c++) {
+    let at = NOW + c * 60_000;
+    let days = 1;
+    for (let k = 0; k < each; k++) {
+      const late = c >= cards / 2;
+      const rating = (c * 7 + k * 13) % 100 < (late ? 45 : 10) ? 1 : 3;
+      reviews.push({ cardId: `c${c}`, at: at + (late ? 500 * DAY : 0), rating, state: k ? 2 : 0, duration: 3000 });
+      days = rating === 1 ? 1 : days * 2.5;
+      at += Math.round(days * DAY);
+    }
+  }
+  return reviews;
+}
+
+test('the fit and the current weights are judged on the same latest answers', () => {
+  const csv = reviewCsv(changingAnswers(300, 6));
+  for (const model of ['FSRS-6', 'FSRS-7']) {
+    const { train, test, all } = heldOutSplit(csv, 'Europe/Lisbon', model);
+    assert.equal(train.length + test.length, all.length);
+    assert.ok(test.length >= all.length * 0.1 && test.length <= all.length * 0.35, `${test.length} of ${all.length}`);
+  }
+});
+
+test('a refit is kept when the current weights no longer fit recent answers', async () => {
+  const all = changingAnswers(600, 6);
+  const early = all.filter((r) => r.at < NOW + 400 * DAY);
+  const first = await fitWeights({ reviews: early, timezone: 'Europe/Lisbon' });
+  const current6 = first.fsrs6.kept ? first.fsrs6.params : undefined;
+  const current7 = first.fsrs7.kept ? first.fsrs7.params : undefined;
+  const again = await fitWeights({ reviews: all, timezone: 'Europe/Lisbon', current6, current7 });
+  for (const result of [again.fsrs6, again.fsrs7]) {
+    assert.equal(result.kept, true);
+    assert.ok(result.improvement >= 1, `${result.improvement}`);
+  }
+});
+
+test('a fit is never kept with an improvement under 1%', async () => {
+  const reviews = changingAnswers(300, 6);
+  const first = await fitWeights({ reviews, timezone: 'Europe/Lisbon' });
+  const again = await fitWeights({ reviews, timezone: 'Europe/Lisbon', current6: first.fsrs6.params, current7: first.fsrs7.params });
+  for (const result of [first.fsrs6, first.fsrs7, again.fsrs6, again.fsrs7]) {
+    if (result.kept) assert.ok(result.improvement >= 1, `${result.improvement}`);
+  }
 });

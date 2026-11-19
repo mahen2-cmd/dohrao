@@ -2,7 +2,7 @@
 // Receives `fitWeights`'s input as workerData and posts back its result, or `{ error }`.
 
 import { parentPort, workerData } from 'node:worker_threads';
-import { fitWeights } from './fit.js';
+import { fitWeights } from './fit-model.js';
 
 try {
   parentPort.postMessage({ result: await fitWeights(workerData) });

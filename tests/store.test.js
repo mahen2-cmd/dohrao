@@ -1241,3 +1241,27 @@ test('fitted weights are saved and reset per deck', () => {
   assert.equal('fsrsParams' in store.deck(a.id), false);
   assert.equal('fsrs7Params' in store.deck(a.id), false);
 });
+
+test('weights that break scheduling fall back to the defaults', () => {
+  for (const scheduler of ['fsrs', 'fsrs7']) {
+    for (const value of [0, 1e9]) {
+      const deck = setup({ scheduler });
+      const card = store.addCard(deck.id, 'f', 'b', T0);
+      let now = T0;
+      for (let i = 0; i < 4; i++) {
+        store.answerCard(card.id, Rating.Good, now);
+        now = store.card(card.id).due;
+      }
+      store.setFittedWeights(deck.id, { fsrsParams: Array(21).fill(value), fsrs7Params: Array(34).fill(value) });
+      const p = store.previewCard(card.id, now);
+      for (const g of [1, 2, 3, 4]) {
+        assert.ok(Number.isFinite(p[g].due) && Number.isFinite(p[g].scheduledDays), `${scheduler} ${value} ${g}: ${p[g].scheduledDays}`);
+      }
+      store.answerCard(card.id, Rating.Good, now);
+      const answered = store.card(card.id);
+      for (const key of ['due', 'scheduledDays', 'stability', 'difficulty', 'stability7', 'difficulty7']) {
+        assert.ok(Number.isFinite(answered[key]), `${scheduler} ${value} ${key}: ${answered[key]}`);
+      }
+    }
+  }
+});

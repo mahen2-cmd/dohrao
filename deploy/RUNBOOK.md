@@ -225,6 +225,14 @@ reboot                                     # if it says a restart is required
 
 Recall and Caddy start again by themselves after a reboot.
 
+**Fitting FSRS and the Node version.** Fitting a deck's FSRS weights uses the
+`@open-spaced-repetition/binding` package, which says it needs Node 24. On Node 22 (what
+`setup.sh` installs) `npm ci` prints an `EBADENGINE` warning, skips the package's native build and
+installs its WebAssembly build instead, which works; the service log then shows one "WASI is an
+experimental feature" warning the first time someone fits. Both are expected. Moving the server to
+Node 24 makes npm install the native build instead, which also works. Only the fit worker loads the
+package, so if it ever fails to install, the app still runs and only fitting fails.
+
 ## 9. Topics: the key and the one-off sort of Portuguese A1
 
 Sorting cards into topics for the admin uses Anthropic's API, so it needs a key. Without one
