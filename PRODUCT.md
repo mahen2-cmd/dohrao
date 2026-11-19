@@ -23,7 +23,7 @@ Recall is a small, fast spaced-repetition flashcard app with Anki's scheduling a
 
 ## Positioning
 
-Recall uses Anki's own scheduler (SM-2 by default, FSRS-6 per deck), ported from Anki's source, and an Anki import that keeps every card's due date, interval and ease. It adds things Anki makes awkward: maths typed in a visual editor, images pasted straight onto a card, per-side read-aloud in two languages, and a reserve of cards held out of study until pulled in. The owner can give decks to other people, who study them at their own pace.
+Recall uses Anki's own scheduler (FSRS-6 by default, SM-2 per deck), ported from Anki's source, plus FSRS-7, the newest FSRS, as a per-deck option, and an Anki import that keeps every card's due date, interval and ease. It adds things Anki makes awkward: maths typed in a visual editor, images pasted straight onto a card, per-side read-aloud in two languages, and a reserve of cards held out of study until pulled in. The owner can give decks to other people, who study them at their own pace.
 
 ## Operating Context
 
@@ -37,7 +37,7 @@ Recall uses Anki's own scheduler (SM-2 by default, FSRS-6 per deck), ported from
 ## Capabilities and Constraints
 
 - Decks and cards: create, edit, move, search, filter, sort, select and delete in bulk.
-- Per-deck settings: new cards per day, easy interval, scheduler (Anki default or FSRS), FSRS retention, auto-play audio, front and back language, speaking speed, keeping generated audio.
+- Per-deck settings: new cards per day, easy interval, scheduler (FSRS-6, FSRS-7 or SM-2), FSRS retention, auto-play audio, front and back language, speaking speed, keeping generated audio.
 - Reserve: import into it, pull in N or all, reorder by drag or by Up/Down/To top/To bottom, reverse the whole order, add reversed copies, send cards back.
 - Online only: the app needs the server to load and save. Answers given with no signal are kept on the device and sent once the connection is back. KaTeX and MathLive are vendored in `vendor/`, and fonts and assets are served by Recall itself, with nothing loaded from a CDN.
 - The current stack is plain HTML, CSS and JavaScript with no build step, served by a single Node file (`server.js`). Avoiding new dependencies was not made a hard rule.

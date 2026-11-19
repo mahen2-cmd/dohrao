@@ -16,7 +16,7 @@ A small, fast flashcard app with Anki's scheduling and a cleaner interface, host
 - **Maths and images.** Build equations in a visual editor, or write them in LaTeX, and they are typeset on the card. Paste a screenshot, drop a picture or pick a file to put it on either side.
 - **Import from Excel.** Turn a spreadsheet of words into cards in one step, pictures and maths included.
 - **Import from Anki.** Bring in an `.apkg` file and carry on where you left off: every card keeps its due date, interval and ease, and its images and maths.
-- **Anki's scheduler.** Ported from Anki's source: FSRS-6, the default for every deck at 90% retention, and its older algorithm (SM-2) as a per-deck option, with the same learning steps, relearning, interval fuzz and 4am day rollover.
+- **Anki's scheduler.** Ported from Anki's source: FSRS-6, the default for every deck at 90% retention, and its older algorithm (SM-2) as a per-deck option, with the same learning steps, relearning, interval fuzz and 4am day rollover. FSRS-7, the newest version of FSRS, is a third option; Anki does not ship it yet.
 - **Intervals on the buttons.** Again, Hard, Good and Easy each show when the card would come back.
 - **A reserve.** Keep cards aside in a deck, out of study, and pull in as many as you like when you are ready for them, in an order you can rearrange. Fill it from a CSV or Excel file, or with reversed copies of cards you choose.
 - **Upcoming cards.** How many cards come up on each day of the next week, month or three months, new, learning and due, for one deck or all of them.
@@ -91,10 +91,11 @@ A new card starts with Anki's default learning steps:
 
 After that, the schedule depends on the deck's scheduling setting:
 
-- **Anki default** (SM-2). Each interval is the previous one multiplied by the card's ease, which starts at 250%. Pressing Good every time gives 1, 3, 8, 20, 50, 125 days and so on. Easy adds a 30% bonus and raises the ease; Hard grows the interval by 20% and lowers the ease.
-- **FSRS.** Intervals come from a model of how well you remember each card, aiming for the deck's desired retention. This is what Anki does when FSRS is switched on.
+- **SM-2** (Anki's older default). Each interval is the previous one multiplied by the card's ease, which starts at 250%. Pressing Good every time gives 1, 3, 8, 20, 50, 125 days and so on. Easy adds a 30% bonus and raises the ease; Hard grows the interval by 20% and lowers the ease.
+- **FSRS-6.** Intervals come from a model of how well you remember each card, aiming for the deck's desired retention. This is what Anki does when FSRS is switched on.
+- **FSRS-7.** The newest version of the same model. It also learns from answers given minutes apart, such as those in the learning steps, which FSRS-6 counts as no time at all. With its default parameters it gives much longer intervals than FSRS-6, so try it on one deck first.
 
-In both, forgetting a review card sends it through one 10-minute relearning step. A deck can switch between the two at any time, because both sets of scheduling data are kept for every card.
+In all three, forgetting a review card sends it through one 10-minute relearning step. A deck can switch between them at any time, because all three sets of scheduling data are kept for every card.
 
 ### On a phone
 
@@ -118,9 +119,9 @@ In both, forgetting a review card sends it through one 10-minute relearning step
 Each deck has its own:
 
 - **New cards per day** (default 20).
-- **Easy interval** (default 4 days): how far out Easy sends a card you are learning for the first time. With FSRS, 0 lets FSRS choose, which is what Anki does.
-- **Scheduling**: Anki default or FSRS.
-- **FSRS retention** (default 90%). Higher means fewer forgotten cards and more reviews.
+- **Easy interval** (default 4 days): how far out Easy sends a card you are learning for the first time. With FSRS, 0 lets FSRS choose, which is what Anki does. With FSRS-7, Easy is always at least a day longer than Good, so a short easy interval may be raised.
+- **Scheduling**: FSRS-6 (the default), FSRS-7 or SM-2.
+- **FSRS retention** (default 90%), used by FSRS-6 and FSRS-7. Higher means fewer forgotten cards and more reviews.
 - **Auto-play audio**: off, front, back or both sides.
 - **Front language** and **Back language** (default English (US) and Portuguese): the language each side is read in.
 - **Speaking speed**, from normal down to very slow.
@@ -253,7 +254,7 @@ Each Anki deck becomes a Recall deck, and each card arrives exactly where it was
 - **Review cards** keep their due day, interval and ease, so the cards due today in Anki are the cards due today in Recall, and the next interval is worked out from the same numbers.
 - **Learning and relearning cards** keep their step and the time they are next due.
 - **New cards** stay new, in Anki's order.
-- **Deck options** come across too: new cards per day, the easy interval, whether FSRS is on, and with FSRS the desired retention, the deck's parameters and each card's memory state.
+- **Deck options** come across too: new cards per day, the easy interval, whether FSRS is on, and with FSRS the desired retention, the deck's parameters and each card's memory state. FSRS-7 starts from that FSRS-6 memory state the first time a card is shown, and uses its own default parameters.
 
 Some things do not come across:
 
@@ -326,7 +327,7 @@ The server listens only on 127.0.0.1, so it is reached through Caddy. It accepts
 ```
 index.html          the page
 css/styles.css      all styling, light and dark
-js/fsrs.js          the scheduler: Anki's SM-2 and FSRS-6 modes, with no browser code
+js/fsrs.js          the scheduler: SM-2, FSRS-6 and FSRS-7 modes, with no browser code
 js/store.js         decks, cards, the study queue, and syncing changes with the server
 js/api.js           the calls to the server: log in, sign up, sync and the admin screen
 js/content.js       finds the maths and images in a card's text, and the words to read aloud
@@ -350,7 +351,7 @@ deploy/             the server setup, deploy script, systemd unit, Caddyfile and
 tests/              tests for the scheduler, the store, the importers and the server
 ```
 
-The scheduler follows two sources: the memory model from [fsrs-rs](https://github.com/open-spaced-repetition/fsrs-rs), which Anki uses, and the learning, review and fuzz rules from [Anki's scheduler](https://github.com/ankitects/anki/tree/main/rslib/src/scheduler/states).
+The scheduler follows two sources: the memory models from [fsrs-rs](https://github.com/open-spaced-repetition/fsrs-rs), which Anki uses (FSRS-7 from fsrs-rs v7.0.0), and the learning, review and fuzz rules from [Anki's scheduler](https://github.com/ankitects/anki/tree/main/rslib/src/scheduler/states).
 
 Run the tests with:
 
@@ -362,7 +363,8 @@ npm test
 
 - Fuzz uses Anki's interval ranges but a different random generator, so the exact day chosen within a range will not match Anki card for card.
 - Learning steps are fixed at 1 and 10 minutes, and the relearning step at 10 minutes. The other Anki default options (starting ease, easy bonus, hard interval and so on) are fixed at Anki's defaults too.
-- Easy on a new card gives exactly the easy interval; Anki varies it by a day either way.
-- FSRS uses its default parameters; they are not optimised from your review history.
+- Easy on a new card gives exactly the easy interval (with FSRS-7, at least a day more than Good); Anki varies it by a day either way.
+- FSRS-6 and FSRS-7 use their default parameters; they are not optimised from your review history.
+- FSRS-7 is not in Anki yet. Recall keeps Anki's learning steps and whole-day intervals with it, rather than letting FSRS-7 schedule reviews within a day.
 - There is no load balancer and no review limit per day, and cards have no templates.
 - Cards are plain text, with maths and images. Maths is typeset with KaTeX rather than MathJax, which covers nearly all the same LaTeX.
