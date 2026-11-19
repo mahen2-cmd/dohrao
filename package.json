@@ -14,6 +14,7 @@
     "test": "node --test"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^1.8.0"
+    "@anthropic-ai/sdk": "^1.8.0",
+    "@open-spaced-repetition/binding": "0.6.1"
   }
 }
