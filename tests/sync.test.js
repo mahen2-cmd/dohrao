@@ -641,8 +641,10 @@ test('a review sent twice is stored once', async () => {
 test('reviews for other people\'s cards are rejected', async () => {
   const { db, ana, ben } = await seed();
   assert.deepEqual(applyChanges(db, ben.id, { reviews: [entry('rb')] }, NOW), { rejected: ['rb'] });
+  // Ben's own deck: ana may not log answers to its cards.
+  applyChanges(db, ben.id, { decks: [deckOf({ id: 'db' })], cards: [cardOf('cb', { deckId: 'db' })] }, NOW);
   assert.deepEqual(
-    applyChanges(db, ana.id, { reviews: [entry('rx', { cardId: 'nope' }), entry('ra')] }, NOW),
+    applyChanges(db, ana.id, { reviews: [entry('rx', { cardId: 'cb' }), entry('ra')] }, NOW),
     { rejected: ['rx'] },
   );
   assert.deepEqual(reviewsOf(db, ana.id).map((e) => e.id), ['ra']);
@@ -692,5 +694,13 @@ test('deleting a card deletes its reviews', async () => {
   const { db, ana } = await seed();
   applyChanges(db, ana.id, { reviews: [entry('r1')] }, NOW);
   applyChanges(db, ana.id, { deletedCards: ['c1'] }, NOW);
+  assert.equal(reviewsOf(db, ana.id).length, 0);
+});
+
+test('a review for a card deleted meanwhile is accepted and dropped', async () => {
+  const { db, ana } = await seed();
+  // Answered offline, then the card was deleted, here or on another device.
+  assert.deepEqual(applyChanges(db, ana.id, { reviews: [entry('r1')], deletedCards: ['c1'] }, NOW), { rejected: [] });
+  assert.deepEqual(applyChanges(db, ana.id, { reviews: [entry('r2', { cardId: 'never-existed' })] }, NOW), { rejected: [] });
   assert.equal(reviewsOf(db, ana.id).length, 0);
 });

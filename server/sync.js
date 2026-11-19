@@ -84,14 +84,24 @@ function validReview(r) {
   );
 }
 
-/** Keep one answer in `userId`'s log, once, for a card they can study. */
+/**
+ * Keep one answer in `userId`'s log, once, for a card they can study. An answer to a card that
+ * is gone (deleted since, here or on another device) is taken and dropped, as there is nothing
+ * left to log it against. A sync can carry many thousands, so the statements and each card's
+ * deck and access are looked up once per sync, in `room`.
+ */
 function applyReview(db, userId, r, room) {
   if (!validReview(r) || room.reviews-- <= 0) return false;
-  const deckId = deckOfCard(db, r.cardId);
-  const kind = deckId && access(db, userId, deckId);
+  room.insertReview ??= db.prepare('INSERT OR IGNORE INTO reviews (id, user_id, card_id, at, data) VALUES (?, ?, ?, ?, ?)');
+  room.deckOf ??= new Map();
+  room.accessTo ??= new Map();
+  if (!room.deckOf.has(r.cardId)) room.deckOf.set(r.cardId, deckOfCard(db, r.cardId));
+  const deckId = room.deckOf.get(r.cardId);
+  if (deckId === undefined) return true;
+  if (!room.accessTo.has(deckId)) room.accessTo.set(deckId, access(db, userId, deckId));
+  const kind = room.accessTo.get(deckId);
   if (kind !== 'own' && kind !== 'given') return false;
-  db.prepare('INSERT OR IGNORE INTO reviews (id, user_id, card_id, at, data) VALUES (?, ?, ?, ?, ?)')
-    .run(r.id, userId, r.cardId, r.at, JSON.stringify({ ...r, deckId }));
+  room.insertReview.run(r.id, userId, r.cardId, r.at, JSON.stringify({ ...r, deckId }));
   return true;
 }
 

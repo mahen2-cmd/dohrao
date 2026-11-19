@@ -40,6 +40,8 @@ const emptyState = () => ({ version: 1, decks: [], cards: [], daily: {}, log: {}
 
 // The most an answer's time is counted as, as in Anki.
 export const MAX_DURATION = 60_000;
+// The most review log entries one sync carries; an Anki import's history goes up in several.
+export const REVIEWS_PER_SYNC = 5_000;
 
 let state = emptyState();
 
@@ -338,6 +340,12 @@ async function send() {
     const next = snapshotOf(state);
     const changes = changesBetween(snapshot, next, state.savedAt);
     if (!changes) break;
+    // A long review log goes up a part at a time: entries left out stay unsent for the next round.
+    if (changes.reviews?.length > REVIEWS_PER_SYNC) {
+      for (const r of changes.reviews.slice(REVIEWS_PER_SYNC)) next.reviews.delete(r.id);
+      changes.reviews = changes.reviews.slice(0, REVIEWS_PER_SYNC);
+      dirty = true;
+    }
     try {
       const res = await fetch('api/sync', {
         method: 'POST',
@@ -352,7 +360,10 @@ async function send() {
       const refusedAll = res.status >= 400 && res.status < 500 && res.status !== 429;
       if (!res.ok && !refusedAll) throw new Error(`save failed: ${res.status}`);
       const { rejected = [] } = refusedAll ? { rejected: idsOf(changes) } : await res.json();
-      if (!refusedAll) snapshot = next;
+      if (!refusedAll) {
+        snapshot = next;
+        forgetSentReviews();
+      }
       setOk(true);
       if (refusedAll || rejected.length) {
         if (!(await reload(next, new Set(rejected)))) {
@@ -369,6 +380,18 @@ async function send() {
   } while (dirty && !server.signedOut);
   writing = false;
   keepPending();
+}
+
+/**
+ * The server keeps the review log, so entries and undone ids it has taken are dropped here, from
+ * the state and the snapshot alike, and each save does not go over them all again. Undoing a
+ * dropped entry still works: its id goes on `reviewsUndone` and is sent.
+ */
+function forgetSentReviews() {
+  state.reviews = state.reviews.filter((r) => !snapshot.reviews.has(r.id));
+  state.reviewsUndone = state.reviewsUndone.filter((id) => !snapshot.reviewsUndone.has(id));
+  snapshot.reviews.clear();
+  snapshot.reviewsUndone.clear();
 }
 
 function save() {
@@ -1259,7 +1282,7 @@ export const exportData = () => {
 /** A copy of the whole state, review log included. */
 export const currentState = () => structuredClone(state);
 
-/** The answers logged here since the state was loaded, oldest first. */
+/** The answers logged here that the server has not taken yet, oldest first. */
 export const reviewLog = () => state.reviews;
 
 export function importData(json) {

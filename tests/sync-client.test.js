@@ -395,3 +395,35 @@ test('an undone answer sends the restored card', async () => {
   assert.equal(last.body.cards[0].state, copy.state);
   assert.equal(last.body.cards[0].due, copy.due);
 });
+
+test('sent reviews leave the browser, and undo still deletes them on the server', async () => {
+  const calls = serve((url) => (url === 'api/state' ? json(200, view()) : json(200, { rejected: [] })));
+  await store.load();
+  const copy = store.answerCard('c1', Rating.Good, T0);
+  await store.flush();
+  assert.equal(syncs(calls).at(-1).body.reviews.length, 1);
+  assert.equal(store.reviewLog().length, 0);
+  store.answerCard('c2', Rating.Good, T0);
+  await store.flush();
+  assert.deepEqual(syncs(calls).at(-1).body.reviews.map((r) => r.cardId), ['c2']);
+  store.restoreCard(copy);
+  await store.flush();
+  assert.deepEqual(syncs(calls).at(-1).body.deletedReviews, [copy.reviewId]);
+  assert.equal(syncs(calls).at(-1).body.reviews, undefined);
+});
+
+test('a long review log goes up in several syncs', async () => {
+  const calls = serve((url) => (url === 'api/state' ? json(200, view()) : json(200, { rejected: [] })));
+  await store.load();
+  const entries = Array.from({ length: 12_000 }, (_, i) => ({
+    id: `r${i}`, cardId: 'c1', deckId: 'd1', at: T0 + i, rating: 3, state: 2, elapsed: 1, duration: 1,
+    scheduler: null, retention: null, intervalBefore: 1, intervalAfter: 2,
+  }));
+  store.applyPending({ reviews: entries });
+  await store.flush();
+  const sizes = syncs(calls).map((c) => c.body.reviews?.length ?? 0);
+  assert.ok(sizes.length >= 3, `${sizes}`);
+  assert.ok(sizes.every((n) => n <= store.REVIEWS_PER_SYNC), `${sizes}`);
+  assert.equal(sizes.reduce((a, b) => a + b, 0), 12_000);
+  assert.equal(store.reviewLog().length, 0);
+});
