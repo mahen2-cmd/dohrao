@@ -365,7 +365,8 @@ export function newSchedule(now = Date.now()) {
  * Options:
  *   scheduler     'fsrs' (FSRS-6, the default), 'fsrs7' or 'sm2'
  *   retention     desired retention, 0..1; FSRS-6 and FSRS-7 only
- *   w             FSRS-6 parameters; FSRS-7 always uses DEFAULT_W7
+ *   w             FSRS-6 parameters (21), DEFAULT_W when omitted
+ *   w7            FSRS-7 parameters (34), DEFAULT_W7 when omitted
  *   fuzz          number in [0, 1) used to spread review intervals; omit for none
  *   easyInterval  fixed interval in days for Easy on a card still being learned for
  *                 the first time; 0 means Anki's own choice (4 days in SM-2, and
@@ -379,6 +380,7 @@ export function preview(card, now = Date.now(), options = {}) {
     scheduler = 'fsrs',
     retention = 0.9,
     w = DEFAULT_W,
+    w7 = DEFAULT_W7,
     maxInterval = MAX_INTERVAL,
     fuzz,
     easyInterval = 0,
@@ -394,7 +396,7 @@ export function preview(card, now = Date.now(), options = {}) {
     card.stability7 > 0
       ? { stability: card.stability7, stabilityFast: card.stabilityFast7, difficulty: card.difficulty7 }
       : card.lastReview != null && card.stability > 0
-        ? seedMemory7(card.stability, card.difficulty)
+        ? seedMemory7(card.stability, card.difficulty, w7)
         : null;
   const elapsed7 = card.lastReview == null ? 0 : Math.max(0, (now - card.lastReview) / DAY);
 
@@ -402,9 +404,9 @@ export function preview(card, now = Date.now(), options = {}) {
   const interval = {};
   for (const g of [1, 2, 3, 4]) {
     const m6 = nextMemory(card, g, elapsed, w);
-    const m7 = nextMemory7(memory7In, g, elapsed7);
+    const m7 = nextMemory7(memory7In, g, elapsed7, w7);
     memory[g] = { ...m6, stability7: m7.stability, stabilityFast7: m7.stabilityFast, difficulty7: m7.difficulty };
-    interval[g] = scheduler === 'fsrs7' ? nextInterval7(m7, retention) : nextInterval(m6.stability, retention, w);
+    interval[g] = scheduler === 'fsrs7' ? nextInterval7(m7, retention, w7) : nextInterval(m6.stability, retention, w);
   }
 
   const fuzzed = (days, minimum) => withReviewFuzz(fuzz, days, clamp(minimum, 1, maximum), maximum);

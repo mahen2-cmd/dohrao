@@ -19,7 +19,8 @@ import { DAY, State, dayStart, newSchedule, nextDayAt, preview, schedule } from 
 //   speechRate    playback speed of that audio, where 1 is the voice's natural pace
 //   saveAudio     whether the server keeps the audio it makes for the deck's cards; off, it
 //                 is made each time it is played, and `npm run cache-voice` leaves the deck out
-// A deck imported from Anki may also carry `fsrsParams`, its own FSRS parameters.
+// A deck may also carry `fsrsParams` (21 FSRS-6 parameters, from an Anki import or fitted to the
+// person's answers) and `fsrs7Params` (34 FSRS-7 parameters, fitted). Both are personal.
 export const DECK_DEFAULTS = {
   scheduler: 'fsrs',
   newPerDay: 20,
@@ -1127,9 +1128,20 @@ function fuzzFactor(c) {
   return ((h ^ (h >>> 14)) >>> 0) / 4294967296;
 }
 
+/** `list` when it is `length` finite numbers, else undefined, so bad weights fall back to the defaults. */
+const fittedWeights = (list, length) =>
+  Array.isArray(list) && list.length === length && list.every(Number.isFinite) ? list : undefined;
+
 function schedulingOptions(c) {
-  const { scheduler, retention, easyInterval, fsrsParams } = deck(c.deckId);
-  return { scheduler, retention, easyInterval, w: fsrsParams, fuzz: fuzzFactor(c) };
+  const { scheduler, retention, easyInterval, fsrsParams, fsrs7Params } = deck(c.deckId);
+  return {
+    scheduler,
+    retention,
+    easyInterval,
+    w: fittedWeights(fsrsParams, 21),
+    w7: fittedWeights(fsrs7Params, 34),
+    fuzz: fuzzFactor(c),
+  };
 }
 
 export function previewCard(id, now = Date.now()) {

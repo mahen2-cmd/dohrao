@@ -1192,3 +1192,37 @@ test('re-importing an Anki file does not log its history again', () => {
   store.importAnkiDecks(structuredClone(ANKI_IMPORT), T0);
   assert.equal(store.reviewLog().length, 2);
 });
+
+// ---- Fitted weights -------------------------------------------------------------
+
+import { DEFAULT_W7 } from '../js/fsrs.js';
+
+const W7 = (() => {
+  const w = [...DEFAULT_W7];
+  w[3] = 20;
+  return w;
+})();
+
+const easyDays = (deckOptions) => {
+  const deck = setup({ scheduler: 'fsrs7', easyInterval: 0, ...deckOptions });
+  const card = store.addCard(deck.id, 'f', 'b', T0);
+  return store.previewCard(card.id, T0);
+};
+
+// Fuzz spreads each card's interval by its random id, so memory states are compared, not days.
+test('a deck\'s fitted FSRS-7 weights shape its intervals', () => {
+  assert.equal(easyDays({ fsrs7Params: W7 })[4].stability7, 20);
+  assert.notEqual(easyDays({})[4].stability7, 20);
+});
+
+test('bad fitted weights fall back to the defaults', () => {
+  const plain = easyDays({});
+  for (const bad of [{ fsrs7Params: [1, 2] }, { fsrs7Params: Array(34).fill(NaN) }, { fsrsParams: ['x'] }, { fsrsParams: Array(21).fill(Infinity) }]) {
+    const p = easyDays(bad);
+    for (const g of [1, 2, 3, 4]) {
+      assert.equal(p[g].stability7, plain[g].stability7, JSON.stringify(bad));
+      assert.equal(p[g].stability, plain[g].stability, JSON.stringify(bad));
+      assert.ok(Number.isFinite(p[g].scheduledDays));
+    }
+  }
+});

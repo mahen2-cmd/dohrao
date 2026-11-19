@@ -210,3 +210,12 @@ test('fsrs7: a fixed Easy interval is never shorter than Good', () => {
   assert.ok(q[4].scheduledDays > q[3].scheduledDays, `easy ${q[4].scheduledDays} good ${q[3].scheduledDays}`);
   assert.equal(p[4].scheduledDays >= 4, true);
 });
+
+test('fsrs7: given weights are used', () => {
+  const w7 = [...DEFAULT_W7];
+  w7[3] = 20; // initial stability for Easy
+  const plain = preview(newSchedule(T0), T0, { scheduler: 'fsrs7' })[4];
+  const fitted = preview(newSchedule(T0), T0, { scheduler: 'fsrs7', w7 })[4];
+  assert.ok(fitted.scheduledDays > plain.scheduledDays, `${fitted.scheduledDays} vs ${plain.scheduledDays}`);
+  assert.equal(fitted.stability7, 20);
+});
