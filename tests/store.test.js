@@ -143,12 +143,12 @@ test('stats track reviews today and the streak', () => {
   const deck = setup();
   const a = store.addCard(deck.id, 'a', 'a', T0);
   const b = store.addCard(deck.id, 'b', 'b', T0);
-  assert.deepEqual(store.stats(T0), { reviewedToday: 0, streak: 0 });
+  assert.deepEqual(store.stats(T0), { reviewedToday: 0, streak: 0, studiedToday: 0 });
   store.answerCard(a.id, Rating.Good, T0);
   store.answerCard(b.id, Rating.Good, T0 + DAY);
-  assert.deepEqual(store.stats(T0 + DAY), { reviewedToday: 1, streak: 2 });
-  assert.deepEqual(store.stats(T0 + 2 * DAY), { reviewedToday: 0, streak: 2 });
-  assert.deepEqual(store.stats(T0 + 3 * DAY), { reviewedToday: 0, streak: 0 });
+  assert.deepEqual(store.stats(T0 + DAY), { reviewedToday: 1, streak: 2, studiedToday: 0 });
+  assert.deepEqual(store.stats(T0 + 2 * DAY), { reviewedToday: 0, streak: 2, studiedToday: 0 });
+  assert.deepEqual(store.stats(T0 + 3 * DAY), { reviewedToday: 0, streak: 0, studiedToday: 0 });
 });
 
 test('recent days list the reviews on each day, ending today', () => {
@@ -1073,7 +1073,7 @@ test('answering logs one review with the card\'s state before the answer', () =>
     { ...first, id: undefined },
     {
       id: undefined, cardId: card.id, deckId: deck.id, at: T0, rating: 3, state: State.New, elapsed: null,
-      duration: 4200, scheduler: 'fsrs', retention: 0.9, intervalBefore: 0,
+      duration: 4200, active: null, scheduler: 'fsrs', retention: 0.9, intervalBefore: 0,
       intervalAfter: store.card(card.id).scheduledDays,
     },
   );
@@ -1264,4 +1264,82 @@ test('weights that break scheduling fall back to the defaults', () => {
       }
     }
   }
+});
+
+// ---- Study time ----------------------------------------------------------------
+
+test('study time adds up per day and deck in whole seconds', () => {
+  const a = setup();
+  const b = store.createDeck({ name: 'B' });
+  const c1 = store.addCard(a.id, 'one', 'um', T0);
+  const c2 = store.addCard(a.id, 'two', 'dois', T0);
+  const c3 = store.addCard(b.id, 'three', 'três', T0);
+  store.answerCard(c1.id, Rating.Good, T0, { active: 12_400 });
+  store.answerCard(c2.id, Rating.Good, T0, { active: 3_600 });
+  store.answerCard(c3.id, Rating.Good, T0, { active: 1_000 });
+  assert.deepEqual(store.currentState().time, { [store.dayKey(T0)]: { [a.id]: 16, [b.id]: 1 } });
+  assert.deepEqual(store.reviewLog().map((r) => r.active), [12_400, 3_600, 1_000]);
+});
+
+test('answers without active time log null and add no time', () => {
+  const deck = setup();
+  const card = store.addCard(deck.id, 'front', 'back', T0);
+  store.answerCard(card.id, Rating.Good, T0);
+  assert.equal(store.reviewLog()[0].active, null);
+  assert.deepEqual(store.currentState().time, {});
+});
+
+test('active is capped at MAX_ACTIVE', () => {
+  const deck = setup();
+  const card = store.addCard(deck.id, 'front', 'back', T0);
+  store.answerCard(card.id, Rating.Good, T0, { active: 9e9 });
+  assert.equal(store.MAX_ACTIVE, 3_600_000);
+  assert.equal(store.reviewLog()[0].active, 3_600_000);
+});
+
+test('undo keeps study time', () => {
+  const deck = setup();
+  const card = store.addCard(deck.id, 'front', 'back', T0);
+  const copy = store.answerCard(card.id, Rating.Good, T0, { active: 5_000 });
+  store.restoreCard(copy);
+  store.answerCard(card.id, Rating.Easy, T0, { count: false, active: 2_000 });
+  assert.equal(store.currentState().time[store.dayKey(T0)][deck.id], 7);
+});
+
+test('study time goes to the day of the answer', () => {
+  const deck = setup();
+  const card = store.addCard(deck.id, 'front', 'back', T0);
+  store.answerCard(card.id, Rating.Good, T0 + DAY, { active: 4_000 });
+  assert.deepEqual(store.currentState().time, { [store.dayKey(T0 + DAY)]: { [deck.id]: 4 } });
+});
+
+test('stats reports seconds studied today', () => {
+  const deck = setup();
+  const card = store.addCard(deck.id, 'front', 'back', T0);
+  store.answerCard(card.id, Rating.Good, T0, { active: 90_000 });
+  assert.equal(store.stats(T0).studiedToday, 90);
+  assert.equal(store.stats(T0 + DAY).studiedToday, 0);
+});
+
+test('statistics report study time by day and deck', () => {
+  const a = setup();
+  const b = store.createDeck({ name: 'B' });
+  const now = T0 + 40 * DAY;
+  const answer = (deck, at, active) => store.answerCard(store.addCard(deck.id, 'q', 'a', at).id, Rating.Good, at, { active });
+  answer(a, T0, 500_000); // 40 days back: outside a 30-day window
+  answer(a, now - 2 * DAY, 60_000);
+  answer(b, now - 2 * DAY, 30_000);
+  answer(a, now, 120_000);
+
+  const all = store.statistics(undefined, 30, now);
+  assert.deepEqual(all.time.perDay, { [store.dayKey(now - 2 * DAY)]: 90, [store.dayKey(now)]: 120 });
+  assert.equal(all.time.total, 210);
+  assert.equal(all.time.today, 120);
+  assert.deepEqual(all.time.byDeck, { [a.id]: 180, [b.id]: 30 });
+
+  const onlyA = store.statistics(a.id, 30, now);
+  assert.deepEqual(onlyA.time.perDay, { [store.dayKey(now - 2 * DAY)]: 60, [store.dayKey(now)]: 120 });
+  assert.equal(onlyA.time.total, 180);
+  assert.equal(onlyA.time.today, 120);
+  assert.deepEqual(onlyA.time.byDeck, { [a.id]: 180, [b.id]: 30 });
 });

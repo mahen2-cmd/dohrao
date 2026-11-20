@@ -37,10 +37,13 @@ export const DECK_DEFAULTS = {
 // log[day][deckId] holds twelve counts, Again to Easy for each kind in ANSWER_KINDS.
 // `reviews` holds the answers logged here since the state was loaded, one entry each, and
 // `reviewsUndone` the ids of those taken back by undo; the server keeps the full log.
-const emptyState = () => ({ version: 1, decks: [], cards: [], daily: {}, log: {}, settings: {}, reviews: [], reviewsUndone: [] });
+// `time` holds the active study time, time[day][deckId] in whole seconds.
+const emptyState = () => ({ version: 1, decks: [], cards: [], daily: {}, log: {}, time: {}, settings: {}, reviews: [], reviewsUndone: [] });
 
 // The most an answer's time is counted as, as in Anki.
 export const MAX_DURATION = 60_000;
+// The most active study time one answer can carry, in ms.
+export const MAX_ACTIVE = 3_600_000;
 // The most review log entries one sync carries; an Anki import's history goes up in several.
 export const REVIEWS_PER_SYNC = 5_000;
 
@@ -86,6 +89,7 @@ export function snapshotOf(s) {
     cards: new Map(s.cards.map((c) => [c.id, JSON.stringify(c)])),
     daily: JSON.stringify(s.daily),
     log: JSON.stringify(s.log),
+    time: JSON.stringify(s.time ?? {}),
     settings: JSON.stringify(s.settings),
     reviews: new Map((s.reviews ?? []).map((r) => [r.id, JSON.stringify(r)])),
     reviewsUndone: new Set(s.reviewsUndone ?? []),
@@ -101,7 +105,7 @@ function changesBetween(before, after, savedAt) {
     if (changed.length) changes[kind] = changed;
     if (gone.length) changes[kind === 'decks' ? 'deletedDecks' : 'deletedCards'] = gone;
   }
-  for (const key of ['daily', 'log', 'settings']) {
+  for (const key of ['daily', 'log', 'time', 'settings']) {
     if (before[key] !== after[key]) changes[key] = JSON.parse(after[key]);
   }
   // The review log only grows, so only entries not sent before go, and ids undone since.
@@ -182,6 +186,7 @@ function applyLocal(changes, skip = new Set()) {
   put(state.cards, changes.cards);
   if (changes.daily) state.daily = mergeCounts(state.daily, changes.daily);
   if (changes.log) state.log = mergeCounts(state.log, changes.log);
+  if (changes.time) state.time = mergeCounts(state.time, changes.time);
   if (changes.settings) state.settings = changes.settings;
   const logged = new Set(state.reviews.map((r) => r.id));
   for (const r of changes.reviews ?? []) if (!logged.has(r.id) && !skip.has(r.id)) state.reviews.push(r);
@@ -417,6 +422,7 @@ function normalize(data) {
     savedAt: data.savedAt ?? 0,
     daily: data.daily ?? {},
     log: data.log ?? {},
+    time: data.time ?? {},
     settings: data.settings ?? {},
     decks,
     cards,
@@ -1185,7 +1191,7 @@ const SCHEDULE_KEYS = [...Object.keys(newSchedule()), 'introduced'];
  * With `count: false` the answer is not added to the day's counts: a card answered again
  * after an undo was already counted, and counts are never lowered.
  */
-export function answerCard(id, rating, now = Date.now(), { count = true, duration = null } = {}) {
+export function answerCard(id, rating, now = Date.now(), { count = true, duration = null, active = null } = {}) {
   const c = card(id);
   const before = { id: c.id };
   for (const key of SCHEDULE_KEYS) if (key in c) before[key] = structuredClone(c[key]);
@@ -1200,6 +1206,7 @@ export function answerCard(id, rating, now = Date.now(), { count = true, duratio
     state: c.state,
     elapsed: c.lastReview == null ? null : now - c.lastReview,
     duration: duration == null ? null : Math.min(Math.max(0, Math.round(duration)), MAX_DURATION),
+    active: active == null ? null : Math.min(Math.max(0, Math.round(active)), MAX_ACTIVE),
     scheduler: options.scheduler ?? null,
     retention: options.retention ?? null,
     intervalBefore: c.scheduledDays ?? null,
@@ -1215,6 +1222,12 @@ export function answerCard(id, rating, now = Date.now(), { count = true, duratio
     state.daily[key] = (state.daily[key] ?? 0) + 1;
     const answers = ((state.log[key] ??= {})[c.deckId] ??= Array(12).fill(0));
     answers[kind * 4 + rating - 1]++;
+  }
+  // Time really spent counts even on an answer given again after an undo.
+  const seconds = Math.round((review.active ?? 0) / 1000);
+  if (seconds > 0) {
+    const byDeck = (state.time[dayKey(now)] ??= {});
+    byDeck[c.deckId] = (byDeck[c.deckId] ?? 0) + seconds;
   }
   save();
   return before;
@@ -1248,7 +1261,10 @@ const MATURE_DAYS = 21;
 /** The kinds of card an answer is logged under, in the order `statistics` reports them. */
 export const ANSWER_KINDS = ['Learning', 'Young', 'Mature'];
 
-export const stats = (now = Date.now()) => streakOf(state.daily, now);
+export const stats = (now = Date.now()) => ({
+  ...streakOf(state.daily, now),
+  studiedToday: Object.values(state.time[dayKey(now)] ?? {}).reduce((sum, n) => sum + n, 0),
+});
 
 /** Reviews on each of the last `n` days, oldest first and ending today, as `{ date, n }`. */
 export function recentDays(n, now = Date.now()) {
@@ -1302,9 +1318,24 @@ export function statistics(deckId, days = 30, now = Date.now()) {
   const loggedFrom = Object.keys(logged).sort()[0] ?? null;
   const perDay = deckId ? logged : state.daily;
 
+  // Study time over the same days: per day for `deckId` (or all decks), and per existing deck.
+  const decksHere = new Set(state.decks.map((d) => d.id));
+  const time = { perDay: {}, byDeck: {}, total: 0, today: 0 };
+  for (const [key, byDeck] of Object.entries(state.time)) {
+    if (key < from || key > dayKey(now)) continue;
+    for (const [id, seconds] of Object.entries(byDeck)) {
+      if (decksHere.has(id)) time.byDeck[id] = (time.byDeck[id] ?? 0) + seconds;
+      if (deckId && id !== deckId) continue;
+      time.perDay[key] = (time.perDay[key] ?? 0) + seconds;
+      time.total += seconds;
+      if (key === dayKey(now)) time.today += seconds;
+    }
+  }
+
   return {
     cards,
     perDay,
+    time,
     ...streakOf(perDay, now),
     forecast,
     answers,

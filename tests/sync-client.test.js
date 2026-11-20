@@ -427,3 +427,18 @@ test('a long review log goes up in several syncs', async () => {
   assert.equal(sizes.reduce((a, b) => a + b, 0), 12_000);
   assert.equal(store.reviewLog().length, 0);
 });
+
+test('study time is taken from the server, added to and sent when it changes', async () => {
+  const day = store.dayKey(T0);
+  const calls = serve((url) => (url === 'api/state' ? json(200, { ...view(), time: { [day]: { d1: 50 } } }) : json(200, { rejected: [] })));
+  await store.load();
+  store.answerCard('c1', Rating.Good, T0, { active: 5_000 });
+  await settle();
+  const [sent] = syncs(calls);
+  assert.deepEqual(sent.body.time, { [day]: { d1: 55 } });
+  assert.equal(sent.body.reviews[0].active, 5_000);
+
+  store.answerCard('c2', Rating.Good, T0);
+  await settle();
+  assert.equal(syncs(calls)[1].body.time, undefined);
+});
