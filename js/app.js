@@ -7,6 +7,7 @@ import { TABBED_DECK_QUERY, clampAmount, ownTicks, pruneTicks, pullAllLabel, pul
 import { HEAT_WEEKS, PHONE_QUERY, canSwipeFrom, classifySwipe, inTab, isRevealTap, swipeLeaning, tabFilters } from './phone.js';
 import { recentStudy, rightShare } from './progress.js';
 import * as store from './store.js';
+import { createStudyClock, formatStudyTime, wordCount } from './studytime.js';
 import { effectiveTopic, filterLabel, inFilter, readableTopicName, resolveFilter, topicKeyFromFileName, topicLabel } from './topics.js';
 import { canTranslateDecks, englishSide, frontShows, portugueseText, shownSide } from './urdu.js';
 
@@ -3420,9 +3421,20 @@ function currentStudyCard(deckId, now) {
     session.cardId = card?.id ?? null;
     session.revealed = false;
     session.shownAt = Date.now(); // the answer's time, for the review log, counts from here
+    if (card) clock.start(cardWords(card, false));
   }
   return card;
 }
+
+// Active study time: counted only while a card is on screen, in view, and someone is at work.
+const clock = createStudyClock();
+const cardWords = (card, revealed) => wordCount(card.front) + (revealed ? wordCount(card.back) : 0);
+const studying = () => route().view === 'study' && !document.hidden;
+const markInput = () => (studying() ? clock.input() : clock.pause());
+for (const type of ['pointerdown', 'pointermove', 'keydown', 'wheel', 'scroll', 'touchstart', 'focus']) {
+  window.addEventListener(type, markInput, { passive: true, capture: true });
+}
+window.addEventListener('blur', () => clock.pause());
 
 // How many times the answer has been shown on this device; a phone's "tap anywhere" hint
 // goes away after the first few.
@@ -3438,6 +3450,9 @@ function revealCount() {
 
 function reveal() {
   session.revealed = true;
+  clock.input();
+  const shownCard = session.cardId && store.card(session.cardId);
+  if (shownCard) clock.setWords(cardWords(shownCard, true));
   const shown = revealCount();
   if (shown < REVEAL_HINTS) {
     try {
@@ -3452,7 +3467,8 @@ function rate(rating) {
   const count = session.undo.countAnswer(session.cardId);
   const now = Date.now();
   const duration = session.shownAt ? now - session.shownAt : null;
-  session.undo.record(store.answerCard(session.cardId, rating, now, { count, duration }));
+  const active = clock.take(now);
+  session.undo.record(store.answerCard(session.cardId, rating, now, { count, duration, active }));
   session.cardId = null;
   session.done++;
   render();
@@ -3464,6 +3480,8 @@ function undoAnswer() {
   const copy = session.undo.undo(store.restoreCard);
   if (copy) {
     Object.assign(session, { cardId: copy.id, revealed: true, done: Math.max(0, session.done - 1), shownAt: Date.now() });
+    const back = store.card(copy.id);
+    if (back) clock.start(cardWords(back, true));
     stopSpeaking();
   }
   render();
@@ -4743,6 +4761,7 @@ function route() {
 }
 
 function render() {
+  if (route().view !== 'study') clock.pause();
   const { view, id, deck } = route();
   if (offline) return;
   if (!account || store.storageInfo().signedOut) {
@@ -4822,6 +4841,8 @@ window.addEventListener('hashchange', () => {
 // Counts change as the day rolls over and learning steps come due. Another device may also have
 // changed the state meanwhile; when it is reloaded, the listener below renders it.
 document.addEventListener('visibilitychange', () => {
+  if (document.hidden) clock.pause();
+  else if (studying()) clock.input();
   if (document.hidden) return;
   if (!document.querySelector('dialog[open]') && route().view !== 'study') render();
   if (!document.querySelector('dialog[open]')) store.refresh();
