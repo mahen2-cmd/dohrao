@@ -7,7 +7,7 @@ import { TABBED_DECK_QUERY, clampAmount, ownTicks, pruneTicks, pullAllLabel, pul
 import { HEAT_WEEKS, PHONE_QUERY, canSwipeFrom, classifySwipe, inTab, isRevealTap, swipeLeaning, tabFilters } from './phone.js';
 import { recentStudy, rightShare } from './progress.js';
 import * as store from './store.js';
-import { createStudyClock, formatStudyTime, wordCount } from './studytime.js';
+import { createStudyClock, formatStudyTime, isStudying, wordCount } from './studytime.js';
 import { effectiveTopic, filterLabel, inFilter, readableTopicName, resolveFilter, topicKeyFromFileName, topicLabel } from './topics.js';
 import { canTranslateDecks, englishSide, frontShows, portugueseText, shownSide } from './urdu.js';
 
@@ -3431,7 +3431,8 @@ function currentStudyCard(deckId, now) {
 // Active study time: counted only while a card is on screen, in view, and someone is at work.
 const clock = createStudyClock();
 const cardWords = (card, revealed) => wordCount(card.front) + (revealed ? wordCount(card.back) : 0);
-const studying = () => route().view === 'study' && !document.hidden;
+const studying = () =>
+  isStudying({ view: route().view, hidden: document.hidden, focused: document.hasFocus(), dialogOpen: !!document.querySelector('dialog[open]') });
 const markInput = () => (studying() ? clock.input() : clock.pause());
 for (const type of ['pointerdown', 'pointermove', 'keydown', 'wheel', 'scroll', 'touchstart', 'focus']) {
   window.addEventListener(type, markInput, { passive: true, capture: true });

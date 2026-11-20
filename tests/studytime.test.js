@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { createStudyClock, formatStudyTime, idleLimit, wordCount } from '../js/studytime.js';
+import { createStudyClock, formatStudyTime, idleLimit, isStudying, wordCount } from '../js/studytime.js';
 
 test('idle limit grows with words and is capped', () => {
   assert.equal(idleLimit(0), 30_000);
@@ -75,4 +75,13 @@ test('formatStudyTime', () => {
   assert.equal(formatStudyTime(1099), '18 min');
   assert.equal(formatStudyTime(7500), '2 h 5 min');
   assert.equal(formatStudyTime(7200), '2 h');
+});
+
+test('the clock runs only on the study screen, in view, focused, with no dialog open', () => {
+  const at = { view: 'study', hidden: false, focused: true, dialogOpen: false };
+  assert.equal(isStudying(at), true);
+  assert.equal(isStudying({ ...at, view: 'stats' }), false);
+  assert.equal(isStudying({ ...at, hidden: true }), false);
+  assert.equal(isStudying({ ...at, focused: false }), false);
+  assert.equal(isStudying({ ...at, dialogOpen: true }), false);
 });

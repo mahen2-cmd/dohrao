@@ -76,3 +76,6 @@ export function formatStudyTime(seconds) {
   const m = minutes % 60;
   return m ? `${h} h ${m} min` : `${h} h`;
 }
+
+/** Whether someone can be at work on a card: on the study screen, in view and focused, with no dialog over it. */
+export const isStudying = ({ view, hidden, focused, dialogOpen }) => view === 'study' && !hidden && focused && !dialogOpen;
