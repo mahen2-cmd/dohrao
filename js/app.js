@@ -1805,7 +1805,8 @@ function todayHeadline(due, reviewedToday) {
 
 /** Today at a glance: the headline and the way into the first deck with cards due, beside the day's figures. */
 function todayPanel(all, now) {
-  const { reviewedToday, streak } = store.stats(now);
+  const { reviewedToday, streak, studiedToday } = store.stats(now);
+  const studied = studiedToday > 0 ? ` · ${formatStudyTime(studiedToday)} studied` : '';
   const due = all.reduce((total, { c }) => total + c.total, 0);
   const tomorrow = all.reduce((total, { c }) => total + c.tomorrow.total, 0);
   const waiting = all.filter(({ c }) => c.total);
@@ -1821,7 +1822,7 @@ function todayPanel(all, now) {
       h('p', { class: 'today-when' }, partOfDay(now)),
       h('h1', null, todayHeadline(due, reviewedToday)),
       // On a phone the day's figures fit on one line under the headline.
-      h('p', { class: 'today-line phone-only' }, `${reviewedToday.toLocaleString()} reviewed today · ${streak}-day streak · ${tomorrow.toLocaleString()} tomorrow`),
+      h('p', { class: 'today-line phone-only' }, `${reviewedToday.toLocaleString()} reviewed today${studied} · ${streak}-day streak · ${tomorrow.toLocaleString()} tomorrow`),
       first &&
         h(
           'div',
@@ -1842,6 +1843,7 @@ function todayPanel(all, now) {
       'dl',
       { class: 'today-figures wide-only' },
       h('div', null, h('dd', null, reviewedToday.toLocaleString()), h('dt', null, 'reviewed today')),
+      studiedToday > 0 && h('div', null, h('dd', null, formatStudyTime(studiedToday)), h('dt', null, 'studied today')),
       h(
         'div',
         { class: 'streak' },
@@ -3793,7 +3795,7 @@ function columnChart(items, unit) {
                   item.parts?.filter(([, n]) => n).map(([kind, n]) => h('i', { class: `k-${kind}`, style: `flex: ${n} 0 0` })),
                 ),
             ),
-            plural(item.value, unit),
+            item.tip ?? plural(item.value, unit),
             item.label,
           ),
         ),
@@ -3827,6 +3829,59 @@ function forecastPanel(s, today) {
     sub,
     columnChart(items, 'review'),
     dataTable('Reviews coming due', ['When', 'Reviews'], items.map((item) => [item.label, item.value])),
+  );
+}
+
+/** Study time over the chosen period, oldest first, in the period's bins: days, weeks or months. */
+function studyTimePanel(s, today) {
+  const { days, bin, span } = statsRange;
+  const every = { 1: 7, 7: 4, 30: 3 }[bin];
+  const items = [];
+  for (let i = days - bin; i >= 0; i -= bin) {
+    const from = addDays(today, -(i + bin - 1));
+    const to = addDays(today, -i);
+    let seconds = 0;
+    for (let d = from; d <= to; d = addDays(d, 1)) seconds += s.time.perDay[store.dayKey(d)] ?? 0;
+    const label = bin > 1 ? `${shortDate.format(from)} to ${shortDate.format(to)}` : i === 0 ? 'Today' : longDate.format(from);
+    const n = items.length;
+    const tick = (Math.ceil(days / bin) - 1 - n) % every ? null : i === 0 && bin === 1 ? 'Today' : shortDate.format(from);
+    items.push({ value: Math.round(seconds / 6) / 10, seconds, label, tick, tip: formatStudyTime(seconds) });
+  }
+  const { total } = s.time;
+  const studiedDays = Object.values(s.time.perDay).filter((n) => n > 0).length;
+  const sub = total
+    ? `${formatStudyTime(total)} over the past ${span}, about ${formatStudyTime(total / studiedDays)} a day you studied.`
+    : `No study time recorded over the past ${span}.`;
+  return panel(
+    'Study time',
+    sub,
+    columnChart(items, 'minute'),
+    dataTable('Study time', ['When', 'Time'], items.map((item) => [item.label, formatStudyTime(item.seconds)])),
+  );
+}
+
+/** How the period's study time splits between decks, most first; shown when two or more decks have some. */
+function timeByDeckPanel(s, decks) {
+  const rows = decks.filter((d) => s.time.byDeck[d.id] > 0).map((d) => [d, s.time.byDeck[d.id]]).sort((a, b) => b[1] - a[1]);
+  if (rows.length < 2) return null;
+  const total = sum(rows.map(([, seconds]) => seconds));
+  return panel(
+    'Time by deck',
+    `Where your study time went over the past ${statsRange.span}.`,
+    h(
+      'ul',
+      { class: 'deck-time' },
+      rows.map(([d, seconds]) =>
+        h(
+          'li',
+          null,
+          h('a', { href: `#/stats/${d.id}` }, d.name),
+          h('b', null, formatStudyTime(seconds)),
+          h('span', { class: 'share' }, percent(seconds, total)),
+          h('i', { 'aria-hidden': 'true', style: `width: ${(seconds / rows[0][1]) * 100}%` }),
+        ),
+      ),
+    ),
   );
 }
 
@@ -4020,6 +4075,8 @@ function renderStats(deck) {
               h('div', { class: 'stat' }, h('b', null, String(s.forecast[0])), s.forecast[0] === 1 ? 'review due today' : 'reviews due today'),
               h('div', { class: 'stat' }, h('b', null, String(s.reviewedToday)), 'reviewed today'),
               h('div', { class: 'stat' }, h('b', null, String(s.streak)), 'day streak'),
+              h('div', { class: 'stat' }, h('b', null, formatStudyTime(s.time.today)), 'studied today'),
+              s.time.total > 0 && h('div', { class: 'stat' }, h('b', null, formatStudyTime(s.time.total)), `studied over the past ${statsRange.span}`),
               reviewed > 0 &&
                 h(
                   'div',
@@ -4029,6 +4086,8 @@ function renderStats(deck) {
                 ),
             ),
             forecastPanel(s, today),
+            studyTimePanel(s, today),
+            !deck && timeByDeckPanel(s, decks),
             activity.section,
             cardsPanel(s),
             answersPanel(s),

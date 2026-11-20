@@ -4075,3 +4075,39 @@ table.upcoming {
 .fit-row > [hidden] {
   display: none;
 }
+
+/* Time by deck: one row per deck, with a bar for its share of the period's time. */
+.deck-time {
+  display: grid;
+  gap: 12px;
+  margin: 16px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.deck-time li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: baseline;
+  gap: 4px 12px;
+}
+.deck-time a {
+  overflow: hidden;
+  color: var(--text);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.deck-time b {
+  font-weight: 650;
+}
+.deck-time .share {
+  min-width: 3.5ch;
+  color: var(--muted);
+  font-size: 12.5px;
+  text-align: right;
+}
+.deck-time i {
+  grid-column: 1 / -1;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--accent);
+}
