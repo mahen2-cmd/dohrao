@@ -47,7 +47,7 @@ test("a user's own decks and cards round-trip", async () => {
 test('an empty user gets empty state', async () => {
   const { db, ben } = await seed();
   assert.deepEqual(buildView(db, ben.id, NOW), {
-    version: 1, decks: [], cards: [], daily: {}, log: {}, settings: {}, savedAt: 0,
+    version: 1, decks: [], cards: [], daily: {}, log: {}, time: {}, settings: {}, savedAt: 0,
   });
 });
 
@@ -703,4 +703,42 @@ test('a review for a card deleted meanwhile is accepted and dropped', async () =
   assert.deepEqual(applyChanges(db, ana.id, { reviews: [entry('r1')], deletedCards: ['c1'] }, NOW), { rejected: [] });
   assert.deepEqual(applyChanges(db, ana.id, { reviews: [entry('r2', { cardId: 'never-existed' })] }, NOW), { rejected: [] });
   assert.equal(reviewsOf(db, ana.id).length, 0);
+});
+
+// ---- Study time ---------------------------------------------------------------
+
+test('time is merged from two devices, keeping the larger count', async () => {
+  const { db, ana } = await seed();
+  applyChanges(db, ana.id, { time: { '2023-01-02': { d1: 30 } } }, NOW);
+  applyChanges(db, ana.id, { time: { '2023-01-02': { d1: 20, d2: 5 } } }, NOW);
+  assert.deepEqual(buildView(db, ana.id, NOW).time, { '2023-01-02': { d1: 30, d2: 5 } });
+});
+
+test('a sync without time keeps the stored time', async () => {
+  const { db, ana } = await seed();
+  applyChanges(db, ana.id, { time: { '2023-01-02': { d1: 30 } } }, NOW);
+  applyChanges(db, ana.id, { daily: { '2023-01-02': 1 } }, NOW);
+  assert.deepEqual(buildView(db, ana.id, NOW).time, { '2023-01-02': { d1: 30 } });
+});
+
+test('time is cleaned like log', async () => {
+  const { db, ana } = await seed();
+  applyChanges(db, ana.id, { time: { '2023-01-02': { d1: -1, d2: 1.5, d3: 'x', d4: 7 }, '2999-01-01': { d1: 1 } } }, NOW);
+  assert.deepEqual(buildView(db, ana.id, NOW).time, { '2023-01-02': { d4: 7 } });
+});
+
+test('time is per user', async () => {
+  const { db, ana, ben } = await seed();
+  applyChanges(db, ana.id, { time: { '2023-01-02': { d1: 30 } } }, NOW);
+  applyChanges(db, ben.id, { daily: { '2023-01-02': 1 } }, NOW);
+  assert.deepEqual(buildView(db, ben.id, NOW).time, {});
+});
+
+test("a review's active time must be null or 0..3,600,000 ms", async () => {
+  const { db, ana } = await seed();
+  const bad = [entry('a1', { active: -1 }), entry('a2', { active: 3_600_001 }), entry('a3', { active: 'x' }), entry('a4', { active: 1.5 })];
+  assert.deepEqual(applyChanges(db, ana.id, { reviews: bad }, NOW), { rejected: bad.map((e) => e.id) });
+  const good = [entry('g1', { active: null }), entry('g2'), entry('g3', { active: 3_600_000 })];
+  assert.deepEqual(applyChanges(db, ana.id, { reviews: good }, NOW), { rejected: [] });
+  assert.equal(reviewsOf(db, ana.id).length, 3);
 });

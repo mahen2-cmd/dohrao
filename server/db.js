@@ -55,7 +55,8 @@ CREATE TABLE IF NOT EXISTS user_state (
   daily TEXT NOT NULL,
   log TEXT NOT NULL,
   settings TEXT NOT NULL,
-  saved_at INTEGER NOT NULL
+  saved_at INTEGER NOT NULL,
+  time TEXT NOT NULL DEFAULT '{}'
 );
 CREATE TABLE IF NOT EXISTS topic_proposals (
   deck_id TEXT PRIMARY KEY REFERENCES decks(id) ON DELETE CASCADE,
@@ -84,6 +85,12 @@ function addAssignmentUrduColumns(db) {
   if (!have.includes('front')) db.exec('ALTER TABLE assignments ADD COLUMN front TEXT');
 }
 
+/** Each person's study time per day and deck; older databases lack the column. */
+function addStudyTimeColumn(db) {
+  const have = db.prepare('PRAGMA table_info(user_state)').all().map((c) => c.name);
+  if (!have.includes('time')) db.exec("ALTER TABLE user_state ADD COLUMN time TEXT NOT NULL DEFAULT '{}'");
+}
+
 /** Open (or create) the database at `file`; use ':memory:' in tests. */
 export function openDb(file) {
   const db = new DatabaseSync(file);
@@ -92,5 +99,6 @@ export function openDb(file) {
   db.exec('PRAGMA busy_timeout = 5000');
   db.exec(SCHEMA);
   addAssignmentUrduColumns(db);
+  addStudyTimeColumn(db);
   return db;
 }

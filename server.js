@@ -112,7 +112,7 @@ function validChanges(c) {
   const object = (key) => c[key] === undefined || isPlain(c[key]);
   return list('decks', isPlain) && list('cards', isPlain)
     && list('deletedDecks', (id) => typeof id === 'string') && list('deletedCards', (id) => typeof id === 'string')
-    && object('daily') && object('log') && object('settings')
+    && object('daily') && object('log') && object('time') && object('settings')
     && (c.settings === undefined || Buffer.byteLength(JSON.stringify(c.settings)) <= MAX_SETTINGS)
     && (c.savedAt === undefined || Number.isFinite(c.savedAt));
 }

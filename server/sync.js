@@ -65,6 +65,7 @@ const validId = (id) => typeof id === 'string' && id.length >= 1 && id.length <=
 const MAX_REVIEW = 1024;
 const MAX_REVIEWS_PER_SYNC = 200_000;
 const MAX_DURATION = 60_000;
+const MAX_ACTIVE = 3_600_000;
 const SCHEDULERS = ['sm2', 'fsrs', 'fsrs7'];
 const intIn = (x, lo, hi) => Number.isInteger(x) && x >= lo && x <= hi;
 const finiteOrNull = (x) => x === null || Number.isFinite(x);
@@ -79,6 +80,7 @@ function validReview(r) {
     intIn(r.state, 0, 3) &&
     ['elapsed', 'retention', 'intervalBefore', 'intervalAfter'].every((k) => finiteOrNull(r[k])) &&
     (r.duration === null || (Number.isFinite(r.duration) && r.duration >= 0 && r.duration <= MAX_DURATION)) &&
+    (r.active === undefined || r.active === null || intIn(r.active, 0, MAX_ACTIVE)) &&
     (r.scheduler === null || SCHEDULERS.includes(r.scheduler)) &&
     bytes(r) <= MAX_REVIEW
   );
@@ -154,13 +156,14 @@ export function buildView(db, userId, now) {
     decks.push(given);
     for (const c of cardsFor(db, userId, d.id, true)) cards.push(c);
   }
-  const s = db.prepare('SELECT daily, log, settings, saved_at FROM user_state WHERE user_id = ?').get(userId);
+  const s = db.prepare('SELECT daily, log, time, settings, saved_at FROM user_state WHERE user_id = ?').get(userId);
   return {
     version: 1,
     decks,
     cards,
     daily: parse(s?.daily),
     log: parse(s?.log),
+    time: parse(s?.time),
     settings: parse(s?.settings),
     savedAt: s?.saved_at ?? 0,
   };
@@ -266,17 +269,17 @@ function applyCard(db, userId, card, now, room) {
 }
 
 function applyState(db, userId, changes, now) {
-  const s = db.prepare('SELECT daily, log, settings, saved_at FROM user_state WHERE user_id = ?').get(userId);
+  const s = db.prepare('SELECT daily, log, time, settings, saved_at FROM user_state WHERE user_id = ?').get(userId);
   const pick = (key, column) => (changes[key] !== undefined ? JSON.stringify(changes[key]) : (s?.[column] ?? '{}'));
   // Answer counts from two devices are merged; neither one's count for a day is lost.
   // Only real days and whole counts are kept, on both sides, so hand-made data never sticks.
   const merge = (key) => (changes[key] !== undefined
     ? JSON.stringify(mergeCounts(cleanCounts(parse(s?.[key]), key, now), cleanCounts(changes[key], key, now)))
     : (s?.[key] ?? '{}'));
-  db.prepare(`INSERT INTO user_state (user_id, daily, log, settings, saved_at) VALUES (?, ?, ?, ?, ?)
-    ON CONFLICT (user_id) DO UPDATE SET daily = excluded.daily, log = excluded.log,
+  db.prepare(`INSERT INTO user_state (user_id, daily, log, time, settings, saved_at) VALUES (?, ?, ?, ?, ?, ?)
+    ON CONFLICT (user_id) DO UPDATE SET daily = excluded.daily, log = excluded.log, time = excluded.time,
       settings = excluded.settings, saved_at = excluded.saved_at`)
-    .run(userId, merge('daily'), merge('log'), pick('settings', 'settings'),
+    .run(userId, merge('daily'), merge('log'), merge('time'), pick('settings', 'settings'),
       changes.savedAt !== undefined ? changes.savedAt : (s?.saved_at ?? 0));
 }
 
@@ -320,7 +323,7 @@ export function applyChanges(db, userId, changes, now) {
       db.prepare('DELETE FROM reviews WHERE id = ? AND user_id = ?').run(id, userId);
       return true;
     });
-    if (['daily', 'log', 'settings', 'savedAt'].some((k) => changes[k] !== undefined)) applyState(db, userId, changes, now);
+    if (['daily', 'log', 'time', 'settings', 'savedAt'].some((k) => changes[k] !== undefined)) applyState(db, userId, changes, now);
     db.exec('COMMIT');
   } catch (err) {
     db.exec('ROLLBACK');

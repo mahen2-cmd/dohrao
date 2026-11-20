@@ -34,6 +34,24 @@ test('an old database gets the assignment Urdu columns', () => {
   }
 });
 
+test('an older database gains the time column', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'recall-db-'));
+  const file = join(dir, 'old.db');
+  try {
+    const old = new DatabaseSync(file);
+    old.exec('CREATE TABLE user_state (user_id TEXT PRIMARY KEY, daily TEXT NOT NULL, log TEXT NOT NULL, settings TEXT NOT NULL, saved_at INTEGER NOT NULL)');
+    old.exec("INSERT INTO user_state VALUES ('u1', '{}', '{}', '{}', 0)");
+    old.close();
+    for (let i = 0; i < 2; i++) {
+      const db = openDb(file); // twice: the migration is idempotent
+      assert.equal(db.prepare("SELECT time FROM user_state WHERE user_id = 'u1'").get().time, '{}');
+      db.close();
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('deleting a deck cascades to its cards and progress', () => {
   const db = openDb(':memory:');
   db.prepare("INSERT INTO users VALUES ('u1', 'ann', 'Ann', 'x', 'user', 1)").run();
