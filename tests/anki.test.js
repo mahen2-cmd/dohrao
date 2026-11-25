@@ -568,3 +568,22 @@ test('imported cards carry their Anki review history', async () => {
   const fresh = cards.find((c) => c.ankiId === 1790000000006);
   assert.deepEqual(fresh.history, []);
 });
+
+test('a hand-built collection with a cut-down review log, or none, still comes in', async () => {
+  const cutDown = altered(legacy(), `
+    drop table revlog;
+    create table revlog (id integer primary key, cid integer, ease integer, type integer);
+    insert into revlog values (${NOW - 20 * DAY}, 1790000000001, 3, 0);
+  `);
+  const { decks } = await readAnkiCollection(cutDown, NOW);
+  assert.equal(decks[0].cards.length, 8);
+  const hello = decks.flatMap((d) => d.cards).find((c) => c.ankiId === 1790000000001);
+  assert.deepEqual(hello.history, [
+    { at: NOW - 20 * DAY, rating: 3, state: 0, elapsed: null, duration: 0, intervalBefore: 0, intervalAfter: 0 },
+  ]);
+
+  const none = altered(legacy(), 'drop table revlog');
+  const result = await readAnkiCollection(none, NOW);
+  assert.equal(result.decks[0].cards.length, 8);
+  assert.ok(result.decks.flatMap((d) => d.cards).every((c) => c.history.length === 0));
+});

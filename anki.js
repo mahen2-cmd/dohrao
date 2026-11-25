@@ -440,8 +440,14 @@ function convert(all, now) {
   const longTemplate = (t) => [t.front, t.back].some((side) => Buffer.byteLength(String(side ?? '')) > MAX_TEMPLATE);
   if (source.notetypes.some((n) => n.templates.some(longTemplate))) throw new Error(TOO_LARGE);
   const notetypes = new Map(source.notetypes.map((n) => [n.id, n]));
+  // Hand-made collections may keep a cut-down review log, or none; what is missing counts as empty.
+  const logged = tables.has('revlog') ? new Set(all('select name from pragma_table_info(\'revlog\')').map((c) => c.name)) : new Set();
+  const column = (name) => (logged.has(name) ? name : `null as ${name}`);
   const history = groupBy(
-    all('select id, cid, ease, ivl, lastIvl, time, type from revlog where ease between 1 and 4 and type < 3 order by id'),
+    ['id', 'cid', 'ease', 'type'].every((name) => logged.has(name))
+      ? all(`select id, cid, ease, ${column('ivl')}, ${column('lastIvl')}, ${column('time')}, type from revlog
+          where ease between 1 and 4 and type < 3 order by id`)
+      : [],
     'cid',
   );
   // Each card is read with its note's text, so one long note shared by many cards would be held
