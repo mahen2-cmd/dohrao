@@ -1,4 +1,4 @@
-// Accounts, invite codes, sessions and the login rate limiter.
+// Accounts, invite codes, sessions and the rate limiter.
 import { randomBytes, randomUUID, scrypt, createHash, timingSafeEqual } from 'node:crypto';
 
 const SESSION_MS = 180 * 24 * 60 * 60 * 1000;

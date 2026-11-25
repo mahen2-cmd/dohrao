@@ -274,9 +274,8 @@ export function createRecallServer({ dataDir, origin, tts, translator, ankiReade
   const secure = ownOrigin?.startsWith('https://') ? '; Secure' : '';
   const cookie = (token, age) => `${COOKIE}=${token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${age}${secure}`;
   const limits = {
-    login: createLimiter({ max: 10, windowMs: 15 * 60 * 1000 }),
     signup: createLimiter({ max: 10, windowMs: 15 * 60 * 1000 }),
-    // Keyed by user id, unlike the two above.
+    // Keyed by user id, unlike the one above.
     media: createLimiter({ max: IMAGES_PER_DAY, windowMs: DAY }),
     // Studying with auto-play asks for a few a card, far fewer than this.
     tts: createLimiter({ max: 120, windowMs: 60 * 1000 }),
@@ -479,7 +478,6 @@ export function createRecallServer({ dataDir, origin, tts, translator, ankiReade
       return signIn(res, 201, await signUp(db, { code, username, name, password }, Date.now()));
     }
     if (method === 'POST' && path === '/api/login') {
-      limit('login', req);
       const { username, password } = await readJson(req, MAX_FORM);
       return signIn(res, 200, await logIn(db, { username, password }));
     }

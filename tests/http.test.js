@@ -204,12 +204,10 @@ test('admin gives a deck and the recipient sees it', async (t) => {
   assert.equal((await logIn(port, 'ben', 'new-password')).status, 200);
 });
 
-test('login is rate limited', async (t) => {
+test('login is not rate limited', async (t) => {
   const { port } = await start(t);
-  for (let i = 0; i < 10; i++) assert.equal((await logIn(port, 'admin', 'wrong-password')).status, 401);
-  const res = await logIn(port, 'admin', 'admin-password');
-  assert.equal(res.status, 429);
-  assert.deepEqual(res.json, { error: 'rate-limited' });
+  for (let i = 0; i < 15; i++) assert.equal((await logIn(port, 'admin', 'wrong-password')).status, 401);
+  assert.equal((await logIn(port, 'admin', 'admin-password')).status, 200);
 });
 
 test('requests for another host are refused', async (t) => {

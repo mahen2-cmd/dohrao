@@ -38,7 +38,7 @@ In the registrar's DNS settings, add an **A record**:
 
 If your DNS is at **Cloudflare**, set the record's proxy status to **DNS only** (the grey
 cloud, not the orange one). With the proxy on, every visitor reaches Recall from Cloudflare's
-addresses, so they all share one login rate limit and can lock each other out, and Caddy's
+addresses, so they all share one sign-up rate limit and can lock each other out, and Caddy's
 certificate requests can fail.
 
 If the server also has an IPv6 address, add an **AAAA record** with it too. Check that it has
