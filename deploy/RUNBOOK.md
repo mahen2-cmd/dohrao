@@ -168,7 +168,21 @@ with **Reset password** under **Admin → People**, and tell them what it is.
 
 The server copies the database once a day to `/var/lib/recall/backups/recall-YYYY-MM-DD.db`
 and keeps the last 30. Each one is a complete database on its own. They are on the same
-server, so copy one to your computer now and then:
+server, so have your computer pull them down every day, with the pictures:
+
+```bash
+# On your computer, once: sets up a daily timer for your user, and pulls now to check it works
+bash deploy/install-pull-backups.sh root@203.0.113.10
+```
+
+It copies into `~/recall-backups/` (`db/` and `media/`), keeps the newest 90 daily databases,
+and never deletes a copy because the server lost it. A day missed while the computer is off is
+caught up when it is next on. The run fails if the newest backup is more than two days old or
+does not pass SQLite's integrity check. `~/recall-backups/last-pulled` says when it last
+worked; `systemctl --user status recall-backup` and `journalctl --user -u recall-backup` say
+more. To pull once by hand: `bash deploy/pull-backups.sh root@203.0.113.10`.
+
+Or copy them yourself:
 
 ```bash
 # On your computer: list them, then copy one (or all) down
