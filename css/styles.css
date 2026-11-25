@@ -1065,11 +1065,6 @@ kbd {
   flex: 1;
   justify-content: center;
 }
-.foot-note {
-  margin: 0;
-  color: var(--muted);
-  font-size: 13.5px;
-}
 .reserve-empty {
   gap: 8px;
   padding: 20px;
@@ -2213,6 +2208,10 @@ math-field.math-input:focus-within {
   padding-left: 34px;
   font-size: 12px;
   color: var(--muted);
+}
+.chart-axis {
+  margin: 0 0 10px -34px;
+  line-height: 1;
 }
 .chart-plot {
   position: relative;

@@ -878,6 +878,8 @@ test('homeGroups puts hidden decks only under hidden, keeps folder order and emp
   ]);
   assert.deepEqual(groups.loose.map((x) => x.id), [a.id]);
   assert.deepEqual(groups.hidden.map((x) => x.id), [d.id]);
+  // Today's totals take the shown decks, folders and all, never the hidden ones.
+  assert.deepEqual(groups.shown.map((x) => x.id), [a.id, b.id, c.id]);
   // Showing it again puts it back in its folder.
   store.setHidden(d.id, false);
   assert.deepEqual(store.homeGroups(store.decks()).folders[0].decks.map((x) => x.id), [c.id, d.id]);

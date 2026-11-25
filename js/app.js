@@ -703,7 +703,10 @@ function openDeckDialog(deck) {
         if (own && !values.name) return name.focus();
         if (deck) {
           store.updateDeck(deck.id, values);
-          if (hidden.checked !== store.isHidden(deck)) store.setHidden(deck.id, hidden.checked);
+          if (hidden.checked !== store.isHidden(deck)) {
+            store.setHidden(deck.id, hidden.checked);
+            hiddenToast(deck, hidden.checked);
+          }
           if (folderChosen !== (store.folderOf(deck) ?? '')) store.setDeckFolder(deck.id, folderChosen || null);
         } else store.createDeck(values);
         dialog.close();
@@ -1139,18 +1142,22 @@ async function removeCards(ids) {
   });
   if (!ok) return;
   const deleted = store.deleteCards(ids);
-  selected = new Set();
+  for (const id of ids) selected.delete(id);
   toast(`${plural(deleted, 'card')} deleted`);
   render();
 }
 
-/** Put a reversed copy of each card on the reserve, and leave the copies ticked, ready to be moved. */
+/**
+ * Put a reversed copy of each card on the reserve, and leave the copies ticked, ready to be moved,
+ * in place of the cards they came from. Other ticked cards stay ticked.
+ */
 function addReversedCards(ids) {
   const added = store.addReversed(ids);
   const skipped = ids.length - added.length;
   const already = skipped ? `${skipped.toLocaleString()} already had one` : '';
   if (added.length) {
-    selected = new Set(added.map((card) => card.id));
+    for (const id of ids) selected.delete(id);
+    for (const card of added) selected.add(card.id);
     toast(`${plural(added.length, 'reversed card')} added to the reserve${already && `, ${already}`}`);
   } else {
     toast(skipped === 1 ? 'This card already has a reversed version' : 'These cards already have reversed versions');
@@ -1172,6 +1179,8 @@ async function returnCardsToReserve(ids) {
     if (!ok) return;
   }
   const moved = store.returnToReserve(ids);
+  // Like pulled cards, these change lists: none stays ticked in the reserve.
+  for (const id of ids) selected.delete(id);
   toast(`${plural(moved, 'card')} put back on reserve`);
   render();
 }
@@ -1865,15 +1874,24 @@ function todayPanel(all, now) {
 // Whether the home page's hidden section is open; kept across renders so Show can be pressed again.
 let hiddenOpen = false;
 
+const hiddenToast = (deck, hidden) => toast(hidden ? `Hidden “${deck.name}”.` : `“${deck.name}” is back in your decks.`);
+
 function setDeckHidden(deck, hidden) {
   store.setHidden(deck.id, hidden);
-  toast(hidden ? `Hidden “${deck.name}”.` : `“${deck.name}” is back in your decks.`);
+  hiddenToast(deck, hidden);
   render();
+  // The page is drawn afresh, so keep the keyboard near where it was: on the hidden section
+  // after hiding, on the deck itself after showing it (or the hidden section, if its folder is shut).
+  const candidates = [!hidden && document.querySelector(`.deck[data-deck="${CSS.escape(deck.id)}"] a[href]`), document.querySelector('.hidden-decks summary')];
+  candidates.find((el) => el && (el.checkVisibility?.() ?? true))?.focus();
 }
 
 /** The folded section of hidden decks at the bottom of the home page, or nothing when none is hidden. */
 function hiddenSection(hidden, now) {
-  if (!hidden.length) return null;
+  if (!hidden.length) {
+    hiddenOpen = false; // the next deck hidden starts the section folded again
+    return null;
+  }
   const section = h(
     'details',
     { class: 'hidden-decks', open: hiddenOpen, ontoggle: () => (hiddenOpen = section.open) },
@@ -2026,6 +2044,7 @@ function deckRow({ deck, c }) {
     'li',
     {
       class: 'deck',
+      'data-deck': deck.id,
       ...(drags && {
         draggable: 'true',
         ondragstart: (e) => {
@@ -2150,7 +2169,7 @@ function renderHome() {
   const groups = store.homeGroups(decks);
   const withCounts = (list) => list.map((deck) => ({ deck, c: store.counts(deck.id, now) }));
   // Today's figures take every shown deck, whatever its folder, in the list's order.
-  const all = withCounts(decks.filter((d) => !store.isHidden(d)));
+  const all = withCounts(groups.shown);
   const counted = new Map(all.map((row) => [row.deck.id, row]));
   const rowsOf = (list) => list.map((d) => counted.get(d.id));
   const open = openFolders();
@@ -2556,8 +2575,8 @@ function reserveBar(deck, n) {
 }
 
 /**
- * A deck's card list, in one of three views: 'all' (every card, the filters as set), 'cards'
- * (the cards being studied) or 'reserve' (the reserve, in the order it is pulled in). Lists
+ * A deck's card list, in one of two views: 'cards' (the cards being studied) or 'reserve'
+ * (the reserve, in the order it is pulled in). Lists
  * share the ticked cards, but each prunes and acts only on its own.
  *
  * `column` makes a reserve list the wide screen's reserve column: narrowed to `column.topics`,
@@ -2578,8 +2597,8 @@ function cardList(deck, view, { filters, filtering, editable, hasTopics, now, co
     const q = query.trim();
     // A view narrows the list: the reserve, or everything else.
     const matches = store
-      .findCards(deck.id, { text: q, ...(view === 'all' ? filters : tabFilters(filters, view)), ...(column && { topics: column.topics }) }, now)
-      .filter((card) => view === 'all' || inTab(card, view));
+      .findCards(deck.id, { text: q, ...tabFilters(filters, view), ...(column && { topics: column.topics }) }, now)
+      .filter((card) => inTab(card, view));
     shown.textContent = q || filtering ? `${matches.length.toLocaleString()} of ${plural(cards.length, 'card')}` : plural(cards.length, 'card');
     // Only cards on screen stay ticked; ticks in another list's view are that list's to keep.
     // With one list on screen (the tabs), anything it does not show is unticked, as it always was;
@@ -2591,7 +2610,7 @@ function cardList(deck, view, { filters, filtering, editable, hasTopics, now, co
       drawList();
     };
     // In reserve order, the reserve cards shown can be moved: `line` is those, first to last.
-    const line = view === 'reserve' || (view === 'all' && filters.sort === 'reserve') ? matches.filter((card) => card.reserved) : [];
+    const line = view === 'reserve' ? matches.filter((card) => card.reserved) : [];
     const picked = line.filter((card) => selected.has(card.id));
     const waiting = line.filter((card) => !selected.has(card.id));
     const movable = picked.length > 0 && picked.length === mine.size;
@@ -2617,7 +2636,9 @@ function cardList(deck, view, { filters, filtering, editable, hasTopics, now, co
     const moveButton = (label, title, onclick, glyph) => h('button', { class: 'btn', type: 'button', title, onclick }, glyph && icon(glyph), label);
     column?.onDraw({ ticked: [...mine], movable: movable && line.length > 1, step, toTop, toBottom: () => move([...mine]), untick: () => pick([...mine], false) });
     if (!matches.length) {
-      const message = q && !filtering ? `No cards match “${q}”.` : q ? `No cards match “${q}” with these filters.` : 'No cards match these filters.';
+      // The reserve column, with no search or filter, only comes up short when its topic has nothing on reserve.
+      const message =
+        q && !filtering ? `No cards match “${q}”.` : q ? `No cards match “${q}” with these filters.` : column && !filtering ? 'Nothing on reserve in this topic.' : 'No cards match these filters.';
       list.replaceChildren(h('div', { class: 'card-list' }, h('div', { class: 'list-empty' }, message)));
       return;
     }
@@ -3168,7 +3189,8 @@ function reserveColumn(deck, editable, options) {
       },
     },
     topicSelect,
-    waiting > 0 ? h('div', { class: 'foot-row' }, amountBox, pullButton) : h('p', { class: 'foot-note' }, 'Nothing on reserve in this topic.'),
+    // An empty topic is told in the list above, so the foot says nothing more.
+    waiting > 0 && h('div', { class: 'foot-row' }, amountBox, pullButton),
   );
 
   const foot = h('div', { class: 'reserve-foot' });
@@ -3431,12 +3453,24 @@ function currentStudyCard(deckId, now) {
 // Active study time: counted only while a card is on screen, in view, and someone is at work.
 const clock = createStudyClock();
 const cardWords = (card, revealed) => wordCount(card.front) + (revealed ? wordCount(card.back) : 0);
+// Read straight from the address, as this runs on every pointer move.
 const studying = () =>
-  isStudying({ view: route().view, hidden: document.hidden, focused: document.hasFocus(), dialogOpen: !!document.querySelector('dialog[open]') });
+  isStudying({ view: location.hash.split('/')[1] ?? '', hidden: document.hidden, focused: document.hasFocus(), dialogOpen: !!document.querySelector('dialog[open]') });
 const markInput = () => (studying() ? clock.input() : clock.pause());
-for (const type of ['pointerdown', 'pointermove', 'keydown', 'wheel', 'scroll', 'touchstart', 'focus']) {
+for (const type of ['pointerdown', 'keydown', 'wheel', 'scroll', 'touchstart', 'focus']) {
   window.addEventListener(type, markInput, { passive: true, capture: true });
 }
+// A moving pointer fires many times a second; a quarter-second's gap costs the clock nothing.
+let lastMove = 0;
+window.addEventListener(
+  'pointermove',
+  (e) => {
+    if (e.timeStamp - lastMove < 250) return;
+    lastMove = e.timeStamp;
+    markInput();
+  },
+  { passive: true, capture: true },
+);
 window.addEventListener('blur', () => clock.pause());
 
 // How many times the answer has been shown on this device; a phone's "tap anywhere" hint
@@ -3454,8 +3488,6 @@ function revealCount() {
 function reveal() {
   session.revealed = true;
   clock.input();
-  const shownCard = session.cardId && store.card(session.cardId);
-  if (shownCard) clock.setWords(cardWords(shownCard, true));
   const shown = revealCount();
   if (shown < REVEAL_HINTS) {
     try {
@@ -3573,6 +3605,8 @@ function renderStudy(deck) {
   const now = Date.now();
   if (session.deckId !== deck.id) Object.assign(session, { deckId: deck.id, cardId: null, revealed: false, done: 0, spoken: null, undo: createUndo() });
   const card = currentStudyCard(deck.id, now);
+  // The idle limit follows the card as it now reads: its answer shown, or its text edited.
+  if (card) clock.setWords(cardWords(card, session.revealed));
   const c = store.counts(deck.id, now, deck.studyFilter);
   const filtered = resolveFilter(deck, deck.studyFilter) !== null;
   const label = filterLabel(deck, deck.studyFilter);
@@ -3770,13 +3804,15 @@ function axisTop(max) {
 /**
  * Vertical bars from `[{ value, label, tick, parts }]`; `tick` is the text under a bar, if any,
  * and `parts`, if given, splits the bar into `[kind, value]` pieces, from the bottom up.
+ * `axis`, if given, names the unit of the numbers up the side, such as "min".
  */
-function columnChart(items, unit) {
+function columnChart(items, unit, axis) {
   const { step, top } = axisTop(Math.max(...items.map((item) => item.value)));
   const ticks = Array.from({ length: top / step + 1 }, (_, i) => i * step);
   return h(
     'div',
     { class: 'chart', 'aria-hidden': 'true' },
+    axis && h('div', { class: 'chart-axis' }, axis),
     h(
       'div',
       { class: 'chart-plot' },
@@ -3846,7 +3882,7 @@ function studyTimePanel(s, today) {
     const label = bin > 1 ? `${shortDate.format(from)} to ${shortDate.format(to)}` : i === 0 ? 'Today' : longDate.format(from);
     const n = items.length;
     const tick = (Math.ceil(days / bin) - 1 - n) % every ? null : i === 0 && bin === 1 ? 'Today' : shortDate.format(from);
-    items.push({ value: Math.round(seconds / 6) / 10, seconds, label, tick, tip: formatStudyTime(seconds) });
+    items.push({ value: seconds / 60, seconds, label, tick, tip: formatStudyTime(seconds) });
   }
   const { total } = s.time;
   const studiedDays = Object.values(s.time.perDay).filter((n) => n > 0).length;
@@ -3856,7 +3892,7 @@ function studyTimePanel(s, today) {
   return panel(
     'Study time',
     sub,
-    columnChart(items, 'minute'),
+    columnChart(items, 'minute', 'min'),
     dataTable('Study time', ['When', 'Time'], items.map((item) => [item.label, formatStudyTime(item.seconds)])),
   );
 }
@@ -4076,7 +4112,7 @@ function renderStats(deck) {
               h('div', { class: 'stat' }, h('b', null, String(s.forecast[0])), s.forecast[0] === 1 ? 'review due today' : 'reviews due today'),
               h('div', { class: 'stat' }, h('b', null, String(s.reviewedToday)), 'reviewed today'),
               h('div', { class: 'stat' }, h('b', null, String(s.streak)), 'day streak'),
-              h('div', { class: 'stat' }, h('b', null, formatStudyTime(s.time.today)), 'studied today'),
+              s.time.today > 0 && h('div', { class: 'stat' }, h('b', null, formatStudyTime(s.time.today)), 'studied today'),
               s.time.total > 0 && h('div', { class: 'stat' }, h('b', null, formatStudyTime(s.time.total)), `studied over the past ${statsRange.span}`),
               reviewed > 0 &&
                 h(

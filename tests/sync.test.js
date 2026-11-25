@@ -727,6 +727,12 @@ test('time is cleaned like log', async () => {
   assert.deepEqual(buildView(db, ana.id, NOW).time, { '2023-01-02': { d4: 7 } });
 });
 
+test('time keeps only whole seconds that fit in a day, never arrays', async () => {
+  const { db, ana } = await seed();
+  applyChanges(db, ana.id, { time: { '2023-01-02': { d1: [5, 6], d2: 86_401, d3: 1e300, d4: 86_400 } } }, NOW);
+  assert.deepEqual(buildView(db, ana.id, NOW).time, { '2023-01-02': { d4: 86_400 } });
+});
+
 test('time is per user', async () => {
   const { db, ana, ben } = await seed();
   applyChanges(db, ana.id, { time: { '2023-01-02': { d1: 30 } } }, NOW);

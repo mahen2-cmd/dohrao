@@ -38,7 +38,6 @@ test('each column acts only on its own ticked cards', () => {
   const shown = cards.slice(0, 2);
   assert.deepEqual(ownTicks(ticked, shown, 'reserve'), ['r']);
   assert.deepEqual(ownTicks(ticked, shown, 'cards'), ['s']);
-  assert.deepEqual(ownTicks(ticked, shown, 'all').sort(), ['r', 's']);
 });
 
 test('a list clears its own ticks that are no longer shown, and keeps the other list\'s', () => {

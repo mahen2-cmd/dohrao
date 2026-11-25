@@ -595,6 +595,7 @@ export function homeGroups(list) {
     folders: folders().map((folder) => ({ folder, decks: byHomeOrder(shown.filter((d) => folderOf(d) === folder.id)) })),
     loose: byHomeOrder(shown.filter((d) => folderOf(d) === null)),
     hidden,
+    shown, // every deck not hidden, in the list's order: what today's figures count
   };
 }
 

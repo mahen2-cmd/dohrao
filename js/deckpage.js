@@ -31,9 +31,9 @@ export function pullAllLabel(count, topicName) {
   return `Pull all ${count.toLocaleString()}${topicName ? ` from ${topicName}` : ''}`;
 }
 
-/** The ticked ids among `cards` that belong to a list's view: the reserve, the rest, or all. */
+/** The ticked ids among `cards` that belong to a list's view: 'reserve' or 'cards'. */
 export function ownTicks(selected, cards, view) {
-  return cards.filter((card) => selected.has(card.id) && (view === 'all' || inTab(card, view))).map((card) => card.id);
+  return cards.filter((card) => selected.has(card.id) && inTab(card, view)).map((card) => card.id);
 }
 
 /**

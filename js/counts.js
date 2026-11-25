@@ -4,12 +4,15 @@ import { DAY } from './fsrs.js';
 import { dayKey, isDayKey } from './progress.js';
 
 const isCount = (n) => Number.isInteger(n) && n >= 0;
+// Study time is whole seconds for one deck on one day, so never more than a day's worth.
+const isSeconds = (n) => isCount(n) && n <= 86_400;
 
 /**
  * Answer counts with only what the app itself can write: real days no later than tomorrow
  * (`now`'s day plus one, for clocks a little ahead), holding whole counts of zero or more. In
  * `log` each day holds, per deck, an array of such counts (or one count, as files from the
- * single-person version did). Anything else is dropped.
+ * single-person version did). In `time` each day holds, per deck, one whole number of seconds
+ * no longer than a day. Anything else is dropped.
  */
 export function cleanCounts(counts, kind, now) {
   const last = dayKey(now + DAY);
@@ -20,7 +23,8 @@ export function cleanCounts(counts, kind, now) {
     if (kind === 'daily') {
       if (isCount(value)) out[key] = value;
     } else if (isObject(value)) {
-      const decks = Object.fromEntries(Object.entries(value).filter(([, row]) => isCount(row) || (Array.isArray(row) && row.every(isCount))));
+      const keep = kind === 'time' ? isSeconds : (row) => isCount(row) || (Array.isArray(row) && row.every(isCount));
+      const decks = Object.fromEntries(Object.entries(value).filter(([, row]) => keep(row)));
       if (Object.keys(decks).length) out[key] = decks;
     }
   }
