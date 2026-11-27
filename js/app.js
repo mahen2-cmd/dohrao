@@ -1762,6 +1762,7 @@ function accountMenu() {
       account?.username && h('div', { class: 'menu-who' }, h('b', null, account.name), h('span', null, account.username)),
       account?.role === 'admin' && h('a', { href: '#/admin' }, icon('shield'), 'Admin'),
       h('button', { class: 'phone-only', type: 'button', onclick: exportBackup }, icon('download'), 'Export backup'),
+      h('a', { href: '#/help' }, icon('help'), 'How it works'),
       h('button', { type: 'button', onclick: logOut }, icon('logout'), 'Log out'),
     ),
   );
@@ -4368,6 +4369,7 @@ function renderAuth(mode) {
       h('p', { class: 'sub' }, sub),
       form,
       h('p', { class: 'auth-switch' }, signup ? h('a', { href: '#/' }, 'Have an account? Log in') : h('a', { href: '#/signup' }, 'Have an invite code? Sign up')),
+      h('p', { class: 'auth-switch' }, h('a', { href: '#/help' }, 'How it works')),
     ),
   );
 }
@@ -5000,6 +5002,15 @@ document.addEventListener('keydown', (e) => {
     e.preventDefault();
     openCardDialog({ card: store.card(session.cardId) });
   }
+});
+
+// ? opens How it works from any screen, signed in or out, unless typing or in a dialog.
+document.addEventListener('keydown', (e) => {
+  if (document.querySelector('dialog[open]') || route().view === 'help') return;
+  const typing = !!e.target.closest?.('input, textarea, select, [contenteditable], math-field');
+  if (!isHelpKey({ key: e.key, ctrlKey: e.ctrlKey, metaKey: e.metaKey, altKey: e.altKey, typing })) return;
+  e.preventDefault();
+  location.hash = '#/help';
 });
 
 window.addEventListener('hashchange', () => {

@@ -24,6 +24,7 @@ A small, fast flashcard app with Anki's scheduling and a cleaner interface, host
 - **Read aloud.** A speaker button on each side of a card, a language for each side, optional auto-play, and an adjustable speaking speed. Maths and images are skipped. Audio is generated once per sentence and cached, unless a deck is set not to keep it.
 - **Saved on the server.** Only what changed is sent, so a phone and a laptop used on the same day do not overwrite each other. Answers given with no signal are kept in the browser and sent when the connection is back. The server keeps a dated backup each day.
 - **Keyboard-first studying**, light and dark themes, and a layout that works on a phone.
+- **How it works.** A short page on the daily routine, the four buttons, the counts, the reserve and the shortcuts, in English, Urdu or Roman Urdu. It is in the account menu, on the login screen, and on the ? key.
 - **One dependency to install.** The app is plain HTML, CSS and JavaScript; the server is plain Node with its built-in SQLite. The only package is Anthropic's SDK, for sorting the admin's cards into topics; run `npm ci` once (the deploy script does it for you), and everything but that sorting works without it or a key. [KaTeX](https://katex.org), which typesets the maths, and [MathLive](https://mathlive.io), the equation editor, are included in `vendor/`, so maths works offline.
 
 ## Accounts, invites and the admin
