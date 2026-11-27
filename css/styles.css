@@ -4110,3 +4110,99 @@ table.upcoming {
   border-radius: 3px;
   background: var(--accent);
 }
+
+/* ---- How it works ------------------------------------------------------ */
+.help-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 20px 0;
+}
+.help-toggle {
+  display: flex;
+  margin: 32px 0 0;
+}
+.help-text {
+  max-width: 640px;
+  padding-bottom: 32px;
+}
+.help-text h1 {
+  margin: 24px 0 10px;
+  font-size: 30px;
+  line-height: 1.15;
+  letter-spacing: -0.025em;
+  font-weight: 650;
+}
+.help-intro {
+  color: var(--muted);
+  font-size: 17px;
+}
+.help-section {
+  margin-top: 28px;
+  padding-top: 24px;
+  border-top: 1px solid var(--border);
+}
+.help-section h2 {
+  margin-bottom: 10px;
+  font-size: 17px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+.help-section p,
+.help-section li,
+.help-section dd {
+  line-height: 1.6;
+}
+.help-section p + p,
+.help-section ol + p,
+.help-section dl + p {
+  margin-top: 10px;
+}
+.help-section ol {
+  padding-inline-start: 1.4em;
+}
+.help-section li + li {
+  margin-top: 4px;
+}
+.help-section dl {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 8px 20px;
+}
+.help-section dt {
+  font-weight: 650;
+}
+.help-keys kbd {
+  font-size: 12px;
+  opacity: 0.8;
+}
+/* Urdu script: Nastaliq, as on the cards, with the extra line height it needs. */
+.help-text.urdu-text,
+.segmented button:lang(ur) {
+  font-family: 'Noto Nastaliq Urdu', 'Jameel Noori Nastaleeq', 'Urdu Typesetting', 'Noto Naskh Arabic', serif;
+  letter-spacing: 0;
+}
+.help-text.urdu-text p,
+.help-text.urdu-text li,
+.help-text.urdu-text dd,
+.help-text.urdu-text dt,
+.help-text.urdu-text .help-intro {
+  line-height: 2.1;
+}
+.help-text.urdu-text h1,
+.help-text.urdu-text h2 {
+  line-height: 1.8;
+  letter-spacing: 0;
+}
+@media (max-width: 640px) {
+  .help-toggle {
+    margin-top: 20px;
+  }
+  .help-section dl {
+    grid-template-columns: 1fr;
+    gap: 2px;
+  }
+  .help-section dd + dt {
+    margin-top: 10px;
+  }
+}

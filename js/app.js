@@ -1,6 +1,7 @@
 import * as api from './api.js';
 import { hasRichContent, imageToken, mathSpans, mathToken, parseContent, speechText, splitMore } from './content.js';
 import { DAY, MINUTE, Rating, State, dayStart } from './fsrs.js';
+import { HELP, HELP_LANGS, HELP_LANG_KEY, initialHelpLang, isHelpKey } from './help.js';
 import { parseSpreadsheet } from './importer.js';
 import { createUndo } from './undo.js';
 import { TABBED_DECK_QUERY, clampAmount, ownTicks, pruneTicks, pullAllLabel, pullPreview } from './deckpage.js';
@@ -109,6 +110,7 @@ const ICONS = {
   sigma: '<path d="M18 5H6l6 7-6 7h12"/>',
   more: '<path d="M6 12h.01M12 12h.01M18 12h.01"/>',
   image: '<rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="9" cy="10" r="1.5"/><path d="M21 15l-5-5-9 9"/>',
+  help: '<circle cx="12" cy="12" r="9"/><path d="M9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.6.3-1 .9-1 1.6v.6"/><path d="M12 17h.01"/>',
   user: '<circle cx="12" cy="8" r="4"/><path d="M4.5 20a7.5 7.5 0 0 1 15 0"/>',
   logout: '<path d="M14 4h4a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-4M10 16l-4-4 4-4M6 12h10"/>',
   shield: '<path d="M12 3l7 3v5c0 4.5-3 8-7 10-4-2-7-5.5-7-10V6z"/>',
@@ -4370,6 +4372,75 @@ function renderAuth(mode) {
   );
 }
 
+/** The How it works page, in the language chosen on its toggle (remembered in this browser). */
+function renderHelp() {
+  const signedIn = account && !store.storageInfo().signedOut;
+  let saved = null;
+  try {
+    saved = localStorage.getItem(HELP_LANG_KEY);
+  } catch {}
+  let lang = initialHelpLang(saved, signedIn ? store.decks() : undefined);
+
+  const toggle = h('div', { class: 'segmented', role: 'group', 'aria-label': 'Language' });
+  const body = h('div');
+  const draw = () => {
+    const page = HELP[lang];
+    const urdu = lang === 'ur';
+    // Keys stay left to right inside Urdu script, so Ctrl+Z never reads Z+Ctrl.
+    const keyNames = (names) => names.flatMap((name, i) => [i ? (lang === 'en' ? ' or ' : ' / ') : null, h('kbd', { dir: 'ltr' }, name)]).filter(Boolean);
+    toggle.replaceChildren(
+      ...HELP_LANGS.map(([code, label]) =>
+        h(
+          'button',
+          {
+            type: 'button',
+            'aria-pressed': String(code === lang),
+            lang: code === 'ur' ? 'ur' : null,
+            onclick: () => {
+              lang = code;
+              try {
+                localStorage.setItem(HELP_LANG_KEY, code);
+              } catch {}
+              draw();
+            },
+          },
+          label,
+        ),
+      ),
+    );
+    body.replaceChildren(
+      h(
+        'article',
+        { class: `help-text${urdu ? ' urdu-text' : ''}`, lang, dir: urdu ? 'rtl' : 'ltr' },
+        h('h1', null, page.title),
+        h('p', { class: 'help-intro' }, page.intro),
+        page.sections.map((s) =>
+          h(
+            'section',
+            { class: 'help-section', 'aria-labelledby': `help-${s.id}` },
+            h('h2', { id: `help-${s.id}` }, s.heading),
+            s.steps && h('ol', null, s.steps.map((step) => h('li', null, step))),
+            s.terms && h('dl', null, s.terms.flatMap(([term, meaning]) => [h('dt', null, term), h('dd', null, meaning)])),
+            s.keys && h('dl', { class: 'help-keys' }, s.keys.flatMap(([names, meaning]) => [h('dt', null, keyNames(names)), h('dd', null, meaning)])),
+            s.text?.map((para) => h('p', null, para)),
+          ),
+        ),
+      ),
+    );
+  };
+  draw();
+
+  app.replaceChildren(
+    h(
+      'div',
+      { class: 'page help' },
+      signedIn ? topbar('How it works') : h('header', { class: 'help-bar' }, brand('a', { href: '#/' }), h('a', { href: '#/' }, 'Log in')),
+      h('div', { class: 'help-toggle' }, toggle),
+      body,
+    ),
+  );
+}
+
 /** Shown when the server cannot be reached at all as the app starts. */
 function renderOffline() {
   app.replaceChildren(
@@ -4860,6 +4931,8 @@ function render() {
   if (route().view !== 'study') clock.pause();
   const { view, id, deck } = route();
   if (offline) return;
+  // How it works is readable signed in or out, so a newcomer with only a link can read it.
+  if (view === 'help') return renderHelp();
   if (!account || store.storageInfo().signedOut) {
     session.deckId = session.cardId = null;
     stopSpeaking();
